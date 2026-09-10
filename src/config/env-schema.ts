@@ -1,0 +1,67 @@
+import { z } from 'zod';
+import { LOG_LEVELS } from '../logger.js';
+
+/** The door: may this client talk to the server at all? Only meaningful over HTTP. */
+export const AUTH_MODES = ['none', 'bearer', 'oauth'] as const;
+
+export const MCP_MODES = ['full', 'enduser'] as const;
+
+export type AuthMode = (typeof AUTH_MODES)[number];
+export type McpMode = (typeof MCP_MODES)[number];
+
+const commaSeparated = z
+  .string()
+  .transform((value) => value.split(',').map((item) => item.trim()).filter(Boolean));
+
+/**
+ * The shape of configuration only. Cross-field rules live in `validate-config.ts`
+ * so that "what a setting is" stays separate from "which combinations are allowed".
+ */
+export const envSchema = z.object({
+  /**
+   * Transports are independent toggles rather than one list, so that a deployment can flip a
+   * single one without restating the others — which is how layered env config (compose
+   * overrides, k8s) actually gets edited. At least one must be on.
+   */
+  STDIO_TRANSPORT_ON: z.stringbool().default(true),
+  HTTP_TRANSPORT_ON: z.stringbool().default(false),
+
+  /**
+   * Required for `http`, and rejected for `stdio` — under stdio the credential is the ability
+   * to run the process, so an auth mode there would only give a false sense of protection.
+   */
+  AUTH_MODE: z.enum(AUTH_MODES).optional(),
+
+  MCP_MODE: z.enum(MCP_MODES).default('full'),
+
+  // Loopback by default: exposing the server to a network is a separate, explicit act.
+  MCP_BIND: z.string().default('127.0.0.1'),
+  MCP_PORT: z.coerce.number().int().positive().max(65535).default(3000),
+  MCP_PUBLIC_URL: z.url().optional(),
+  TRUSTED_ORIGINS: commaSeparated.default([]),
+
+  /** Idle sessions are closed after this long — clients often vanish without a DELETE. */
+  MCP_SESSION_IDLE_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
+  /** Ceiling on concurrent sessions: unbounded growth is a DoS surface in `none` mode. */
+  MCP_MAX_SESSIONS: z.coerce.number().int().positive().default(100),
+
+  BEARER_TOKEN: z.string().min(1).optional(),
+
+  OAUTH_ISSUER: z.url().optional(),
+  /**
+   * Expected `aud`. Defaults to MCP_PUBLIC_URL, but no mainstream IdP mints the audience from
+   * the client's RFC 8707 `resource` parameter — Zitadel emits a project id, Entra an App ID
+   * URI — so it is configured independently.
+   */
+  OAUTH_AUDIENCE: z.string().min(1).optional(),
+  /** Overrides discovery when the IdP's JWKS is not at the conventional location. */
+  OAUTH_JWKS_URI: z.url().optional(),
+  OAUTH_SCOPES_SUPPORTED: commaSeparated.default([]),
+  OAUTH_REQUIRED_SCOPES: commaSeparated.default([]),
+
+  ENDUSER_BUSINESS_OBJECTS: commaSeparated.default([]),
+
+  LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+});
+
+export type Config = z.infer<typeof envSchema>;
