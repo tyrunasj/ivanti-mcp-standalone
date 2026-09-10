@@ -182,9 +182,10 @@ handler and is the one thing that is expensive to add later.
   (Entra rotates signing keys), tolerate clock skew. Both target IdPs issue JWTs — Entra
   always, and the Zitadel app is already configured for JWT access tokens.
 
-  *Out of scope, deliberately:* RFC 7662 introspection. It would only be needed for an IdP
-  issuing **opaque** tokens (Zitadel's default, were the app not configured otherwise). Add it
-  if such an IdP ever appears; building it now buys nothing and doubles the verifier surface.
+  *Deferred, with measurements behind it (design §9c, §10):* RFC 7662 introspection is absent on
+  4 of 10 surveyed providers **including Entra**, so it can never be the universal path. `jwks_uri`
+  is present on 10 of 10. Introspection stays a future addition — the `TokenVerifier` type makes
+  it purely additive, and `looksLikeJwt()` already exists to route to it.
 - Status codes: 401 invalid or expired, 403 insufficient scope with `error="insufficient_scope"`,
   400 malformed. `scope` included in the challenge.
 - Token claims populate `CallerIdentity` as `verified`.
@@ -218,6 +219,13 @@ combinations are 1 + 3 transports-and-doors, each against two surfaces:
 | `http` | `none` | loopback default; `MCP_BIND` is the second explicit key | ✓ |
 | `http` | `bearer` | constant-time compare, 401 on mismatch | ✓ |
 | `http` | `oauth` | verified identity, audience-bound | ✓ |
+
+**Do this first, before anything else in A4: test against a real Entra tenant.**
+Entra is the majority IdP and the only one of ten surveyed that does not advertise
+`code_challenge_methods_supported`, which the spec says makes a conformant client refuse to
+proceed (design §12). It also supports neither DCR nor introspection. If a strict client will
+not do OAuth against Entra, that reshapes the auth story for most deployments — and every other
+item in Phase A is cheaper to redo than to build on the wrong assumption.
 
 **Ships**
 - An end-to-end suite driving a real client against the compose harness, not mocks — run twice,
@@ -332,6 +340,8 @@ narrowing of something that already works, not a parallel implementation.
 | Ivanti REST auth header format is a guess | B1 | Verify against the tenant before building on it |
 | SDK protocol version lags the spec (1.30.0 → `2025-11-25`) | A3 | Re-check `LATEST_PROTOCOL_VERSION` before assuming a 2026-07-28 requirement is buildable |
 | Real IdPs do not mint `aud` from the `resource` parameter | A3 | `OAUTH_AUDIENCE` configured separately; membership test, not equality |
+| **Entra does not advertise `code_challenge_methods_supported`; the spec says clients MUST refuse** | **A4, first** | Verify against a real tenant before building further on OAuth |
+| DCR is unsupported by half of surveyed IdPs | A4 | Pre-registration (`--client-id`) is the documented default, not a workaround |
 | Entra token v1/v2 changes the issuer string | A3 | Pin `requestedAccessTokenVersion: 2`; validate `iss` exactly |
 | Distroless missing CA bundle presents as an auth failure | A1 | Found early, while the surface is one tool |
 | TypeScript pinned to 6.x by typescript-eslint | any | Revisit when typescript-eslint supports TS 7 |

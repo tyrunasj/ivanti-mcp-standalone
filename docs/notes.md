@@ -82,6 +82,11 @@ semver protection. *Currently we do not use it at all*: the OAuth metadata docum
 enough to serve from `node:http`, so the server stays framework-free. Keep it that way unless
 something genuinely needs the SDK's express-based routers.
 
+**The SDK's own version cannot be read from `@modelcontextprotocol/sdk/package.json`.**
+Its `exports` map has a `./*` entry that resolves that specifier to `dist/cjs/package.json`,
+which contains only `{"type":"commonjs"}` — so you get `undefined` rather than an error. Resolve
+a real module and walk up to the package root instead (`readSdkVersion()` in `src/version.ts`).
+
 **SDK 1.30.0 implements protocol `2025-11-25`, not `2026-07-28`.**
 It shipped one day before that revision. Check `LATEST_PROTOCOL_VERSION` before assuming a
 2026-07-28 requirement is buildable in TypeScript.
@@ -119,6 +124,19 @@ definitions: `registerTool` stores config by reference, so build them once
 The SDK converts inside the `ListToolsRequestSchema` handler, not at registration. So the cost of
 many tools is CPU per list request, not memory per session. Worth measuring once the Ivanti tools
 land; memoising the conversion by schema object is the fix if it shows.
+
+**An SSE stream's elapsed time is not request latency.**
+The `GET /mcp` that opens the event stream stays open for the life of the connection, so logging
+its duration the same way as an RPC call made a perfectly healthy 131-second stream look like a
+pathological request. Streams log `mcp stream opened` / `mcp stream closed` with `attachedMs`;
+RPC calls log `mcp request` with `ms`.
+
+**Clients disconnect without sending DELETE — routinely, not exceptionally.**
+Observed live: clearing auth in Claude Code dropped the connection and opened a new session
+without ever sending `DELETE`, so `onsessionclosed` never fired and the old session sat in memory
+until the idle sweep. This is the *normal* case, which makes `MCP_SESSION_IDLE_TTL_SECONDS`
+load-bearing rather than defensive — without it every re-authentication leaks a session
+permanently, and `MCP_MAX_SESSIONS` would eventually be reached by ordinary use.
 
 **Session state is in-memory.**
 `SessionStore` is a `Map` in the process. Restart drops every session (clients re-`initialize`,
@@ -176,6 +194,36 @@ Our instance is configured for JWT, so JWKS validation is enough. A new Zitadel 
 back to opaque, and a JWKS verifier cannot validate it at all — there is nothing to parse.
 Introspection (RFC 7662) is the fallback if that ever becomes necessary.
 
+**Half of mainstream IdPs do not support Dynamic Client Registration.**
+Measured 2026-09-10: absent on Entra, Google, JumpCloud, Duende and GitLab; present on Okta,
+Auth0, Keycloak, Zitadel and Salesforce. So `claude mcp add --client-id <id> --callback-port <n>`
+against a **pre-registered** app is the normal path, not a workaround. Assuming DCR works is the
+mistake.
+
+**A DCR-created client inherits the IdP's *default* token type.**
+Cost real time here: Zitadel's default is Bearer (opaque), so every `/mcp` re-authentication
+registered a brand-new app that was opaque again, and flipping one app to JWT lasted exactly
+until the next re-auth. Pin the client id instead of chasing apps. Okta has the same shape — its
+*org* authorization server issues opaque tokens while a *custom* one issues JWTs.
+
+**Entra does not advertise `code_challenge_methods_supported`.**
+It is the only one of ten surveyed that omits it, and the spec says a conformant client **MUST
+refuse to proceed** when it is absent. Entra does support PKCE S256 — it just does not say so.
+Nothing server-side can fix another party's metadata document. See design §12.
+
+**A `WWW-Authenticate` description has a length budget; a log line does not.**
+The opaque-token diagnostic was ~286 characters against a 200-character cap, so the header was
+truncated mid-sentence and the *remedy* — "Set the application to issue JWT access tokens" — never
+reached the client. A diagnosis whose fix is cut off is worse than no diagnosis. `TokenVerification`
+therefore carries a short `description` for the challenge and an optional longer `detail` for the
+log.
+
+**`WWW-Authenticate` values must be printable ASCII.**
+RFC 6750 restricts them to %x20-21 / %x23-5B / %x5D-7E, and Node throws
+`Invalid character in header content` on anything outside Latin-1 — turning a clean 401 into a
+500. An em dash in an error message was enough. `buildWwwAuthenticate` sanitises and truncates,
+because the description is prose and prose acquires punctuation.
+
 **Never mount the SDK's `mcpAuthRouter` or `proxyProvider`.**
 They are the *authorization-server* half — `authorize`, `token`, `register`, `revoke`. Mounting
 them turns this server into an IdP. We serve only `mcpAuthMetadataRouter`-equivalent metadata and
@@ -199,6 +247,21 @@ server-side rather than re-read from tool arguments.
 Verify against a real tenant before building on it. *(Open — Stage B1.)*
 
 ---
+
+## Observability
+
+**`/health` must answer without a token, so everything it returns is public.**
+A liveness probe cannot authenticate. So the anonymous response is `{"status":"ok"}` and nothing
+else, while identity, uptime and session count require the same authorization as any other
+request. Status is **always 200** either way — a probe that flaps because a token expired would
+restart a healthy container.
+
+**Never report memory or CPU from `/health`.**
+An earlier version did. Resource load handed to an anonymous caller turns blind probing into a
+guided attack: watch `sessions` against the cap, watch `rssMb` and CPU to see whether load is
+landing. Process metrics belong to the container runtime, which is already authenticated. (It
+also avoided a second trap — `process.cpuUsage()` legitimately exceeds 100% of wall-clock time
+because V8 uses background threads, so an unnormalised figure read as a bug.)
 
 ## Testing
 

@@ -3,7 +3,8 @@ import type { TokenVerifier } from './auth/oauth/verify-token.js';
 import { ConfigError, loadConfig } from './config/load-config.js';
 
 import { createLogger } from './logger.js';
-import { createServerFactory } from './server/create-server.js';
+import { createServerFactory, SERVER_NAME, SERVER_VERSION } from './server/create-server.js';
+import { readSdkVersion } from './version.js';
 import { startHttp } from './server/start-http.js';
 import { startStdio } from './server/start-stdio.js';
 
@@ -36,7 +37,7 @@ async function main(): Promise<void> {
     verifier = setup.verifier;
     logger.info('oauth resource server ready', {
       issuer: setup.issuer,
-      audience: setup.audience,
+      audiences: setup.audiences,
       jwksUri: setup.jwksUri,
     });
   }
@@ -44,6 +45,9 @@ async function main(): Promise<void> {
   const http = startHttp(config, logger, {
     verifier,
     createMcpServer: factory.create,
+    serverName: SERVER_NAME,
+    serverVersion: SERVER_VERSION,
+    sdkVersion: readSdkVersion(),
   });
 
   // Containers are killed, not asked politely: let in-flight requests finish and close

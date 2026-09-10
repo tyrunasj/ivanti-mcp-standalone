@@ -7,7 +7,22 @@ export interface ChallengeOptions {
   errorDescription?: string;
 }
 
-const quote = (value: string): string => `"${value.replace(/["\\]/g, '\\$&')}"`;
+const MAX_DESCRIPTION = 200;
+
+/**
+ * RFC 6750 restricts these values to %x20-21 / %x23-5B / %x5D-7E — printable ASCII minus the
+ * quote and backslash. Node rejects anything outside Latin-1 outright, so an em dash in a
+ * message turns a clean 401 into a 500. Sanitise rather than trust the caller: the description
+ * is prose, and prose acquires punctuation.
+ */
+const headerSafe = (value: string): string =>
+  value
+    .replace(/[^\x20\x21\x23-\x5B\x5D-\x7E]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_DESCRIPTION);
+
+const quote = (value: string): string => `"${headerSafe(value)}"`;
 
 /**
  * Builds the `WWW-Authenticate` challenge.

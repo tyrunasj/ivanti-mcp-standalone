@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 
 /**
  * `package.json` relative to this module.
@@ -9,12 +11,14 @@ import { readFileSync } from 'node:fs';
  */
 export const PACKAGE_JSON_URL = new URL('../package.json', import.meta.url);
 
+export const SDK_PACKAGE = '@modelcontextprotocol/sdk';
+
 export interface PackageMetadata {
   name: string;
   version: string;
 }
 
-export type PackageReader = (url: URL) => string;
+export type PackageReader = (url: URL | string) => string;
 
 const defaultReader: PackageReader = (url) => readFileSync(url, 'utf8');
 
@@ -48,4 +52,43 @@ export function readPackageMetadata(read: PackageReader = defaultReader): Packag
   }
 
   return { name: record.name, version: record.version };
+}
+
+/**
+ * The version of the MCP SDK actually installed.
+ *
+ * Cannot be read via `require('@modelcontextprotocol/sdk/package.json')`: the SDK's `exports`
+ * map has a `./*` entry that resolves it to `dist/cjs/package.json`, which contains only
+ * `{"type":"commonjs"}`. So resolve a real module and walk up to the package root instead.
+ *
+ * Diagnostic rather than load-bearing, so an unreadable manifest degrades to `unknown` instead
+ * of stopping the server — unlike our own version, where misidentifying the build is worse.
+ */
+export function readSdkVersion(read: PackageReader = defaultReader): string {
+  try {
+    const require = createRequire(import.meta.url);
+    let dir = dirname(require.resolve(`${SDK_PACKAGE}/server/mcp.js`));
+
+    for (let depth = 0; depth < 8; depth += 1) {
+      try {
+        const manifest = JSON.parse(read(join(dir, 'package.json'))) as {
+          name?: unknown;
+          version?: unknown;
+        };
+        if (manifest.name === SDK_PACKAGE && typeof manifest.version === 'string') {
+          return manifest.version;
+        }
+      } catch {
+        // Not the package root yet, or not readable — keep walking.
+      }
+
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    // Resolution failed entirely.
+  }
+
+  return 'unknown';
 }

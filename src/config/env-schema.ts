@@ -49,11 +49,14 @@ export const envSchema = z.object({
 
   OAUTH_ISSUER: z.url().optional(),
   /**
-   * Expected `aud`. Defaults to MCP_PUBLIC_URL, but no mainstream IdP mints the audience from
-   * the client's RFC 8707 `resource` parameter — Zitadel emits a project id, Entra an App ID
-   * URI — so it is configured independently.
+   * Accepted `aud` values, comma-separated. Defaults to MCP_PUBLIC_URL.
+   *
+   * A list rather than a single value because no mainstream IdP mints the audience from the
+   * client's RFC 8707 `resource` parameter — Zitadel emits a project or client id, Entra an App
+   * ID URI — and a deployment routinely has more than one legitimate client. A token is
+   * accepted when its `aud` contains **any** of these.
    */
-  OAUTH_AUDIENCE: z.string().min(1).optional(),
+  OAUTH_AUDIENCE: commaSeparated.default([]),
   /** Overrides discovery when the IdP's JWKS is not at the conventional location. */
   OAUTH_JWKS_URI: z.url().optional(),
   OAUTH_SCOPES_SUPPORTED: commaSeparated.default([]),

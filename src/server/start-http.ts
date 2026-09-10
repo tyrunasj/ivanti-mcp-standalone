@@ -1,7 +1,7 @@
-import { createServer as createHttpServer, type Server, type ServerResponse } from 'node:http';
+import { createServer as createHttpServer, type IncomingMessage, type Server } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 import {
   buildProtectedResourceMetadata,
   metadataPaths,
@@ -10,184 +10,149 @@ import {
 import type { TokenVerifier } from '../auth/oauth/verify-token.js';
 import type { Config } from '../config/env-schema.js';
 import type { Logger } from '../logger.js';
-import { authorizeRequest } from './http/authorize-request.js';
-import { readJsonBody } from './http/read-body.js';
-import { SessionStore } from './http/session-store.js';
+import { authorizeRequest, type AuthorizationResult } from './http/authorize-request.js';
+import { buildHealth, MINIMAL_HEALTH } from './http/health.js';
+import { createMcpHandler, type McpSession } from './http/mcp-handler.js';
+import { sendJson } from './http/respond.js';
+import { resolveRoute } from './http/resolve-route.js';
+import { SessionManager } from './http/session-manager.js';
 import { isOriginAllowed } from './http/validate-origin.js';
 
-const MCP_PATH = '/mcp';
-const HEALTH_PATH = '/health';
 const SWEEP_INTERVAL_MS = 30_000;
 
 export interface HttpDeps {
   verifier?: TokenVerifier;
   /** A fresh McpServer per session: `connect()` binds one transport at a time. */
   createMcpServer: () => McpServer;
+  serverName: string;
+  serverVersion: string;
+  /** Resolved once at startup: reading it walks node_modules, and /health is a hot path. */
+  sdkVersion: string;
 }
 
-interface Session {
+interface Session extends McpSession {
   transport: StreamableHTTPServerTransport;
   server: McpServer;
 }
 
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { 'content-type': 'application/json' });
-  response.end(JSON.stringify(body));
-}
-
-function rpcError(response: ServerResponse, status: number, message: string): void {
-  sendJson(response, status, { jsonrpc: '2.0', error: { code: -32600, message }, id: null });
-}
-
 /**
- * Serves the MCP endpoint, an unauthenticated health probe, and the OAuth metadata document.
+ * Serves the MCP endpoint, a health probe and the OAuth metadata document.
  *
- * Sessions are routed by `Mcp-Session-Id` to their own transport. A single shared transport
- * cannot work in stateful mode: one instance holds one session id, so the second client to
- * call `initialize` is rejected with "Server already initialized".
+ * This function is wiring. The decisions live in collaborators that can be tested without a
+ * socket: `resolveRoute` for dispatch, `authorizeRequest` for the door, `SessionManager` for
+ * admission and expiry, `readJsonBody` and `describeRpc` for the payload.
  */
 export function startHttp(config: Config, logger: Logger, deps: HttpDeps): Server {
-  const sessions = new SessionStore<Session>({
+  const sessions = new SessionManager<Session>({
     maxSessions: config.MCP_MAX_SESSIONS,
     idleTtlMs: config.MCP_SESSION_IDLE_TTL_SECONDS * 1000,
+    logger,
   });
 
   const publicUrl = config.MCP_PUBLIC_URL;
-  const oauthPaths = publicUrl !== undefined ? new Set(metadataPaths(publicUrl)) : new Set<string>();
+  const servesOauthMetadata = config.AUTH_MODE === 'oauth' && config.OAUTH_ISSUER !== undefined;
+  const oauthPaths =
+    publicUrl !== undefined && servesOauthMetadata
+      ? new Set(metadataPaths(publicUrl))
+      : new Set<string>();
   const resourceMetadataUrl = publicUrl !== undefined ? metadataUrl(publicUrl) : undefined;
 
-  const closeSession = (id: string, session: Session, reason: string): void => {
-    logger.debug('closing session', { sessionId: id, reason });
-    void session.transport.close();
-  };
+  const authorize = (request: IncomingMessage): Promise<AuthorizationResult> =>
+    authorizeRequest(
+      config,
+      { authorization: request.headers.authorization },
+      { verifier: deps.verifier, resourceMetadataUrl },
+    );
 
   const createSession = (): Session => {
     const mcpServer = deps.createMcpServer();
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: (): string => crypto.randomUUID(),
       onsessioninitialized: (sessionId: string): void => {
-        if (!sessions.set(sessionId, { transport, server: mcpServer })) {
-          logger.warn('session cap reached, dropping new session', { sessionId });
-          void transport.close();
-          return;
-        }
-        logger.info('session opened', { sessionId, sessions: sessions.size });
+        sessions.register(sessionId, session);
       },
       onsessionclosed: (sessionId: string): void => {
-        sessions.delete(sessionId);
-        logger.info('session closed', { sessionId, sessions: sessions.size });
+        sessions.unregister(sessionId);
       },
     });
+    const session: Session = {
+      transport,
+      server: mcpServer,
+      connect: () => mcpServer.connect(transport),
+      close: () => void transport.close(),
+    };
 
-    return { transport, server: mcpServer };
+    return session;
   };
+
+  const handleMcp = createMcpHandler<Session>({ sessions, logger, createSession });
 
   const http = createHttpServer((request, response): void => {
     void (async (): Promise<void> => {
-      const path = (request.url ?? '').split('?')[0] ?? '';
-
-      // Unauthenticated on purpose: probes must work before auth is configured.
-      if (path === HEALTH_PATH) {
-        sendJson(response, 200, { status: 'ok', sessions: sessions.size });
-        return;
-      }
-
-      // Also unauthenticated on purpose: this document is how a client discovers *how* to
-      // authenticate, so requiring a token to read it would be circular.
-      if (oauthPaths.has(path) && config.AUTH_MODE === 'oauth' && config.OAUTH_ISSUER !== undefined) {
-        sendJson(
-          response,
-          200,
-          buildProtectedResourceMetadata({
-            resource: publicUrl ?? '',
-            issuer: config.OAUTH_ISSUER,
-            scopesSupported: config.OAUTH_SCOPES_SUPPORTED,
-            resourceName: 'Ivanti MCP',
-          }),
-        );
-        return;
-      }
-
-      if (path !== MCP_PATH) {
-        sendJson(response, 404, { error: 'not_found' });
-        return;
-      }
-
-      if (!isOriginAllowed(request.headers.origin, config.TRUSTED_ORIGINS)) {
-        logger.warn('rejected request with untrusted origin', { origin: request.headers.origin });
-        sendJson(response, 403, { error: 'forbidden_origin' });
-        return;
-      }
-
-      const authorization = await authorizeRequest(
-        config,
-        { authorization: request.headers.authorization },
-        { verifier: deps.verifier, resourceMetadataUrl },
-      );
-
-      if (!authorization.authorized) {
-        logger.warn('rejected unauthorized request', { reason: authorization.reason });
-        if (authorization.challenge !== undefined) {
-          response.setHeader('WWW-Authenticate', authorization.challenge);
-        }
-        sendJson(response, authorization.status, { error: 'unauthorized' });
-        return;
-      }
-
-      const header = request.headers['mcp-session-id'];
-      const sessionId = Array.isArray(header) ? header[0] : header;
-
-      // GET (SSE stream) and DELETE (end session) always address an existing session.
-      if (request.method !== 'POST') {
-        if (sessionId === undefined) {
-          rpcError(response, 400, 'Mcp-Session-Id header is required');
+      switch (resolveRoute(request.url, oauthPaths)) {
+        case 'health': {
+          // Always 200, because a liveness probe cannot authenticate — but the detail is gated
+          // on the same authorization as everything else. Anonymous callers learn only that
+          // the process is alive.
+          const permitted = await authorize(request);
+          sendJson(
+            response,
+            200,
+            permitted.authorized
+              ? buildHealth({
+                  name: deps.serverName,
+                  version: deps.serverVersion,
+                  protocolVersion: LATEST_PROTOCOL_VERSION,
+                  sdkVersion: deps.sdkVersion,
+                  sessions: () => sessions.size,
+                })
+              : MINIMAL_HEALTH,
+          );
           return;
         }
-        const existing = sessions.get(sessionId);
-        if (existing === undefined) {
-          rpcError(response, 404, 'Unknown or expired session');
+
+        case 'oauth-metadata': {
+          // Unauthenticated by necessity: this document is how a client discovers *how* to
+          // authenticate, so requiring a token to read it would be circular.
+          sendJson(
+            response,
+            200,
+            buildProtectedResourceMetadata({
+              resource: publicUrl ?? '',
+              issuer: config.OAUTH_ISSUER ?? '',
+              scopesSupported: config.OAUTH_SCOPES_SUPPORTED,
+              resourceName: 'Ivanti MCP',
+            }),
+          );
           return;
         }
-        await existing.transport.handleRequest(request, response);
-        return;
-      }
 
-      const parsed = await readJsonBody(request);
-      if (!parsed.ok) {
-        rpcError(response, parsed.status, parsed.message);
-        return;
-      }
+        case 'mcp': {
+          if (!isOriginAllowed(request.headers.origin, config.TRUSTED_ORIGINS)) {
+            logger.warn('rejected request with untrusted origin', {
+              origin: request.headers.origin,
+            });
+            sendJson(response, 403, { error: 'forbidden_origin' });
+            return;
+          }
 
-      if (sessionId !== undefined) {
-        const existing = sessions.get(sessionId);
-        if (existing === undefined) {
-          rpcError(response, 404, 'Unknown or expired session');
+          const authorization = await authorize(request);
+          if (!authorization.authorized) {
+            logger.warn('rejected unauthorized request', { reason: authorization.reason });
+            if (authorization.challenge !== undefined) {
+              response.setHeader('WWW-Authenticate', authorization.challenge);
+            }
+            sendJson(response, authorization.status, { error: 'unauthorized' });
+            return;
+          }
+
+          await handleMcp(request, response, authorization);
           return;
         }
-        await existing.transport.handleRequest(request, response, parsed.body);
-        return;
-      }
 
-      if (!isInitializeRequest(parsed.body)) {
-        rpcError(response, 400, 'Mcp-Session-Id header is required for non-initialize requests');
-        return;
+        default:
+          sendJson(response, 404, { error: 'not_found' });
       }
-
-      if (sessions.size >= config.MCP_MAX_SESSIONS) {
-        // An expired-but-unswept session still occupies a slot, and the sweep only runs on a
-        // timer. Sweep before refusing so nobody is turned away for sessions already dead.
-        for (const { id, value } of sessions.sweep()) closeSession(id, value, 'idle');
-      }
-
-      if (sessions.size >= config.MCP_MAX_SESSIONS) {
-        logger.warn('refusing new session, cap reached', { cap: config.MCP_MAX_SESSIONS });
-        rpcError(response, 503, 'Too many active sessions');
-        return;
-      }
-
-      const session = createSession();
-      await session.server.connect(session.transport);
-      await session.transport.handleRequest(request, response, parsed.body);
     })().catch((error: unknown) => {
       logger.error('request handler failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -196,14 +161,11 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): Serve
     });
   });
 
-  const sweep = setInterval(() => {
-    for (const { id, value } of sessions.sweep()) closeSession(id, value, 'idle');
-  }, SWEEP_INTERVAL_MS);
-  sweep.unref();
+  const stopSweeping = sessions.startSweeping(SWEEP_INTERVAL_MS);
 
   http.on('close', () => {
-    clearInterval(sweep);
-    for (const { id, value } of sessions.drain()) closeSession(id, value, 'shutdown');
+    stopSweeping();
+    sessions.closeAll();
   });
 
   http.listen(config.MCP_PORT, config.MCP_BIND);

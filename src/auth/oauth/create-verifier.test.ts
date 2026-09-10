@@ -27,16 +27,25 @@ describe('createOAuthSetup', () => {
   it('defaults the audience to the resource identifier', async () => {
     const setup = await createOAuthSetup(oauthConfig, discovery('https://id.example.com/keys'));
 
-    expect(setup.audience).toBe('https://mcp.example.com/mcp');
+    expect(setup.audiences).toEqual(['https://mcp.example.com/mcp']);
   });
 
-  it('prefers an explicitly configured audience, as real IdPs require', async () => {
+  it('prefers explicitly configured audiences, as real IdPs require', async () => {
     const setup = await createOAuthSetup(
-      { ...oauthConfig, OAUTH_AUDIENCE: 'api://ivanti-mcp' },
+      { ...oauthConfig, OAUTH_AUDIENCE: ['api://ivanti-mcp'] },
       discovery('https://id.example.com/keys'),
     );
 
-    expect(setup.audience).toBe('api://ivanti-mcp');
+    expect(setup.audiences).toEqual(['api://ivanti-mcp']);
+  });
+
+  it('accepts several audiences, since a deployment has more than one client', async () => {
+    const setup = await createOAuthSetup(
+      { ...oauthConfig, OAUTH_AUDIENCE: ['client-a', 'client-b'] },
+      discovery('https://id.example.com/keys'),
+    );
+
+    expect(setup.audiences).toEqual(['client-a', 'client-b']);
   });
 
   it('skips discovery entirely when OAUTH_JWKS_URI is set', async () => {

@@ -1,6 +1,6 @@
 import { SignJWT, generateKeyPair, type CryptoKey, type JWTVerifyGetKey } from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createTokenVerifier, extractScopes } from './verify-token.js';
+import { createTokenVerifier, extractScopes, looksLikeJwt } from './verify-token.js';
 
 const ISSUER = 'https://id.example.com';
 const AUDIENCE = '259254020357488642'; // Zitadel shape: a project id, not a URL.
@@ -47,7 +47,7 @@ beforeAll(async () => {
 });
 
 const verifier = (requiredScopes?: string[]) =>
-  createTokenVerifier({ issuer: ISSUER, audience: AUDIENCE, requiredScopes, keyResolver });
+  createTokenVerifier({ issuer: ISSUER, audience: [AUDIENCE], requiredScopes, keyResolver });
 
 describe('extractScopes', () => {
   it('reads a space-delimited scope claim', () => {
@@ -91,6 +91,16 @@ describe('createTokenVerifier', () => {
       error: 'invalid_token',
       description: 'Access token was not issued for this server',
     });
+  });
+
+  it('accepts a token naming any one of several configured audiences', async () => {
+    const multi = createTokenVerifier({
+      issuer: ISSUER,
+      audience: ['other-client', AUDIENCE],
+      keyResolver,
+    });
+
+    expect((await multi(await issueToken())).ok).toBe(true);
   });
 
   it('accepts a token whose aud is an array containing us', async () => {
@@ -155,5 +165,47 @@ describe('createTokenVerifier', () => {
     const result = await verifier()(await issueToken({ notBefore: '5s' }));
 
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('looksLikeJwt', () => {
+  it('accepts a three-segment compact JWS', () => {
+    expect(looksLikeJwt('aaa.bbb.ccc')).toBe(true);
+  });
+
+  it('rejects an opaque reference token', () => {
+    expect(looksLikeJwt('NaUAPHy5mLFQlwUCeUGYeDyhcQYuNhzTiYgwMor9BxP')).toBe(false);
+  });
+
+  it('rejects a token with an empty segment', () => {
+    expect(looksLikeJwt('aaa..ccc')).toBe(false);
+  });
+});
+
+describe('opaque token handling', () => {
+  it('names the actual cause instead of a generic failure', async () => {
+    const result = await verifier()('NaUAPHy5mLFQlwUCeUGYeDyhcQYuNhzTiYgwMor9BxP');
+
+    expect(result).toMatchObject({ ok: false, status: 401, error: 'invalid_token' });
+    if (!result.ok) {
+      expect(result.description).toContain('opaque');
+      expect(result.description).toContain('JWT access tokens');
+    }
+  });
+});
+
+describe('challenge-safe descriptions', () => {
+  it('keeps the opaque-token remedy inside the header length budget', async () => {
+    const result = await verifier()('NaUAPHy5opaqueReferenceToken');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // buildWwwAuthenticate truncates at 200 chars; a diagnosis whose fix is cut off is
+      // worse than no diagnosis.
+      expect(result.description.length).toBeLessThanOrEqual(200);
+      expect(result.description).toContain('JWT access tokens');
+      // The fuller explanation still exists, for the log.
+      expect(result.detail).toContain('Dynamic Client Registration');
+    }
   });
 });

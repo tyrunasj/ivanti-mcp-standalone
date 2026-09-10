@@ -395,6 +395,49 @@ its place only when `oauth` mode is built, where it gets the RFC 9728 metadata r
 
 ---
 
+## 9c. Identity provider survey (measured 2026-09-10)
+
+Live discovery documents, fetched directly. This is the evidence behind the JWKS-only decision
+and behind treating pre-registration as the default path.
+
+| IdP | `jwks_uri` | introspection | DCR | PKCE advertised |
+|---|---|---|---|---|
+| **Entra ID** | ✓ | ✗ | ✗ | **ABSENT** |
+| Okta | ✓ | ✓ | ✓ | ✓ |
+| Auth0 | ✓ | ✗ | ✓ | ✓ |
+| Keycloak | ✓ | ✓ | ✓ | ✓ |
+| Zitadel | ✓ | ✓ | ✓ | ✓ |
+| Google | ✓ | ✗ | ✗ | ✓ |
+| JumpCloud | ✓ | ✗ | ✗ | ✓ |
+| Duende IdentityServer | ✓ | ✓ | ✗ | ✓ |
+| Salesforce | ✓ | ✓ | ✓ | ✓ |
+| GitLab | ✓ | ✓ | ✗ | ✓ |
+
+Four things follow:
+
+1. **`jwks_uri` is universal (10/10); introspection is not (6/10).** JWKS is the only validation
+   mechanism that works everywhere, so it is the primary path.
+2. **DCR is missing on half.** Pre-registering a client is the *common* case, not an Entra
+   quirk — Entra, Google, JumpCloud, Duende and GitLab all require it. Client pre-registration
+   (`--client-id`) belongs in the onboarding instructions, not in a troubleshooting note.
+3. **Entra is the sole provider not advertising `code_challenge_methods_supported`.** The spec
+   says a conformant client **MUST refuse to proceed** when it is absent. Entra supports PKCE
+   S256 in practice but does not say so, and nothing server-side can fix another party's
+   metadata document. See §12.
+4. **JWT is reachable on every IdP, but often by configuration.** Opaque is the default on
+   Zitadel (per app), Okta (org authorization server), Auth0 (unless `audience` is passed) and
+   Google. The onboarding document therefore needs a per-IdP "make it issue JWTs" step:
+
+   | IdP | Lever |
+   |---|---|
+   | Entra | none needed; pin `requestedAccessTokenVersion: 2` |
+   | Okta | use a **custom** authorization server, not the org one |
+   | Auth0 | pass the `audience` parameter |
+   | Zitadel | set the app's Auth Token Type to **JWT** |
+   | Keycloak | default is already JWT |
+
+---
+
 ## 10. Rejected alternatives
 
 | Rejected | Why |
@@ -405,6 +448,28 @@ its place only when `oauth` mode is built, where it gets the RFC 9728 metadata r
 | Roles/permissions system in the server | Only `oauth` could feed it; annotations + harness cover it |
 | Server-side re-implementation of Ivanti authz (injected `Owner` filters, fetch-then-check) | Superseded by the single-operator + `Customer` field model |
 | Ivanti impersonation / on-behalf-of | Not needed once operations run as the one MCP user |
+| **RFC 7662 token introspection** | **Deferred, not abandoned — see below** |
+
+### Introspection — deferred
+
+Measured against the survey above: introspection is **absent on 4 of 10 providers, including
+Entra**, so it cannot be the universal path and cannot rescue the majority. It would serve only
+customers on the other six who additionally refuse to configure JWT tokens — while costing a
+network round-trip to the IdP on **every** request and a hard runtime dependency on the IdP
+being reachable for every tool call. Caching fixes the latency but trades away instant
+revocation, which is introspection's main advantage over JWTs in the first place.
+
+**Revisit if any of these becomes true:**
+- a customer's IdP issues opaque tokens and their policy forbids switching to JWT;
+- an IdP appears with no `jwks_uri` at all;
+- instant revocation becomes a stated requirement rather than a nice-to-have.
+
+**It is cheap to add when needed.** Everything downstream depends on one type —
+`TokenVerifier = (token: string) => Promise<TokenVerification>` — so a second implementation is
+purely additive. `looksLikeJwt()` already exists and would do the routing; introspection would
+enable itself by the presence of `OAUTH_INTROSPECTION_CLIENT_ID`/`_SECRET`, needing no new mode
+flag, with the endpoint taken from the authorization-server metadata we already fetch at
+startup. Roughly 80-100 lines plus tests.
 
 ---
 
@@ -460,3 +525,28 @@ and cross-checked via context7. The earlier "to verify" list is resolved.
   tokens are not a resource requirement.
 - **`MCP_PUBLIC_URL` must be a canonical resource URI**: absolute, no fragment, no trailing
   slash. Enforced at startup in `canonicalUriProblems()`.
+
+---
+
+## 12. Known interoperability risk: Entra and PKCE metadata
+
+The spec is explicit:
+
+> If the field is absent, MCP clients **MUST** refuse to proceed.
+> Authorization servers providing OpenID Connect Discovery 1.0 **MUST** include
+> `code_challenge_methods_supported` in their metadata to ensure MCP compatibility.
+
+**Entra does not publish it** — verified across the `common`, `organizations`, `consumers` and a
+real tenant document. It supports PKCE S256 in practice; it simply does not advertise it. Nine
+of the other ten providers surveyed do publish it.
+
+So by the letter of the spec Entra is non-conformant, and whether OAuth works against it depends
+entirely on how strictly a given client reads that rule. A lenient client proceeds; a strict one
+refuses. **We cannot fix this from the resource server** — it is another party's metadata
+document.
+
+This must be verified empirically against a real Entra tenant **early**, because if strict
+clients refuse, it reshapes the auth story for the majority of deployments, and everything else
+in Phase A is cheaper to redo than to build on the wrong assumption.
+
+---

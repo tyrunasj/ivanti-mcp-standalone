@@ -37,13 +37,33 @@ describe('buildWwwAuthenticate', () => {
     expect(header).toContain('error_description="File write permission required"');
   });
 
-  it('escapes quotes so a crafted description cannot break out of the header', () => {
+  it('collapses the whitespace left behind', () => {
+    const header = buildWwwAuthenticate({
+      resourceMetadataUrl: metadataUrl,
+      error: 'invalid_token',
+      errorDescription: 'a\n\nb\tc',
+    });
+
+    expect(header).toContain('error_description="a b c"');
+  });
+
+  it('truncates a long description rather than emitting a huge header', () => {
+    const header = buildWwwAuthenticate({
+      resourceMetadataUrl: metadataUrl,
+      error: 'invalid_token',
+      errorDescription: 'x'.repeat(500),
+    });
+
+    expect(header).toContain(`error_description="${'x'.repeat(200)}"`);
+  });
+
+  it('removes a quote so it cannot break out of the quoted string', () => {
     const header = buildWwwAuthenticate({
       resourceMetadataUrl: metadataUrl,
       error: 'invalid_token',
       errorDescription: 'bad " token',
     });
 
-    expect(header).toContain('error_description="bad \\" token"');
+    expect(header).toContain('error_description="bad token"');
   });
 });

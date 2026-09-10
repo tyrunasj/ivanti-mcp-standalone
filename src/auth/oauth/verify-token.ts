@@ -11,17 +11,31 @@ export type TokenFailure = 'invalid_token' | 'insufficient_scope';
 
 export type TokenVerification =
   | { ok: true; identity: VerifiedIdentity }
-  | { ok: false; status: 401 | 403; error: TokenFailure; description: string };
+  | {
+      ok: false;
+      status: 401 | 403;
+      error: TokenFailure;
+      /**
+       * Goes into the `WWW-Authenticate` challenge, which is truncated to 200 characters — so
+       * this must be short enough to survive intact, remedy included. A diagnosis whose fix is
+       * cut off is worse than no diagnosis.
+       */
+      description: string;
+      /** Longer explanation for the log, where there is no length budget. */
+      detail?: string;
+    };
 
 export interface TokenVerifierOptions {
   issuer: string;
   /**
-   * The value the token must name in `aud`.
+   * Values the token may name in `aud`; any one matching is enough.
    *
    * Not necessarily the resource URL: no mainstream IdP mints the audience from the client's
-   * RFC 8707 `resource` parameter. Zitadel emits a numeric project id, Entra an App ID URI.
+   * RFC 8707 `resource` parameter. Zitadel emits a numeric project or client id, Entra an App
+   * ID URI. jose treats an array here as "any of", and the token's own `aud` may also be an
+   * array — so this is a set intersection, not an equality check.
    */
-  audience: string;
+  audience: readonly string[];
   requiredScopes?: readonly string[];
   clockToleranceSeconds?: number;
   keyResolver: JWTVerifyGetKey;
@@ -50,6 +64,19 @@ export function createRemoteKeyResolver(jwksUri: string): JWTVerifyGetKey {
   return createRemoteJWKSet(new URL(jwksUri));
 }
 
+/**
+ * A compact JWS is exactly three base64url segments. Anything else is an opaque token, which a
+ * JWKS verifier cannot inspect at all — there is no header, no signature, nothing to check.
+ *
+ * Worth detecting explicitly because the fall-through message ("not valid") sends people
+ * hunting for a key or audience problem when the real answer is that the authorization server
+ * is issuing a reference token.
+ */
+export function looksLikeJwt(token: string): boolean {
+  const parts = token.split('.');
+  return parts.length === 3 && parts.every((part) => part.length > 0);
+}
+
 function describeFailure(error: unknown): string {
   const code = (error as { code?: unknown }).code;
 
@@ -75,12 +102,29 @@ export function createTokenVerifier(options: TokenVerifierOptions): TokenVerifie
   const required = options.requiredScopes ?? [];
 
   return async (token: string): Promise<TokenVerification> => {
+    if (!looksLikeJwt(token)) {
+      return {
+        ok: false,
+        status: 401,
+        error: 'invalid_token',
+        description:
+          'Access token is opaque, not a JWT. Configure the application to issue JWT ' +
+          'access tokens.',
+        detail:
+          'Access token is opaque, not a JWT, so its signature cannot be verified. The ' +
+          'authorization server is issuing reference tokens; in Zitadel this is the ' +
+          'per-application default and a client created by Dynamic Client Registration ' +
+          'inherits it. Okta behaves the same way on its org authorization server, and Auth0 ' +
+          'unless the client passes an `audience` parameter.',
+      };
+    }
+
     let claims: JWTPayload;
 
     try {
       const result = await jwtVerify(token, options.keyResolver, {
         issuer: options.issuer,
-        audience: options.audience,
+        audience: [...options.audience],
         clockTolerance: options.clockToleranceSeconds ?? 30,
       });
       claims = result.payload;

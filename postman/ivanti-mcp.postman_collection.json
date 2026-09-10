@@ -1,0 +1,842 @@
+{
+  "info": {
+    "name": "Ivanti MCP (standalone)",
+    "description": "Exercises the standalone Ivanti MCP server over streamable HTTP.\n\n## Setup\n1. Start the server in bearer mode:\n```\nHTTP_TRANSPORT_ON=true STDIO_TRANSPORT_ON=false AUTH_MODE=bearer \\\nBEARER_TOKEN=<token> MCP_BIND=127.0.0.1 MCP_PORT=3000 \\\nMCP_PUBLIC_URL=http://127.0.0.1:3000/mcp TRUSTED_ORIGINS=http://localhost \\\npnpm start\n```\n2. Set the `bearerToken` collection variable to the same value.\n3. Run **Session / 1. Initialize** first \u2014 it captures `Mcp-Session-Id` into the `sessionId` variable, which every later request reuses.\n\n## Notes\n- Responses are `text/event-stream`; the JSON-RPC payload is on a `data:` line.\n- `Accept: application/json, text/event-stream` is required \u2014 the transport rejects requests without it.\n- Auth is checked on **every** request, not only at initialize: a session id is not a bypass.\n- The whole collection can be run with the Collection Runner; every request asserts its expected status.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:3000",
+      "type": "string"
+    },
+    {
+      "key": "bearerToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "sessionId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & discovery",
+      "description": "Unauthenticated on purpose.",
+      "item": [
+        {
+          "name": "Health (anonymous)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Always 200 so a liveness probe never flaps, but an unauthenticated caller learns only that the process is alive. Anything this returns is public, since probes cannot authenticate."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('alive', () => pm.expect(b.status).to.eql('ok'));",
+                  "pm.test('discloses nothing else', () => pm.expect(Object.keys(b)).to.eql(['status']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Health (authorized)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "The same endpoint with a valid token returns identity, uptime and the live session count. No memory or CPU figures are reported at all \u2014 resource load would let an attacker tune a denial-of-service attempt and watch it land. Process metrics belong to the container runtime, not to a public endpoint."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('reports identity', () => {",
+                  "  pm.expect(b.version).to.match(/^\\d+\\.\\d+\\.\\d+/);",
+                  "  pm.expect(b.sdkVersion).to.be.a('string');",
+                  "  pm.expect(b.protocolVersion).to.be.a('string');",
+                  "});",
+                  "pm.test('reports a fresh timestamp', () =>",
+                  "  pm.expect(Math.abs(Date.now() - Date.parse(b.timestamp))).to.be.below(60000));",
+                  "pm.test('reports live session count', () => pm.expect(b.sessions).to.be.a('number'));",
+                  "pm.test('never reports resource load', () => {",
+                  "  pm.expect(b).to.not.have.property('memory');",
+                  "  pm.expect(b).to.not.have.property('cpu');",
+                  "});",
+                  "console.log(`v${b.version} sdk ${b.sdkVersion} | ${b.sessions} sessions | up ${b.uptimeSeconds}s`);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "OAuth metadata (path-inserted)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/.well-known/oauth-protected-resource/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                ".well-known",
+                "oauth-protected-resource",
+                "mcp"
+              ]
+            },
+            "description": "RFC 9728 Protected Resource Metadata. Only served when AUTH_MODE=oauth; returns 404 in bearer mode. Unauthenticated by necessity \u2014 it is how a client discovers how to authenticate."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 200 under AUTH_MODE=oauth, 404 otherwise.",
+                  "pm.test('200 or 404', () => pm.expect([200, 404]).to.include(pm.response.code));",
+                  "if (pm.response.code === 200) {",
+                  "  const b = pm.response.json();",
+                  "  pm.test('names an authorization server', () =>",
+                  "    pm.expect(b.authorization_servers).to.be.an('array').that.is.not.empty);",
+                  "  pm.test('never advertises offline_access', () =>",
+                  "    pm.expect(b.scopes_supported || []).to.not.include('offline_access'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Session",
+      "description": "Run in order. Initialize captures the session id.",
+      "item": [
+        {
+          "name": "1. Initialize",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Opens a session. The server replies with an `Mcp-Session-Id` header, captured into the `sessionId` collection variable.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2025-11-25\",\n    \"capabilities\": {},\n    \"clientInfo\": {\n      \"name\": \"postman\",\n      \"version\": \"1.0.0\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// MCP streamable HTTP replies as text/event-stream, so the JSON-RPC",
+                  "// payload sits on a `data:` line rather than being the whole body.",
+                  "function mcpBody(res) {",
+                  "  const text = res.text();",
+                  "  const line = text.split('\\n').find((l) => l.startsWith('data:'));",
+                  "  return JSON.parse(line ? line.slice(5).trim() : text);",
+                  "}",
+                  "",
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const sid = pm.response.headers.get('mcp-session-id');",
+                  "pm.test('issues a session id', () => pm.expect(sid).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('sessionId', sid);",
+                  "const b = mcpBody(pm.response);",
+                  "pm.test('returns serverInfo', () => pm.expect(b.result.serverInfo).to.have.property('name'));",
+                  "console.log('session', sid, '->', b.result.serverInfo);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. tools/list",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Mcp-Session-Id",
+                "value": "{{sessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Lists the tools this mode exposes. In `full` mode that is everything; in `enduser` mode the narrowed set. Check the annotations here \u2014 an unannotated tool would read as destructive and open-world.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 2,\n  \"method\": \"tools/list\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// MCP streamable HTTP replies as text/event-stream, so the JSON-RPC",
+                  "// payload sits on a `data:` line rather than being the whole body.",
+                  "function mcpBody(res) {",
+                  "  const text = res.text();",
+                  "  const line = text.split('\\n').find((l) => l.startsWith('data:'));",
+                  "  return JSON.parse(line ? line.slice(5).trim() : text);",
+                  "}",
+                  "",
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const tools = mcpBody(pm.response).result.tools;",
+                  "pm.test('exposes get_version', () =>",
+                  "  pm.expect(tools.map((t) => t.name)).to.include('get_version'));",
+                  "const v = tools.find((t) => t.name === 'get_version');",
+                  "pm.test('get_version is annotated read-only', () =>",
+                  "  pm.expect(v.annotations.readOnlyHint).to.be.true);",
+                  "console.log(tools.map((t) => t.name + ' ' + JSON.stringify(t.annotations)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. tools/call \u2014 get_version",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Mcp-Session-Id",
+                "value": "{{sessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Returns the server name and version (read from package.json at startup) and the MCP protocol version the SDK implements.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 3,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"get_version\",\n    \"arguments\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// MCP streamable HTTP replies as text/event-stream, so the JSON-RPC",
+                  "// payload sits on a `data:` line rather than being the whole body.",
+                  "function mcpBody(res) {",
+                  "  const text = res.text();",
+                  "  const line = text.split('\\n').find((l) => l.startsWith('data:'));",
+                  "  return JSON.parse(line ? line.slice(5).trim() : text);",
+                  "}",
+                  "",
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const info = JSON.parse(mcpBody(pm.response).result.content[0].text);",
+                  "console.log(info);",
+                  "pm.test('reports every version', () => {",
+                  "  pm.expect(info.serverVersion).to.match(/^\\d+\\.\\d+\\.\\d+/);",
+                  "  pm.expect(info.sdkVersion).to.be.a('string');",
+                  "  pm.expect(info.protocolVersion).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Delete session",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Mcp-Session-Id",
+                "value": "{{sessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Ends the session. This is the only thing that fires the SDK's `onsessionclosed` \u2014 which is why an idle TTL exists for clients that vanish without sending it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('sessionId', '');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Negative \u2014 auth",
+      "description": "Every one of these must fail. If any succeeds, the door is open.",
+      "item": [
+        {
+          "name": "No token \u2192 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "The door is closed by default.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2025-11-25\",\n    \"capabilities\": {},\n    \"clientInfo\": {\n      \"name\": \"postman\",\n      \"version\": \"1.0.0\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong token, same length \u2192 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{$guid}}{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Same length as the real token, so this exercises the constant-time comparison rather than the length check.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2025-11-25\",\n    \"capabilities\": {},\n    \"clientInfo\": {\n      \"name\": \"postman\",\n      \"version\": \"1.0.0\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong scheme (Basic) \u2192 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Basic {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Only the Bearer scheme is accepted; a valid token under the wrong scheme is still rejected.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2025-11-25\",\n    \"capabilities\": {},\n    \"clientInfo\": {\n      \"name\": \"postman\",\n      \"version\": \"1.0.0\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Valid session, token removed \u2192 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Mcp-Session-Id",
+                "value": "{{sessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "The important one: authorization is checked on every request, so holding a session id is not a way around the token. Run after Initialize.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 9,\n  \"method\": \"tools/list\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Negative \u2014 protocol",
+      "item": [
+        {
+          "name": "Untrusted Origin \u2192 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Origin",
+                "value": "https://evil.example"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Origin validation is a spec MUST and runs before authentication \u2014 it is what stops DNS rebinding from a page the user merely visits. Note this fails even with a valid token.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2025-11-25\",\n    \"capabilities\": {},\n    \"clientInfo\": {\n      \"name\": \"postman\",\n      \"version\": \"1.0.0\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown session \u2192 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              },
+              {
+                "key": "Mcp-Session-Id",
+                "value": "00000000-0000-0000-0000-000000000000"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "A session id the server has never issued, or one already expired.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 10,\n  \"method\": \"tools/list\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "No session, not initialize \u2192 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Only `initialize` may arrive without a session id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 11,\n  \"method\": \"tools/list\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed JSON \u2192 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mcp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Body is not valid JSON.",
+            "body": {
+              "mode": "raw",
+              "raw": "{not json",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown path \u2192 404",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{bearerToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/nope",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "nope"
+              ]
+            },
+            "description": "Only /mcp, /health and the OAuth metadata are served."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
