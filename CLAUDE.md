@@ -96,6 +96,13 @@ spec probe order), `protected-resource-metadata` (RFC 9728 document + well-known
 `node:http` — **express is deliberately not a dependency**; the SDK's `mcpAuthMetadataRouter` is
 express-based but the document is small enough to serve directly.
 
+**JWKS only — introspection is deferred, not forgotten.** Measured across ten IdPs (design §9c):
+`jwks_uri` is universal, introspection is absent on 4 including Entra. Adding it later is purely
+additive behind the existing `TokenVerifier` type; see design §10 for the revisit triggers.
+
+**Assume the IdP does not support DCR.** Half the surveyed providers don't, so a pre-registered
+client (`--client-id`) is the documented default path.
+
 **`OAUTH_AUDIENCE` is not `MCP_PUBLIC_URL`.** It defaults to it, but no mainstream IdP mints
 `aud` from the client's RFC 8707 `resource` parameter — Zitadel emits a numeric project id,
 Entra an App ID URI. Validation is membership in `aud`, which may be an array.

@@ -16,11 +16,13 @@ export function isStdioTransport(config: Config): boolean {
  * but the caller is expected to say so loudly in the startup log.
  */
 /**
- * The audience a token must name. Defaults to the resource identifier, which is what the spec
- * assumes, but real IdPs mint their own — so it is overridable.
+ * The audiences a token may name. Defaults to the resource identifier, which is what the spec
+ * assumes, but real IdPs mint their own — so it is overridable, and is a list because a
+ * deployment routinely has more than one legitimate client.
  */
-export function expectedAudience(config: Config): string | undefined {
-  return config.OAUTH_AUDIENCE ?? config.MCP_PUBLIC_URL;
+export function expectedAudiences(config: Config): string[] {
+  if (config.OAUTH_AUDIENCE.length > 0) return config.OAUTH_AUDIENCE;
+  return config.MCP_PUBLIC_URL === undefined ? [] : [config.MCP_PUBLIC_URL];
 }
 
 export function isExposedToNetwork(config: Config): boolean {

@@ -91,7 +91,8 @@ export async function authorizeRequest(
         return {
           authorized: false,
           status: verification.status,
-          reason: verification.description,
+          // The log takes the long form; the challenge takes the short one that fits a header.
+          reason: verification.detail ?? verification.description,
           challenge: buildWwwAuthenticate({
             resourceMetadataUrl,
             error: verification.error,

@@ -17,7 +17,7 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   MCP_MAX_SESSIONS: 100,
   BEARER_TOKEN: undefined,
   OAUTH_ISSUER: undefined,
-  OAUTH_AUDIENCE: undefined,
+  OAUTH_AUDIENCE: [],
   OAUTH_JWKS_URI: undefined,
   OAUTH_SCOPES_SUPPORTED: [],
   OAUTH_REQUIRED_SCOPES: [],

@@ -16,6 +16,10 @@ describe('buildVersionInfo', () => {
     expect(buildVersionInfo(deps).protocolVersion).toBe(LATEST_PROTOCOL_VERSION);
   });
 
+  it('reports the installed SDK version', () => {
+    expect(buildVersionInfo(deps).sdkVersion).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
   it('allows the protocol version to be overridden', () => {
     expect(buildVersionInfo({ ...deps, protocolVersion: '2025-06-18' }).protocolVersion).toBe(
       '2025-06-18',
@@ -37,7 +41,7 @@ describe('createGetVersionTool', () => {
     const [block] = result.content;
 
     expect(block?.type).toBe('text');
-    expect(JSON.parse(block?.type === 'text' ? block.text : '')).toEqual({
+    expect(JSON.parse(block?.type === 'text' ? block.text : '')).toMatchObject({
       serverName: 'ivanti-mcp',
       serverVersion: '0.1.0',
       protocolVersion: LATEST_PROTOCOL_VERSION,
