@@ -68,4 +68,13 @@ describe('loadConfig', () => {
       ),
     ).toThrow(/provide exactly one/);
   });
+
+  it('resolves IVANTI_API_KEY_FILE the same way as the bearer token', () => {
+    const config = loadConfig(
+      { IVANTI_BASE_URL: 'https://t.ivanticloud.com', IVANTI_API_KEY_FILE: '/run/secrets/ivanti' },
+      () => 'key-from-file',
+    );
+
+    expect(config.IVANTI_API_KEY).toBe('key-from-file');
+  });
 });

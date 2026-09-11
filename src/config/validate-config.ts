@@ -2,6 +2,17 @@ import type { Config } from './env-schema.js';
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', 'localhost']);
 
+/**
+ * A type predicate rather than a boolean: `validateConfig` has already refused the half-configured
+ * case, but the compiler does not know that, and the alternative is a non-null assertion at every
+ * call site.
+ */
+export function isIvantiConfigured(
+  config: Config,
+): config is Config & { IVANTI_BASE_URL: string; IVANTI_API_KEY: string } {
+  return config.IVANTI_BASE_URL !== undefined && config.IVANTI_API_KEY !== undefined;
+}
+
 export function isHttpTransport(config: Config): boolean {
   return config.HTTP_TRANSPORT_ON;
 }
@@ -109,6 +120,18 @@ export function validateConfig(config: Config): string[] {
 
   if (config.AUTH_MODE === 'oauth' && config.OAUTH_ISSUER === undefined) {
     problems.push('AUTH_MODE=oauth requires OAUTH_ISSUER.');
+  }
+
+  // Half a connection is a misconfiguration, not a degraded mode: it would start, look healthy,
+  // and fail on the first Ivanti call.
+  const hasBaseUrl = config.IVANTI_BASE_URL !== undefined;
+  const hasKey = config.IVANTI_API_KEY !== undefined;
+  if (hasBaseUrl !== hasKey) {
+    problems.push(
+      hasBaseUrl
+        ? 'IVANTI_BASE_URL is set without IVANTI_API_KEY (or IVANTI_API_KEY_FILE).'
+        : 'IVANTI_API_KEY is set without IVANTI_BASE_URL.',
+    );
   }
 
   if (config.MCP_MODE === 'enduser' && config.ENDUSER_BUSINESS_OBJECTS.length === 0) {

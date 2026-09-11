@@ -62,6 +62,14 @@ export const envSchema = z.object({
   OAUTH_SCOPES_SUPPORTED: commaSeparated.default([]),
   OAUTH_REQUIRED_SCOPES: commaSeparated.default([]),
 
+  /**
+   * The Ivanti tenant. Optional while the Ivanti tools are still being built — without it the
+   * server runs with only the transport-level tools.
+   */
+  IVANTI_BASE_URL: z.url().optional(),
+  /** One key, one Ivanti "MCP user" — see design §3. Also accepted as IVANTI_API_KEY_FILE. */
+  IVANTI_API_KEY: z.string().min(1).optional(),
+
   ENDUSER_BUSINESS_OBJECTS: commaSeparated.default([]),
 
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),

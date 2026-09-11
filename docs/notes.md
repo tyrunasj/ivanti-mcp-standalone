@@ -289,6 +289,61 @@ ASMX session. `$metadata` entity-type names need only `rest_api_key` and are **w
 access is governed by Object Permissions, not workspace membership, so an analyst role reads
 plenty of objects it has no workspace for.
 
+**A refused key answers `401 ISM_4001`, not a 404.**
+`"Invalid Session key or Authentication token or Host"` — measured with a wrong key and with an
+empty one. The startup probe treats a 401/403 on any candidate as "the tenant is reachable, the
+credential is wrong" and says so, because "could not reach Ivanti" sends whoever reads it to check
+DNS and firewalls for a problem that is one environment variable.
+
+**`Accept: application/json` on `$metadata` turns a 200 into a 500.**
+Ivanti tries to content-negotiate CSDL into JSON and throws: the body comes back as
+`Unhandled system exception: {&quot;error&quot;…}`, 592 bytes, status 500. The *same URL* with
+`Accept: application/xml` (or no Accept at all) answers 200 with 325 KB of CSDL. Measured on a
+live tenant 2026-09-11. `requestText` therefore defaults to XML, and the base-path probe asks for
+XML explicitly.
+
+**`$metadata` is served per graph, and the obvious forms are the ones that do not exist.**
+Measured live: `/HEAT/api/odata/$metadata` and `/HEAT/api/odata/businessobject/$metadata` both
+answer `404 ISM_4004 "No service"`, while `/HEAT/api/odata/incidents/$metadata` answers the full
+related graph — 38 entity types, 325 KB. Note the path has **no `businessobject` segment** and the
+graph name is lowercase plural, unlike the CRUD route (`/api/odata/businessobject/Incidents`).
+`overlord-service` arrived at the same three-candidate ladder, so this is not one tenant's quirk.
+
+**Ivanti has three different ways of saying "no rows", and two of them are not arrays.**
+Measured live:
+
+| Request | Answer |
+|---|---|
+| Entity set, `$filter` matches nothing | **200 with a completely empty body** |
+| Navigation property with nothing related | `{"value": "No instances found."}` — a **string** |
+| Anything with rows | `{"value": [ … ]}` |
+
+The sentinel is the nastier one: `value.length` is 19 and `value[0]` is `"N"`, so a caller that
+trusts it reports 19 related records. `readCollection()` in `src/ivanti/odata-response.ts` absorbs
+both, and **refuses any other string** rather than reporting prose as an empty result — "Access
+denied" must not arrive as "no rows".
+
+**Confirmed live: `$select` on a single-record GET returns nothing at all.**
+Not merely a thin record — the body is `{"@odata.context": …}` and no fields whatsoever, while the
+same record without `$select` returns 182. Projection is client-side, full stop.
+
+**A 200 from `$metadata` is not proof the base path is right.**
+A login page or a WAF interstitial answers 200 with HTML, and taking that as success poisons
+everything downstream — the wrong base path is then used for every request and reads like an
+authentication failure. The probe checks for an `<Edmx>` root, not just the status.
+*(Found while building B1, 2026-09-11.)*
+
+**The startup probe needs its own timeout.**
+It runs before the process serves anything, so an unreachable tenant that accepts the connection
+and never answers hangs the startup indefinitely — worse than exiting, because a container stuck
+part-way through starting looks alive. `PROBE_TIMEOUT_MS`, separate from the request timeout.
+*(Found while building B1, 2026-09-11.)*
+
+**`encodeURIComponent` does not escape `'`, and Ivanti keys are single-quoted.**
+`Incidents('<RecId>')` breaks out of the key on an apostrophe, so the key builder escapes it
+explicitly. RecIds are 32-char hex in practice, but a URL builder should not depend on its
+callers being well behaved. *(Found while building B1, 2026-09-11.)*
+
 **Three CSRF conventions on one session, differing only by casing and placement.**
 `.asmx` wants `_csrfToken` in the JSON body; `.ashx` handlers want lowercase `_csrftoken` as a
 header with a form-urlencoded body and reply with a JavaScript object literal rather than JSON;

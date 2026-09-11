@@ -21,6 +21,8 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   OAUTH_JWKS_URI: undefined,
   OAUTH_SCOPES_SUPPORTED: [],
   OAUTH_REQUIRED_SCOPES: [],
+  IVANTI_BASE_URL: undefined,
+  IVANTI_API_KEY: undefined,
   ENDUSER_BUSINESS_OBJECTS: [],
   LOG_LEVEL: 'info',
   ...overrides,

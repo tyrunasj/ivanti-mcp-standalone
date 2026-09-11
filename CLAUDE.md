@@ -68,6 +68,7 @@ Nothing lower in the stack reads `process.env`.
 config/   env-schema (shape) -> read-secret-file (*_FILE) -> validate-config (rules) -> load-config (orchestration)
 tools/    tool-definition (type) -> get-version (one tool) -> register-tools (which tools this mode exposes)
 server/   create-server (assembly) -> start-stdio | start-http; http/ holds pure request-policy functions
+ivanti/   base-path (startup probe) -> transport (rest_api_key HTTP) ; odata-url, odata-filter, errors are pure
 ```
 
 Each file has one reason to change, and tests live next to the file they cover
@@ -113,6 +114,35 @@ document: registration is strictly between the client and the authorization serv
 the SDK's `mcpAuthRouter` or `proxyProvider` — those are the authorization-server half. See
 design doc §11 for the verified spec requirements.
 
+**The Ivanti base path is probed, not configured.** Tenants serve the API under `/HEAT` or at
+the root, and `connectIvanti()` walks base path × CSDL form at startup — `incidents/$metadata`,
+then the service root, then `businessobject/$metadata` — keeping the first that answers with a
+CSDL document. A 200 carrying a login page is rejected, because the wrong base path then reads
+like an authentication failure for the life of the process. The ladder is not defensive
+programming: on a live tenant the two obvious forms answer `404 ISM_4004` and only the
+entity-scoped graph exists. **Ask for XML** — `Accept: application/json` on `$metadata` makes
+Ivanti answer 500 while trying to render CSDL as JSON. `IVANTI_BASE_URL` and
+`IVANTI_API_KEY(_FILE)` are optional today and must be set together; with neither, the server
+starts and warns. A configured tenant that cannot be reached **fails the startup** rather than
+deferring the error to the first tool call.
+
+**`src/ivanti/transport.ts` is the `rest_api_key` surface only** — OData, REST and `$metadata`.
+The header is `Authorization: rest_api_key=<key>`, with an equals sign. The ASMX surface
+authenticates with a SID cookie plus a CSRF token and has its own session lifecycle; keeping the
+two apart is what stops a caller reaching for the wrong credential.
+
+**Every collection read goes through `readCollection()`.** Ivanti has three encodings for "no
+rows" and only one of them is an array: an entity set whose filter matches nothing answers **200
+with an empty body**, and an empty navigation property answers `{"value": "No instances found."}`
+— a string that cheerfully reports `.length === 19`. Unrecognised prose in `value` is an error,
+not an empty result.
+
+**Ivanti has no 404 and silently drops `$filter` functions.** Get-by-key answers
+`400 ISM_4000 "Invalid key"` — the same code as a bad field name — so `isIvantiNotFound()` owns
+that dialect. `contains()`, `startswith()` and friends are *ignored* and the full unfiltered set
+returned, which is why `assertSupportedFilter()` refuses them locally before the request is made.
+Never report success from a 200.
+
 **Version comes from `package.json`.** `src/version.ts` reads the manifest at startup — keep
 that module at the root of `src/`, since it resolves `../package.json` and relies on
 `rootDir: src` → `outDir: dist` preserving depth. A container image **must copy `package.json`**
@@ -148,5 +178,12 @@ fires only on an explicit DELETE. Being in-memory, replicas would need sticky ro
   Reads get `readOnlyHint`/`idempotentHint`; additive writes must set `destructiveHint: false`
   because the default is `true`. Ivanti tools that return ticket text are an untrusted-content
   surface and keep `openWorldHint: true`.
+- **The API key is redacted from every Ivanti error body** (`scrubErrorBody`, called in the
+  transport — the only layer that knows the key). Ivanti echoes submitted values in failures and
+  the ASMX session sends the key as a *body parameter*, so error text is the realistic path from
+  credential to log line. Only the key itself is redacted: a generic "key-shaped token" pass would
+  eat the 32-char hex RecIds the model needs from error text.
+- **Ivanti request logs carry the path, never the query.** A `$filter` routinely contains a
+  person's name.
 - Business Object allowlists key on the **technical** BO name, never the display name, which
   is customizable per tenant.
