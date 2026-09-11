@@ -12,6 +12,8 @@ Three documents, with different jobs:
 - **`docs/implementation-plan.md`** — the order of work, in stages.
 - **`docs/notes.md`** — traps: things that pass locally and fail elsewhere. **Add to it whenever
   you hit one**, rather than fixing it silently.
+- **`docs/configuration.md`** — how to configure the server against a real IdP, per provider,
+  plus a symptom→cause table. `.env.example` is the reference; this is the guide.
 
 **`docs/initial-design.md` is the source of truth for design decisions.** It records what was
 decided, why, and — in §10 — which alternatives were rejected and for what reason. Read it
