@@ -288,72 +288,231 @@ item in Phase A is cheaper to redo than to build on the wrong assumption.
 
 # Phase B — Ivanti functionality
 
-## Stage B1 — Ivanti client and the first real read
+## Port, do not rebuild
 
-**Goal:** prove the Ivanti REST assumptions with the smallest possible surface. Highest
-uncertainty in Phase B; everything after depends on being right here.
+`overlord-service` is a working Ivanti MCP server: **34 tools over ~18,300 lines**, verified
+against live tenants. Its Ivanti layer encodes behaviour that exists in no specification and
+cannot be derived from the API — it was read out of HAR captures and confirmed by experiment.
 
-**Ships:** `ivanti/ivanti-client.ts` (injectable `fetch`, timeouts, one retry on connection
-errors only, typed error mapping), `ivanti/errors.ts` (failures translated into tool results a
-model can act on), `list_business_objects`, `get_object_metadata`, `get_record`, and a startup
-reachability check so a wrong credential fails at boot rather than mid-conversation.
+Rebuilding it means rediscovering every one of these, each of which is a **silent failure**:
 
-**Open before starting:** the exact Ivanti REST authentication header format. The current
-placeholder is a guess and is commented as such.
+- `$filter` has no functions. `contains()`, `startswith()`, `year()` are **silently dropped** and
+  the server returns the **full unfiltered set** — not an error.
+- `@odata.count` returns **0 alongside real rows** on some filtered queries, and tracks page size
+  rather than a true total.
+- An English-plural entity set (`Categories`) answers **empty rather than erroring** — but 400s
+  the moment a `select` is added, which is the only way to tell a bad name from no rows.
+- Service-request checkboxes store only the exact lowercase string `'true'`; `true`, `'True'`,
+  `1` leave the field false **while echoing the sent value back**.
+- Service-request datetimes need the **negated** tenant UTC offset; the positive value corrupts
+  the field to year 0001.
+- Quick actions answer `saved: true` over records that did not change; `UIAction` actions are
+  client-side no-ops that answer OK.
+- `PreDeleteObject` always answers `status: 'error'`, even for a clean preview.
+- Attachment upload never links its parent, and succeeds against a parent that does not exist.
+- `$select` on a single-record GET returns **200 with an empty body**.
 
-**Exit criteria:** a real record returns from a staging tenant; a wrong key fails at startup;
-the technical names from `list_business_objects` are confirmed to be what the API accepts.
+**So: port `apis/`, `client/core/` and `client/providers/` (~9,256 lines) and restructure as we
+go. Rewrite `tools/` (~5,300 lines)**, which is thinner and carries the multi-tenant assumption
+we deliberately designed away.
+
+## Five principles this phase is built on
+
+**1. Never report success from a 200.** Ivanti's failure mode is answering OK and doing something
+else. Writes are read back (`confirmValidatedWrite`, `verifySubmittedParameters`); reads that
+degraded say so through provenance fields — `servedBy`, `filteredBy`, `answeredFor`. A tool that
+cannot tell the model *how* it knows should not claim to know.
+
+**2. Refuse unsupported queries before the wire.** A silently-dropped `$filter` function is worse
+than an error, because the model believes the result. `assertSupportedFilter` rejects them
+client-side.
+
+**3. Capability narrowing happens at registration.** A credential that cannot serve a tool never
+sees it in `tools/list` — the same mechanism `MCP_MODE` already uses. An absent capability beats
+a runtime failure.
+
+**4. Facts in the client, sentences in the tools.** The client diagnoses (`IvantiHint`, ten
+variants, naming fields and values); only the tools layer names tools and parameters. Overlord
+learned this the hard way — the text once lived in the transport, so renaming a tool meant
+editing the HTTP layer, and a stale placeholder leaked into model output.
+
+**5. Heavy reference lives in MCP resources, not instructions.** `instructions` is injected every
+session and costs tokens every session. Overlord exposes four markdown resources
+(`ivanti://reference/{entity-naming,field-names,picklists,write-recipes}`) that the model pulls
+on demand. **We have no resources tier at all** — adding one is part of this phase.
 
 ---
 
-## Stage B2 — Read breadth
+## Stage B1 — Transport foundation
 
-`list_records`, `search`, `fulltext_search_object`, `count_records`, `group_count`,
-`get_related_records`, `get_link_fields`, pick lists, saved searches, `list_assigned_work`.
+**Goal:** every wire convention, with nothing Ivanti-semantic on top.
 
-Two cross-cutting concerns appear only at breadth and are settled once, here:
-- **Pagination** — one convention across every list tool.
-- **Response shaping** — Ivanti records are wide. Return requested fields plus a sensible
-  default; dumping every field burns context and buries the answer.
+**Ships**
+- `rest_api_key` transport. The header is `Authorization: rest_api_key=<key>` — **equals sign**.
+- **Base-path probe.** `/HEAT` is usually present but not always; try both once at startup, keep
+  whichever answers, log the result. Not a config field — someone will get it wrong.
+- OData URL builders: entity set, record by key, `/$Ref` for relationship link/unlink.
+- `assertSupportedFilter` — reject `$filter` functions and OData v2 typed literals before the
+  request is made (principle 2).
+- The error pipeline: typed `IvantiApiError` carrying status and a **scrubbed, size-capped** body.
+- `isIvantiNotFound()` — **Ivanti has no 404.** Get-by-key answers `400 ISM_4000 "Invalid key"`,
+  the same code as a bad field name, and `/rest/Attachment` answers 400 `"not found"`.
 
-**Exit criteria:** everything annotated `readOnlyHint`/`idempotentHint`; safe to point at
-production because nothing can mutate; a realistic question is answerable end to end.
-
----
-
-## Stage B3 — Writes, `full` mode
-
-`create_record`, `update_record`, `link_records`, `unlink_records`, `delete_record`,
-`preview_delete`, attachments, `submit_service_request`, quick actions.
-
-**Annotations are easy to get wrong here:** creates and links set `destructiveHint: false`
-**explicitly** (the default is `true`); `update_record` is destructive but idempotent; deletes
-and `run_quick_action` are destructive.
-
-**Ships alongside:** the audit log completed — every mutating call records tool, target record
-and the `Customer` it was for. Every operation executes as the single Ivanti MCP user, so
-without this Ivanti attributes the whole system's changes to one account. It cannot be
-retrofitted onto records that already exist.
+**Exit criteria:** a real record returns from a staging tenant; a wrong key fails at startup, not
+at first tool call; an unsupported `$filter` is refused locally with an explanation.
 
 ---
 
-## Stage B4 — `enduser` mode
+## Stage B2 — Metadata, naming, and reads *(no session required)*
 
-- `ENDUSER_BUSINESS_OBJECTS` enforced in `selectTools()` — narrowing at **registration**, so
-  absent tools never appear in `tools/list`.
-- Startup validation of the allowlist against `list_business_objects`.
-- `Customer` resolution: name → Ivanti Employee, with disambiguation when several match. This
-  is the join stubbed back in A2.
-- **Session identity pin**: first assertion resolves and is stored; later tool arguments that
-  disagree are **rejected, not honoured**. This is what stops injected ticket text from changing
-  identity mid-conversation.
-- Session-scoped read-back: only RecIds created in this session are readable.
+**Goal:** a genuinely useful read-only server that works with **any** key role.
 
-**Explicitly not shipped:** `get_record` by IncidentNumber in `enduser` mode — numbers are
-sequential, so a status lookup by number is ticket enumeration across the company.
+This is the milestone worth reaching first: 17 of the 34 tools need no ASMX session at all, so
+this tier serves every customer regardless of what their API key can do.
 
-**Accepted risk, already decided:** an employee can claim to be a colleague. Same exposure as the
-phone line, now scriptable. The pin bounds it within a conversation; OAuth removes it.
+**Ships**
+- CSDL `$metadata` parsing and caching, with two guards: a **non-CSDL 200 must never be cached**
+  (a WAF or HTML page cached as metadata makes every entity report "not found" for the process
+  lifetime — validate the `<Edmx>` root), and **CSDL docs disagree with each other** — an entity
+  can carry 113 fields and 0 relationships in a shared graph while its own document has 46, so
+  probe the entity's own `$metadata` once when the shared graph came back relationship-less.
+- **The three entity-naming dialects** and conversion between them:
+
+  | Form | Example | Used by |
+  |---|---|---|
+  | AdminUI id | `Incident#`, `CI#Computer` | schema tools |
+  | OData entity set | `Incidents`, `CI__Computers` | CRUD tools |
+  | CSDL singular | `incident` (lowercase) | what metadata reports back |
+
+  The rule is **not** English pluralisation: replace `#` with `__` (or drop a trailing `#`), then
+  append a literal `s` — `IncidentStatus#` → `IncidentStatuss`, `Category#` → `Categorys`.
+  Accept the `#` form everywhere and convert, as overlord does. **This settles
+  `ENDUSER_BUSINESS_OBJECTS`:** accept either form, normalise on load, store one.
+- Client-side projection (principle: `$select` cannot be trusted — empty body on single-record
+  GET, and on saved searches it keeps every key and blanks the values, costing a round trip and
+  saving nothing).
+- Reads: `get_record`, `list_records`, `get_related_records`, `fulltext_search_object`,
+  `count_records`, `search`/`fetch`, `list_assigned_work`, `get_object_metadata`,
+  `get_service_request_parameters`, `get_service_request_parameter_options`,
+  `get_attachment_details`.
+- BO catalog from `$metadata` entity-type names — the **wider** of the two sources, since OData
+  access is governed by Object Permissions rather than workspace membership.
+
+**Exit criteria:** safe to point at production, because nothing can mutate. A realistic question
+is answerable end to end. An English-plural entity name is reported as a naming error with
+suggestions rather than as zero rows.
+
+---
+
+## Stage B3 — Session bootstrap and the capability profile
+
+**Goal:** unlock the ASMX-backed half where the credential allows, and degrade cleanly where it
+does not.
+
+**Ships**
+- The handshake: `AuthenticateTenantAPIKey` → SID, `InitializeSession` → CSRF,
+  `GetUserData` → **effective** role and display name. The `role` argument is a *request* that
+  silently downgrades, so step three is not optional; its failure is non-fatal.
+- All three CSRF conventions: `.asmx` wants `_csrfToken` in the body; `.ashx` handlers want
+  lowercase `_csrftoken` as a **header** with a form-urlencoded body and reply with a JavaScript
+  object literal; multipart uploads want `_csrfToken` as a header. One shared 401-clear-and-retry
+  lifecycle, one shared handshake promise.
+- **Never `/HEAT/AdminUI/`** — admin-console services an analyst key is refused. Carry over
+  overlord's guard test that drives every descended tool over a stubbed fetch and asserts no URL
+  contains that path.
+- **The capability profile** drives registration:
+
+  | Tier | Credential | Tools |
+  |---|---|---|
+  | `odata` | `rest_api_key` only | 17 fully, 8 degraded |
+  | `session` | + handshake succeeds | all |
+
+  Always-session tools: the three quick actions, `list_business_objects`,
+  `get_pick_list_values`, `get_pick_list_constraints`, `get_link_fields`, `list_saved_searches`,
+  `preview_delete`, `submit_service_request`.
+- **Surface the effective identity in `instructions`.** Anything Ivanti resolves "for the current
+  user" — a saved search called "My …", an approval vote — answers for the **service account**.
+  Told this, the model stops reporting one person's items as another's.
+- The richer BO catalog via `GetRoleWorkspaces`, merged with the metadata-derived list.
+
+**Exit criteria:** an analyst-role key starts, logs its tier, and serves the `odata` tool set with
+no failures. An admin key serves everything. Neither path requires configuration.
+
+---
+
+## Stage B4 — Writes, and the hint system
+
+**Ships**
+- `create_record`, `update_record`, `delete_record`, `link_records`, `unlink_records`.
+- **Link triplets**: a "Customer" is not a column — it is `ProfileLink_RecID` +
+  `ProfileLink_Category` naming a target BO. Creating a child under a parent is
+  `ParentLink_RecID` + `ParentLink_Category` **inline in the create**, which wires the
+  relationship in one call; `link_records` is only for records that already exist.
+- **Validated-field writes**: omitting is not skipping — Ivanti auto-fills an omitted validated
+  field and then rejects its own value. Resolve the value against the live cascade-filtered
+  option list, attach the identifier, and **read the record back to confirm it stored**. On
+  update, merge the record's stored cascade parents first: a `Category` patch alone evaluates
+  against an empty `Service` parent.
+- The **ten-variant `IvantiHint`** taxonomy and its renderer, split per principle 4.
+- Verify-after-write throughout (principle 1).
+
+**Exit criteria:** a ticket can be created, updated, linked and deleted end to end; a write that
+did not store is reported as a failure, not a success; a rejected value lists what was allowed.
+
+---
+
+## Stage B5 — Workflow surface
+
+`list_quick_actions`, `preview_quick_action`, `run_quick_action`, `preview_delete`,
+`get_pick_list_values`, `get_pick_list_constraints`, `get_link_fields`, `list_saved_searches`,
+`saved_search`, `group_count`.
+
+The quirks here are the sharpest in the codebase: preview must always probe fresh because the
+commit echoes a token from that probe; probing over the *grid* path ignores `shouldSave:false` and
+actually **runs** the action, so only the form path is safe; `UIAction` actions change nothing
+while answering OK and are refused client-side rather than reported as success.
+
+`run_quick_action` is the one tool carrying `DESTRUCTIVE_NON_IDEMPOTENT` — it repeats its side
+effects on retry.
+
+---
+
+## Stage B6 — Service requests and attachments
+
+The quirkiest area, and the one with the most one-way doors.
+
+Attachments must be **staged before the request exists**, and only the ASMX submit binds them —
+REST accepts an `attachments` field and silently drops it. A staging token is **one-shot**: a
+second submit would *move* the file off the first request rather than copy it. Submission success
+says nothing about whether parameters stored, so the request is read back.
+
+---
+
+## Stage B7 — `enduser` mode and the resources tier
+
+- `ENDUSER_BUSINESS_OBJECTS` enforced in `selectTools()`, validated at startup against the BO
+  catalog, keyed on the technical name in either dialect.
+- `Customer` resolution and the session identity pin.
+- **The resources tier**: port the four reference documents as MCP resources rather than growing
+  `instructions`. They cost nothing until the model asks.
+
+Note for this stage: approval voting is a **quick action**, not a field update, and "My Vote"
+records the *service account's* decision — so a pending-approval list must never be presented as
+the caller's own.
+
+---
+
+## Tool inventory (34 in overlord; we drop `list_tenants`)
+
+| Group | Tools | Session needed |
+|---|---|---|
+| business-object | list/get/create/update/delete_record, count_records, group_count, list_assigned_work, get_object_metadata, list_business_objects, get_pick_list_values, get_pick_list_constraints, get_link_fields, preview_delete | 6 always, 5 conditional |
+| attachment | get_attachment_details, upload_attachment, delete_attachment, request_attachment_upload, check_attachment_upload | 1 conditional |
+| quick-action | list/preview/run_quick_action | all |
+| relationship | get_related_records, link_records, unlink_records | none |
+| retrievable | search, fetch | none |
+| search | fulltext_search_object, list_saved_searches, saved_search | 1 always, 1 conditional |
+| service-request | list_request_offerings, get_service_request_parameters, get_service_request_parameter_options, submit_service_request | 1 always, 1 conditional |
 
 ---
 
@@ -366,17 +525,27 @@ Ivanti behaviour out of the failure analysis entirely.
 **Why the identity seam (A2) before OAuth (A3):** the seam touches every handler. Adding it after
 two identity sources already exist means changing both.
 
-**Why reads before writes (B2 before B3):** B2 can be pointed at production safely, which gets
-real feedback on shaping and pagination before anything can do damage.
+**Why reads before the session (B2 before B3):** B2 needs only `rest_api_key`, so it works for
+**every** customer regardless of what their key can do — 17 of 34 tools with no ASMX at all. It
+can be pointed at production safely, which gets real feedback on naming, projection and paging
+before anything can mutate. Reaching a useful server without depending on role is the milestone.
 
-**Why `full` before `enduser` (B3 before B4):** `enduser` is `full` minus tools plus identity — a
-narrowing of something that already works, not a parallel implementation.
+**Why the session before writes (B3 before B4):** validated-field writes need the cascade-filtered
+option list, which is an ASMX call. Attempting writes first means either skipping validated
+fields — most of the interesting ones — or discovering the dependency mid-stage.
+
+**Why `enduser` last (B7):** it is `full` minus tools plus identity, a narrowing of something that
+already works. It also depends on the BO catalog for allowlist validation, and on the session
+identity that B3 establishes.
 
 ## Standing risks
 
 | Risk | Stage | Mitigation |
 |---|---|---|
-| Ivanti REST auth header format is a guess | B1 | Verify against the tenant before building on it |
+| ~~Ivanti REST auth header format is a guess~~ | — | **Resolved:** `Authorization: rest_api_key=<key>`, equals sign, confirmed by a test in `overlord-service` |
+| Ivanti answers 200 and does something else — silently dropped `$filter` functions, untrustworthy `@odata.count`, `saved:true` over unchanged records | B1–B6 | Principle 1: never report success from a 200. Verify after write, refuse unsupported queries locally, carry provenance on degraded reads |
+| A customer's key lacks the role for the ASMX session | B3 | Capability tiers: 17 tools need no session; narrowing happens at registration so a tool that cannot work is never offered |
+| Port diverges from `overlord-service` and the two drift | B1 | Decide early whether the Ivanti layer becomes a shared package or an intentional fork — see the open question below |
 | SDK protocol version lags the spec (1.30.0 → `2025-11-25`) | A3 | Re-check `LATEST_PROTOCOL_VERSION` before assuming a 2026-07-28 requirement is buildable |
 | Real IdPs do not mint `aud` from the `resource` parameter | A3 | `OAUTH_AUDIENCE` configured separately; membership test, not equality |
 | **Entra does not advertise `code_challenge_methods_supported`; the spec says clients MUST refuse** | **A4, first** | Verify against a real tenant before building further on OAuth |
@@ -385,3 +554,54 @@ narrowing of something that already works, not a parallel implementation.
 | Distroless missing CA bundle presents as an auth failure | A1 | Found early, while the surface is one tool |
 | TypeScript pinned to 6.x by typescript-eslint | any | Revisit when typescript-eslint supports TS 7 |
 | Asserted identity is impersonable | B4 | Accepted; pinning bounds it, OAuth removes it |
+
+---
+
+## Fork, not shared package — decided 2026-09-11
+
+The Ivanti layer is **forked**, not extracted into a package both services consume. The reason is
+that this server is expected to **evolve independently**: different audiences, a different
+deployment story, and a tool philosophy that has already diverged (one tenant per instance, no
+`tenant` parameter, capability tiers).
+
+A shared package would make every such divergence a negotiation with `overlord-service`, and the
+coupling would bite hardest exactly where we most want to move — the tool surface.
+
+### What forking costs, and what we do about it
+
+**Ivanti discoveries now have to travel manually.** A quirk found in either codebase is a quirk in
+both — Ivanti does not care which of our servers is talking to it. Left alone, the two drift and
+the same day gets spent twice.
+
+So, three cheap habits rather than a process:
+
+**1. Record the fork point.** Ported code is taken from `synergy-platform` at:
+
+```
+repo   synergy-platform
+commit 952ad0c   (2026-09-01, last change to services/overlord-service/src/mcp/servers/ivanti)
+```
+
+Noting it makes a later `git log 952ad0c..HEAD -- .../ivanti` a real answer to "what has upstream
+learned since we forked", rather than a manual re-read of 18,000 lines.
+
+**2. Keep a provenance comment on ported files.** A one-line header naming the origin path means
+the next person can diff a single file instead of hunting for its counterpart.
+
+**3. Offer discoveries back.** Anything we learn about Ivanti's behaviour — a new silent failure,
+a corrected recipe — is worth a message to whoever owns overlord. One-way by choice beats one-way
+by neglect.
+
+### Where we intend to diverge
+
+Stated now, so drift is deliberate rather than accidental:
+
+- **No `tenant` parameter** on any tool — one tenant per instance removes it from all 33 schemas.
+- **Capability tiers** narrow the tool surface at registration; overlord assumes a capable key.
+- **Two audiences** (`full` / `enduser`), which overlord does not have.
+- **Our own auth layer** — overlord sits behind the platform's; this server is its own OAuth
+  resource server.
+
+Everything else — transport conventions, the hint taxonomy, the metadata catalog, the write
+recipes — should stay recognisably the same, because any difference there would be accidental
+rather than chosen.

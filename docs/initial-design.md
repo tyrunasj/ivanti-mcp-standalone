@@ -138,6 +138,76 @@ human who verifies who is calling. The MCP holds the same privileged position wi
 judgement and an attacker-influenced input channel. So **`Customer` is data, not
 authorization** — it cannot be both the value and the fence.
 
+### One key, but four wire surfaces (corrected 2026-09-11)
+
+This section originally assumed one credential meant one REST client. Measured against the
+working `overlord-service` implementation, the single API key is used across **four distinct
+surfaces with three calling conventions**:
+
+| Surface | Auth | Wire |
+|---|---|---|
+| **OData** `…/api/odata/businessobject/…` | `Authorization: rest_api_key=<key>` | JSON |
+| **REST** `…/rest/…` — attachments, full-text search, service requests, templates | same header | JSON |
+| **ASMX** `…/HEAT/Services/…asmx/<Method>` | **SID cookie + CSRF**, obtained by a handshake *using* the API key | JSON POST, `{d:…}` envelope |
+| **`$metadata`** CSDL | `rest_api_key` | XML |
+
+Note the header form: **`rest_api_key=<key>`**, with an equals sign, not a space.
+
+The ASMX session carries **three sub-conventions** distinguished only by the placement and
+casing of the CSRF token — `.asmx` wants `_csrfToken` in the body, `.ashx` handlers want
+lowercase `_csrftoken` as a header with a form-urlencoded body and reply as a JavaScript object
+literal, and multipart uploads want `_csrfToken` as a header. That detail exists only because
+someone read HAR captures; it is not documented anywhere else.
+
+**Why the split matters:** OData and REST return *records*. ASMX returns everything that makes
+records comprehensible — the business-object catalog, form definitions, field display names,
+legal values for a field, available quick actions, what a delete would cascade to. A REST-only
+implementation can read and write but cannot tell the model what a field means or which values
+are valid, which is the half that makes the other half safe.
+
+### The session bootstrap yields a capability profile
+
+```
+1. FRSHEATIntegration.asmx/AuthenticateTenantAPIKey  { tenantId: <host>, apiKey, role:'Admin' } → SID
+2. Session.asmx/InitializeSession                     { _csrfToken: null } + Cookie SID          → SessionCsrfToken
+3. Session.asmx/GetUserData                           { _csrfToken, tzoffset:0 }                 → UserRole, DisplayName
+4. Workspace.asmx/GetRoleWorkspaces                                                              → role-scoped objects
+```
+
+Step 1 **requests** `role: 'Admin'` and Ivanti silently downgrades to whatever the key actually
+holds, so step 3 is not optional — `GetUserData` reports the *effective* role. Its failure is
+non-fatal; fall back to the requested value.
+
+Two consequences:
+
+- **Never call `/HEAT/AdminUI/`.** Those are admin-console services and a tenant API key may
+  carry any role; an analyst key is refused. Not every customer will issue an admin-rights key
+  to this application. `overlord-service` removed its two AdminUI call sites and keeps a test
+  asserting no request URL ever contains that path — worth carrying over verbatim.
+- **The BO catalog therefore has two sources**, differently shaped rather than better and worse:
+  `GetRoleWorkspaces` is role-scoped and rich (display names, layouts) but needs the session;
+  `$metadata` `entityTypeNames()` needs only `rest_api_key` and is **wider**, because OData
+  access is governed by Object Permissions rather than workspace membership.
+
+### Two startup probes, both fail-soft
+
+- **Base path** — the `/HEAT` prefix is usually present but not always. Probe both forms once at
+  startup and keep whichever answers.
+- **Capability profile** — attempt the session handshake. Success registers the ASMX-backed
+  tools; failure registers only the OData/REST set. Narrowing happens at **registration**, the
+  same mechanism `MCP_MODE` uses, so a credential that cannot serve a tool never sees it in
+  `tools/list` — an absent capability rather than a runtime error.
+
+Refuse to start only if *nothing* works.
+
+### Surface the effective identity to the model
+
+The bootstrap knows `DisplayName` and `UserRole`. Put them in the server `instructions`, because
+anything Ivanti resolves "for the current user" — a saved search called "My …" — answers for the
+**service account**, never the human asking. Without being told, the model will confidently
+report one person's items as another's. This matters most in `enduser` mode, which is exactly
+where it is least acceptable.
+
 ---
 
 ## 4. Operating modes: `full` and `enduser`
@@ -449,6 +519,7 @@ Four things follow:
 | Server-side re-implementation of Ivanti authz (injected `Owner` filters, fetch-then-check) | Superseded by the single-operator + `Customer` field model |
 | Ivanti impersonation / on-behalf-of | Not needed once operations run as the one MCP user |
 | **RFC 7662 token introspection** | **Deferred, not abandoned — see below** |
+| Sharing the Ivanti layer as a package with `overlord-service` | Forked instead (2026-09-11): this server is expected to evolve independently, and shared code would make every divergence a negotiation. Cost — Ivanti discoveries travel manually — is accepted; see plan, "Fork, not shared package" |
 
 ### Introspection — deferred
 
