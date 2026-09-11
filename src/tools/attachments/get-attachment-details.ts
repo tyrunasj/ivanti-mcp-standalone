@@ -61,6 +61,16 @@ export function createGetAttachmentDetailsTool(deps: IvantiToolDeps): ToolDefini
           return errorResult(`No attachment with RecId ${args.attachmentId}.`);
         }
 
+        // An attachment is only as reachable as the record it hangs off: `ParentLink_Category`
+        // names that object, so a gated deployment checks it rather than the attachment table.
+        const parent = row['ParentLink_Category'];
+        if (typeof parent === 'string' && parent !== '' && !deps.gate.allows(parent)) {
+          return errorResult(
+            `That attachment belongs to a ${parent} record, which this server does not expose. ` +
+              `It serves ${deps.gate.allowed.join(', ')}.`,
+          );
+        }
+
         const details: OdataRecord = {};
         for (const field of DETAIL_FIELDS) {
           if (field in row && row[field] !== null && row[field] !== '') details[field] = row[field];

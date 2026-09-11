@@ -1,6 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture } from '../../ivanti/connection.fixture.js';
+import { OPEN_GATE } from '../shared/object-gate.js';
 import type { Logger } from '../../logger.js';
 import { createListAssignedWorkTool } from './list-assigned-work.js';
 
@@ -17,7 +18,7 @@ const body = (result: CallToolResult): Record<string, never> => {
 
 const tool = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ responses });
-  return { urls, tool: createListAssignedWorkTool({ connection, logger: logger() }) };
+  return { urls, tool: createListAssignedWorkTool({ connection, gate: OPEN_GATE, logger: logger() }) };
 };
 
 describe('list_assigned_work', () => {

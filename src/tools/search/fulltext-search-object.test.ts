@@ -1,6 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, field } from '../../ivanti/connection.fixture.js';
+import { OPEN_GATE } from '../shared/object-gate.js';
 import type { Logger } from '../../logger.js';
 import { createFulltextSearchObjectTool } from './fulltext-search-object.js';
 
@@ -24,7 +25,7 @@ const tool = (responses: Record<string, unknown>) => {
     entities: { incident: { fields: [field('RecId'), field('Subject')] } },
     responses,
   });
-  return { urls, tool: createFulltextSearchObjectTool({ connection, logger: logger() }) };
+  return { urls, tool: createFulltextSearchObjectTool({ connection, gate: OPEN_GATE, logger: logger() }) };
 };
 
 describe('fulltext_search_object', () => {

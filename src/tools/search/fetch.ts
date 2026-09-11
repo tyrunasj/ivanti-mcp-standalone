@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
+import { ObjectNotAllowedError } from '../shared/object-gate.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -33,6 +34,11 @@ export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
               '`incidents:8E71E727DD5045C7B11EF634233437F1`. To read a record you already have ' +
               'the RecId for, use get_record, which takes the object separately.',
           );
+        }
+
+        // An id is a name for an object, so it passes the same gate as one typed by hand.
+        if (!deps.gate.allows(decoded.entitySet)) {
+          throw new ObjectNotAllowedError(decoded.entitySet, deps.gate.allowed);
         }
 
         const url = deps.connection.transport.routes.record(decoded.entitySet, decoded.recId);

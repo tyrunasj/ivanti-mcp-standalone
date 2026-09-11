@@ -32,7 +32,8 @@ describe('connectIvanti', () => {
     expect(connection.transport.routes.entitySet('Incidents')).toBe(
       'https://t/HEAT/api/odata/businessobject/Incidents',
     );
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // One probe for the base path; the rest of the calls are the session handshake.
+    expect(fetchImpl.mock.calls.filter(([url]) => url.includes('$metadata'))).toHaveLength(1);
   });
 
   it('logs the root base path as something a reader cannot mistake for "unknown"', async () => {
@@ -85,5 +86,75 @@ describe('connectIvanti', () => {
     await expect(
       connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl }),
     ).rejects.toThrow(/refused the API key: 401[\s\S]*IVANTI_API_KEY/);
+  });
+
+  it('degrades to the OData tier when the session handshake fails', async () => {
+    // The realistic case: a key whose role cannot open an ASMX session. Reads still work, so
+    // refusing to start would punish exactly the customers who cannot issue an admin key.
+    const fetchImpl = vi.fn((url: string) =>
+      Promise.resolve(
+        url.includes('$metadata')
+          ? { ok: true, status: 200, text: () => Promise.resolve(CSDL) }
+          : { ok: false, status: 401, text: () => Promise.resolve('ISM_4001') },
+      ),
+    );
+    const { logger, lines } = testLogger();
+
+    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl });
+
+    expect(connection.capability.tier).toBe('odata');
+    expect(lines.join('\n')).toContain('session unavailable');
+  });
+
+  it('reports the admin tier when the console answers as well', async () => {
+    const fetchImpl = vi.fn((url: string) => {
+      if (url.includes('$metadata')) {
+        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(CSDL) });
+      }
+      const body = url.includes('AuthenticateTenantAPIKey')
+        ? { d: 'sid' }
+        : url.includes('InitializeSession')
+          ? { d: { SessionCsrfToken: 'csrf', ActiveRole: 'Admin' } }
+          : url.includes('GetBriefBusinessObjects')
+            ? { d: [{ id: 'Incident#', displayName: 'Incident' }] }
+            : { d: { UserRole: 'Admin', DisplayName: 'Service Account' } };
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(body)),
+      });
+    });
+    const { logger } = testLogger();
+
+    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl });
+
+    expect(connection.capability).toMatchObject({
+      tier: 'admin',
+      identity: { role: 'Admin', displayName: 'Service Account' },
+    });
+  });
+
+  it('falls back to the session tier when only the admin console refuses', async () => {
+    const fetchImpl = vi.fn((url: string) => {
+      if (url.includes('$metadata')) {
+        return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(CSDL) });
+      }
+      if (url.includes('AdminUI')) {
+        return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('no') });
+      }
+      const body = url.includes('AuthenticateTenantAPIKey')
+        ? { d: 'sid' }
+        : { d: { SessionCsrfToken: 'csrf', ActiveRole: 'ServiceDeskAnalyst' } };
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(body)),
+      });
+    });
+    const { logger } = testLogger();
+
+    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl });
+
+    expect(connection.capability.tier).toBe('session');
   });
 });

@@ -3,7 +3,13 @@ import type { IvantiConnection } from './connect.js';
 import { IvantiApiError } from './http/errors.js';
 import type { IvantiTransport } from './http/transport.js';
 import { UnknownEntityError, type MetadataCatalog } from './metadata/catalog.js';
+import type { IvantiSession, SessionIdentity } from './session/asmx-session.js';
+import { createAdminCatalog } from './session/admin-catalog.js';
+import type { Capability } from './session/capability.js';
+import { createFormContext } from './session/form-context.js';
+import { createWorkspaceCatalog } from './session/workspaces.js';
 import type { EntityField, EntityMetadata } from './metadata/csdl.js';
+import { createLogger } from '../logger.js';
 import { createIvantiRoutes } from './odata/url.js';
 
 /**
@@ -18,6 +24,10 @@ export interface ConnectionFixtureOptions {
   entities?: Record<string, Partial<EntityMetadata>>;
   /** URL fragment → parsed payload, or an Error to throw. */
   responses?: Record<string, unknown>;
+  /** Defaults to the OData tier: no session, as a customer with an analyst key would run. */
+  capability?: Capability;
+  /** ASMX answers, keyed by `<service>/<method>` fragment. */
+  sessionCalls?: Record<string, unknown>;
 }
 
 export interface ConnectionFixture {
@@ -40,6 +50,8 @@ export function field(name: string, overrides: Partial<EntityField> = {}): Entit
 export function entityFixture(name: string, overrides: Partial<EntityMetadata> = {}): EntityMetadata {
   return { name, fields: [field('RecId'), field('Subject')], relationships: [], ...overrides };
 }
+
+const fixtureLogger = createLogger('error', () => undefined);
 
 export function connectionFixture(options: ConnectionFixtureOptions = {}): ConnectionFixture {
   const urls: string[] = [];
@@ -93,6 +105,25 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
     widen: vi.fn(() => Promise.resolve()),
   };
 
+  const identity: SessionIdentity = { role: 'Admin', displayName: 'Service Account' };
+  const session: IvantiSession = {
+    call: (servicePath: string, method: string) => {
+      const key = `${servicePath}/${method}`;
+      urls.push(key);
+      const match = Object.entries(options.sessionCalls ?? {}).find(([fragment]) =>
+        key.includes(fragment),
+      );
+      if (match === undefined) return Promise.resolve(undefined) as Promise<never>;
+      if (match[1] instanceof Error) return Promise.reject(match[1]);
+      return Promise.resolve(match[1]) as Promise<never>;
+    },
+    callHandler: () => Promise.reject(new Error('no handler in this fixture')),
+    identity: () => Promise.resolve(identity),
+    identityIfKnown: () => identity,
+  };
+
+  const workspaces = createWorkspaceCatalog(session, fixtureLogger);
+
   return {
     urls,
     connection: {
@@ -100,6 +131,11 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
       metadataUrl: 'https://tenant.example/HEAT/api/odata/incidents/$metadata',
       transport,
       metadata,
+      session,
+      workspaces,
+      admin: createAdminCatalog(session, fixtureLogger),
+      forms: createFormContext(session, workspaces, fixtureLogger),
+      capability: options.capability ?? { tier: 'odata', reason: 'fixture default' },
     },
   };
 }

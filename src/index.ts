@@ -3,6 +3,7 @@ import type { TokenVerifier } from './auth/oauth/verify-token.js';
 import { ConfigError, loadConfig } from './config/load-config.js';
 import { isIvantiConfigured } from './config/validate-config.js';
 import { connectIvanti } from './ivanti/connect.js';
+import { validateBusinessObjectAllowlist } from './ivanti/validate-allowlist.js';
 
 import { createLogger } from './logger.js';
 import { createServerFactory, SERVER_NAME, SERVER_VERSION } from './server/create-server.js';
@@ -22,8 +23,16 @@ async function main(): Promise<void> {
         baseUrl: config.IVANTI_BASE_URL,
         apiKey: config.IVANTI_API_KEY,
         logger,
+        ...(config.IVANTI_MAX_TIER === undefined ? {} : { maxTier: config.IVANTI_MAX_TIER }),
       })
     : undefined;
+
+  // The allowlist is the whole of what an end user may do, so a name the tenant does not have is
+  // a configuration error rather than an empty result later.
+  if (ivanti !== undefined && config.MCP_MODE === 'enduser') {
+    const problems = await validateBusinessObjectAllowlist(ivanti, config.ENDUSER_BUSINESS_OBJECTS);
+    if (problems.length > 0) throw new ConfigError(problems);
+  }
 
   if (ivanti === undefined) {
     logger.warn('ivanti is not configured; serving transport-level tools only', {

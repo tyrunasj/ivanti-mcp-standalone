@@ -17,6 +17,11 @@ export interface IvantiRoutes {
   /** `…/api/rest/<path>` — the REST surface, on the same key as OData. */
   rest: (path: string) => string;
   /**
+   * `…/Services/Session.asmx/InitializeSession` — the ASMX surface, which authenticates with a
+   * SID cookie and a CSRF token rather than the API-key header.
+   */
+  service: (path: string) => string;
+  /**
    * The CSDL document for a named graph — `incidents` returns the whole related graph — or the
    * service-root form when omitted, which most tenants have disabled.
    */
@@ -45,6 +50,7 @@ export function createIvantiRoutes(baseUrl: string, basePath: string): IvantiRou
     ref: (entitySet, recId, relationship, targetId) =>
       `${bo}/${entitySet}${key(recId)}/${relationship}${key(targetId)}/$Ref`,
     rest: (path: string) => `${root}/api/rest/${path.replace(/^\/+/, '')}`,
+    service: (path: string) => `${root}/${path.replace(/^\/+/, '')}`,
     metadata: (graph) => `${root}/api/odata/${graph === undefined ? '' : `${graph}/`}$metadata`,
   };
 }

@@ -125,7 +125,7 @@ export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition
         const fields = parseFieldList(args.fields);
 
         const groups = await Promise.all(
-          WORK_OBJECTS.map(async (work) => {
+          WORK_OBJECTS.filter((work) => deps.gate.allows(work.object)).map(async (work) => {
             const conditions = [`Owner eq ${quoteOdataString(person.loginId)}`];
             if (args.includeClosed !== true) {
               for (const status of work.closed) {

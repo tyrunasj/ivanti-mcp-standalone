@@ -70,6 +70,14 @@ export const envSchema = z.object({
   IVANTI_BASE_URL: z.url().optional(),
   /** One key, one Ivanti "MCP user" — see design §3. Also accepted as IVANTI_API_KEY_FILE. */
   IVANTI_API_KEY: z.string().min(1).optional(),
+  /**
+   * Caps what the server will use, however capable the credential turns out to be.
+   *
+   * There is no other way to exercise the degraded paths: `AuthenticateTenantAPIKey`'s `role`
+   * argument is ignored — an admin account asked for `SelfService` still answers `Admin` — so a
+   * deployment cannot test what a customer without admin rights will see by asking nicely.
+   */
+  IVANTI_MAX_TIER: z.enum(['odata', 'session', 'admin']).optional(),
 
   /**
    * Business Objects an end user may create on. Any of Ivanti's three naming dialects is

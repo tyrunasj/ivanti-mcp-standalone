@@ -1,6 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, field } from '../../ivanti/connection.fixture.js';
+import { OPEN_GATE } from '../shared/object-gate.js';
 import type { Logger } from '../../logger.js';
 import { createCountRecordsTool } from './count-records.js';
 import { createGetRecordTool } from './get-record.js';
@@ -21,7 +22,7 @@ const ROW = { RecId: 'abc', IncidentNumber: 10244, Subject: 'Printer', Status: '
 
 const fixture = (responses: Record<string, unknown> = {}) => {
   const { connection, urls } = connectionFixture({ entities: { incident: INCIDENT }, responses });
-  return { deps: { connection, logger: logger() }, urls };
+  return { deps: { connection, gate: OPEN_GATE, logger: logger() }, urls };
 };
 
 const text = (result: CallToolResult): string => {
@@ -87,6 +88,32 @@ describe('list_records', () => {
       totalIsExact: true,
       hasMore: true,
     });
+  });
+
+  it('projects to a compact set by default — whole records are enormous', async () => {
+    const wide = { ...ROW, Symptom: 'x'.repeat(500), OwnerTeam: 'Service Desk' };
+    const { deps } = fixture({ incidents: { value: [wide] } });
+
+    const result = body(await createListRecordsTool(deps).handler({ object: 'Incidents' }));
+
+    expect(Object.keys((result.rows as Record<string, unknown>[])[0] ?? {})).toEqual([
+      'RecId',
+      'IncidentNumber',
+      'Subject',
+      'Status',
+      'OwnerTeam',
+    ]);
+    expect(String(result.fields)).toContain('compact default set');
+  });
+
+  it('returns whole records when the caller asks for them outright', async () => {
+    const wide = { ...ROW, Symptom: 'the whole story' };
+    const { deps } = fixture({ incidents: { value: [wide] } });
+
+    const result = body(await createListRecordsTool(deps).handler({ object: 'Incidents', fields: '*' }));
+
+    expect((result.rows as Record<string, unknown>[])[0]).toEqual(wide);
+    expect(result.fields).toBeUndefined();
   });
 
   it('refuses a filter Ivanti would silently ignore', async () => {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
+import { ObjectNotAllowedError } from '../shared/object-gate.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -60,6 +61,11 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
     },
     handler: (args) =>
       runTool('get_service_request_parameter_options', deps.logger, async () => {
+        // These exist to serve service requests; where that object is gated away, so are they.
+        if (!deps.gate.allows('ServiceReq')) {
+          throw new ObjectNotAllowedError('ServiceReq', deps.gate.allowed);
+        }
+
         const { transport } = deps.connection;
         // A POST, despite being a read: the constraints travel in the body.
         const url = transport.routes.rest(

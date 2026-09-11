@@ -1,6 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture } from '../../ivanti/connection.fixture.js';
+import { OPEN_GATE } from '../shared/object-gate.js';
 import type { Logger } from '../../logger.js';
 import { createGetServiceRequestParameterOptionsTool } from './get-service-request-parameter-options.js';
 import { createGetServiceRequestParametersTool } from './get-service-request-parameters.js';
@@ -14,7 +15,7 @@ const body = (result: CallToolResult): Record<string, never> => {
 
 const tools = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ responses });
-  const deps = { connection, logger: logger() };
+  const deps = { connection, gate: OPEN_GATE, logger: logger() };
   return {
     urls,
     parameters: createGetServiceRequestParametersTool(deps),

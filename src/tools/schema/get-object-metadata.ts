@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { visibleFields } from '../../ivanti/metadata/csdl.js';
-import { toEntitySet } from '../../ivanti/metadata/entity-names.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
+import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -42,7 +42,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
     },
     handler: (args) =>
       runTool('get_object_metadata', deps.logger, async () => {
-        const entity = await deps.connection.metadata.entity(args.object);
+        const { entity, entitySet } = await resolveObject(deps, args.object);
         const search = args.search?.toLowerCase();
 
         const fields = visibleFields(entity)
@@ -56,7 +56,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
 
         return jsonResult({
           object: entity.name,
-          entitySet: toEntitySet(`${entity.name}#`),
+          entitySet,
           fieldCount: fields.length,
           ...(search === undefined ? {} : { searchedFor: args.search }),
           fields,

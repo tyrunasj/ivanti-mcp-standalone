@@ -20,12 +20,55 @@ decided, why, and — in §10 — which alternatives were rejected and for what 
 before proposing architectural changes; several obvious-looking simplifications were already
 considered and turned down for stated reasons.
 
-**Stage B2 is in.** Fourteen tools: `get_version`, plus the read tier — `list_business_objects`,
+**Stages B1-B3 are in.** Fourteen tools: `get_version`, plus the read tier — `list_business_objects`,
 `get_object_metadata`, `get_record`, `list_records`, `count_records`, `get_related_records`,
 `fulltext_search_object`, `list_assigned_work`, `get_service_request_parameters`,
 `get_service_request_parameter_options`, `get_attachment_details`, and the retrievable pair
-`search` / `fetch`. Every one of them is read-only and needs no ASMX session, so they work with
-any key role. Writes, the session and the workflow surface are later stages.
+`search` / `fetch`. Every one of them is read-only. Writes and the workflow surface are later
+stages.
+
+**The Ivanti session is a second authentication protocol, not a header.** OData and REST take
+`Authorization: rest_api_key=<key>`; the ASMX services take a SID cookie plus a CSRF token,
+obtained by a three-step handshake (`AuthenticateTenantAPIKey` → SID,
+`InitializeSession` → CSRF and the active role, `GetUserData` → display name). It lives in
+`src/ivanti/session/` and never sends the API key as a header. The handshake is shared by
+concurrent callers and re-run once on a 401.
+
+**The capability tier decides what the credential can reach**, and is probed once at startup
+because tools are selected once:
+
+| Tier | The credential | What it adds |
+|---|---|---|
+| `odata` | the API key alone | every read tool; ~194 objects from metadata graphs |
+| `session` | the ASMX handshake opens | the identity, and the role's own workspaces |
+| `admin` | the admin console answers too | the complete catalog — 1324 objects with descriptions |
+
+Higher tiers only ever *add*. A lower tier is **not** a failure: refusing to start would punish
+exactly the customers who cannot hand an MCP server an admin key. `get_pick_list_values` is the
+first tool the tier actually gates — it needs a create form, which OData cannot see.
+
+**`IVANTI_MAX_TIER` caps the server below what the credential can do.** It exists because the
+degraded paths cannot otherwise be exercised: `AuthenticateTenantAPIKey`'s `role` argument is
+ignored, so an admin account asked for `SelfService` still answers `Admin`. Run with
+`IVANTI_MAX_TIER=session` to see exactly what a customer without admin rights gets.
+`AuthenticateTenantAPIKey`'s `role` argument is a *request* that silently downgrades, so the
+effective role is always read back — `InitializeSession` reports it, and `GetUserData` refines it.
+
+**`/HEAT/AdminUI/` is used when available and never required.** An admin-rights key reaches the
+admin console, and it is by far the best source for some things — `GetBriefBusinessObjects`
+returns **1324** Business Objects with display names and descriptions, against 194 from the
+metadata graphs and 24 from the role's workspaces. Most customers will not issue such a key, so
+every feature built on it degrades instead of breaking, and
+`src/tools/admin-ui-guard.test.ts` drives every registered tool over a tenant whose admin console
+refuses, asserting that none of them fails and none of them requests that path.
+
+**The path needs the `services/` segment**: `/HEAT/AdminUI/services/AppDesign.asmx/…`.
+Without it Ivanti answers 404, which reads as "this tenant has no admin console".
+
+**The server's `instructions` carry the identity.** This process signs in as one account, so
+anything Ivanti resolves "for the current user" answers for that account and not for whoever is
+asking. Told this once at connect time, a model stops reporting one person's queue as another's;
+`src/server/instructions.ts` builds it from the capability profile.
 
 ## Commands
 
@@ -101,9 +144,17 @@ secret file has been read. `env-schema.ts` describes *what a setting is*; `valid
 decides *which combinations are allowed*. Keep that split.
 
 **Two audience modes, chosen at startup.** `MCP_MODE=full` (IT staff, everything) or
-`enduser` (create on allowlisted Business Objects, edit only own records). Tool narrowing
-happens in `selectTools()` at registration time, never inside a handler: an unregistered tool
-never appears in `tools/list`, so the model cannot call it at all.
+`enduser`. Tool narrowing happens in `selectTools()` at registration time, never inside a handler:
+an unregistered tool never appears in `tools/list`, so the model cannot call it at all.
+
+**In `enduser` mode, `ENDUSER_BUSINESS_OBJECTS` is a gate, not a hint.** `createObjectGate` is
+built once at registration and every object-taking tool passes through it — `resolveObject`
+refuses a name outside the list *before* resolving it, so a gated object is not even confirmed to
+exist. The catalog lists only allowed objects, the cross-object search fans out over only those,
+assigned work reports only those, `fetch` re-checks the object encoded in its id, an attachment is
+refused when its `ParentLink_Category` is gated, and the service-request parameter tools are gated
+on `ServiceReq` itself. `full` mode gets `OPEN_GATE` and is unaffected. Refusals name the objects
+that *are* allowed: a model told only "no" retries with a synonym.
 
 **Transport and auth are separate axes.** `STDIO_TRANSPORT_ON` (default `true`) and
 `HTTP_TRANSPORT_ON` (default `false`) are independent toggles — **both can be on**, and each
@@ -146,6 +197,14 @@ Ivanti answer 500 while trying to render CSDL as JSON. `IVANTI_BASE_URL` and
 starts and warns. A configured tenant that cannot be reached **fails the startup** rather than
 deferring the error to the first tool call.
 
+**A validated field's allowed values live on a create form, nowhere else.** `$metadata` says a
+field *is* validated and stops there, so `get_pick_list_values` walks
+workspace → layout → view → form (`form-context.ts`, cached per object) and then asks
+`GetFormValidationListData` with a transient data model. The rows come back as **columns**: the
+stored value sits at the lowest index in `FieldMap`, `DisplayName` labels it, `RecId` identifies
+it. Some lists cascade — pass the parent value, and note that a parent supplied under a name the
+form does not have filters nothing, which the tool reports rather than swallowing.
+
 **`src/ivanti/transport.ts` is the `rest_api_key` surface only** — OData, REST and `$metadata`.
 The header is `Authorization: rest_api_key=<key>`, with an equals sign. The ASMX surface
 authenticates with a SID cookie plus a CSRF token and has its own session lifecycle; keeping the
@@ -163,6 +222,12 @@ not an empty result.
 "there are no such records". The catalog also answers the reverse trap: an unknown entity set
 makes Ivanti **fabricate** a field-less entity type and return it as valid CSDL, so a parsed
 document with no fields is a typo, not a schema.
+
+**Row payloads default to a compact field set.** A full Ivanti record is ~180 fields, and a
+default page of 25 measured **187,278 characters** — one careless `list_records` would spend a
+context window. `resolveRowFields` returns `COMPACT_ROW_FIELDS` unless the caller names fields or
+passes `"*"`, and the response says which it did. Telling the model to pass a field list in the
+description is not a substitute for a safe default.
 
 **Projection is client-side, always.** `$select` on a single-record GET returns `@odata.context`
 and nothing else, and blanks the values on saved searches. `buildQuery` therefore has no
@@ -205,7 +270,10 @@ fires only on an explicit DELETE. Being in-memory, replicas would need sticky ro
 - **Origin validation is mandatory on every HTTP mode**, not just open mode — invalid Origin
   answers 403. It is what prevents DNS rebinding from a page the user merely visits.
 - **New config keys fail closed.** If a mode needs a setting, add the rule to
-  `validateConfig` so the process refuses to start rather than degrading quietly.
+  `validateConfig` so the process refuses to start rather than degrading quietly. Settings that
+  name *tenant* things are checked against the tenant at startup too —
+  `ENDUSER_BUSINESS_OBJECTS` is resolved through the metadata catalog and exits 78 with
+  suggestions, because a misspelled allowlist entry silently narrows what an end user may do.
 - **Annotate every tool explicitly.** Unannotated tools default to destructive and open-world.
   Reads get `readOnlyHint`/`idempotentHint`; additive writes must set `destructiveHint: false`
   because the default is `true`. Ivanti tools that return ticket text are an untrusted-content
