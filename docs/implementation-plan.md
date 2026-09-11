@@ -552,7 +552,7 @@ allowed. What B7 still owes: "edit only own records", which needs the customer-s
 
 ---
 
-## Stage B4 — Writes, and the hint system
+## Stage B4 — Writes, and the hint system ✅ done
 
 **Ships**
 - `create_record`, `update_record`, `delete_record`, `link_records`, `unlink_records`.
@@ -573,6 +573,38 @@ allowed. What B7 still owes: "edit only own records", which needs the customer-s
 
 **Exit criteria:** a ticket can be created, updated, linked and deleted end to end; a write that
 did not store is reported as a failure, not a success; a rejected value lists what was allowed.
+
+**Landed as** `src/ivanti/write/validated-write.ts` (resolve → write → confirm),
+`src/tools/shared/explain-required-fields.ts`, and five tools: `create_record`, `update_record`,
+`delete_record`, `link_records`, `unlink_records`. In `enduser` mode only `create_record` is
+registered — editing and deleting wait for B7 to define "own records".
+
+**Verified live against the staging tenant (2026-09-11), every record cleaned up afterwards:**
+
+| Step | Result |
+|---|---|
+| `create_record` with a link triplet | incident **#11168** / **#11179**, `ProfileLink_RecID` stored |
+| create missing required fields | named `Category`, `Symptom` (from *Description*) and the `ProfileLink_RecID` + `_Category` pair |
+| `update_record` Status → Active | refused: *"it requires `Category`; `Owner`"* — the conditional rule |
+| the same with those fields | stored `Active` + `Status_Valid` + Category + Owner, confirmed by read-back |
+| an invalid picklist value | refused with the seven allowed values, nothing written |
+| `unlink_records` when not linked | refused, with why it matters |
+| `link_records` → `get_related_records` | 1 row (`SQL-Cluster-12`); after `unlink_records`, 0 |
+| `delete_record`, then again | deleted; the second answers *"nothing was deleted"* |
+
+**Three things the tenant corrected:**
+- Required-field messages name **display names**, and `Customer` is a link, not a field. Both are
+  translated through the form.
+- Required rules are **conditional** — `Logged` needs nothing, `Active` needs Category and Owner.
+- **The form, not `$metadata`, is the authority on what is validated.** Task's CSDL reports zero
+  validated fields while its form declares twenty; gating on CSDL sent a value out unresolved and
+  Ivanti answered 500. The gate is gone; the form chain is cached per object instead.
+
+**The one apparent limitation turned out to be a naming mistake, and is fixed.** `Tasks` is a
+**base type**: Ivanti refuses to create it (500, empty message) and creates its subtypes happily —
+`POST /task__assignments` with only a Subject works. `get_object_metadata` now reports `subtypes`
+for a base type, and a failed create names them. Detecting them needs the widest catalog the
+credential has, since no default metadata graph contains `task__assignment`.
 
 ---
 

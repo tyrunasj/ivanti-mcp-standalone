@@ -13,7 +13,8 @@ const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), er
 /** Enough of a tenant that every tool takes its happy path. */
 const RESPONSES: Record<string, unknown> = {
   // Matched by substring in declaration order, so the relationship route comes before the record.
-  IncidentContainsTask: { value: [] },
+  // The target is linked, so unlink_records reaches Ivanti rather than refusing on its own guard.
+  IncidentContainsTask: { value: [{ RecId: 't1' }], code: 'ISM_2000' },
   "incidents('abc')": { RecId: 'abc', IncidentNumber: 1, Subject: 'Printer' },
   incidents: { value: [{ RecId: 'abc', IncidentNumber: 1, Subject: 'Printer' }] },
   servicereqs: { value: [] },
@@ -22,6 +23,10 @@ const RESPONSES: Record<string, unknown> = {
   attachments: { value: [{ RecId: 'a1', ATTACHNAME: 'work-order.png' }] },
   servicereqtemplateparams: { value: [{ RecId: 'p1', Name: 'StartDate' }] },
   ValidationList: [['r1', 'Accounting']],
+  // The writes: a create answers with the stored record, a patch and a delete with nothing.
+  'POST incidents': { RecId: 'abc', IncidentNumber: 1, Subject: 'stub' },
+  'PATCH incidents': { RecId: 'abc', Subject: 'stub' },
+  'DELETE incidents': { code: 'ISM_2000' },
 };
 
 const ARGUMENTS: Record<string, Record<string, unknown>> = {
@@ -40,6 +45,21 @@ const ARGUMENTS: Record<string, Record<string, unknown>> = {
   search: { query: 'printer' },
   fetch: { id: 'incidents:abc' },
   get_pick_list_values: { object: 'Incidents', fields: ['Status'] },
+  create_record: { object: 'Incidents', fields: { Subject: 'stub' } },
+  update_record: { object: 'Incidents', recordId: 'abc', fields: { Subject: 'stub' } },
+  delete_record: { object: 'Incidents', recordId: 'abc' },
+  link_records: {
+    object: 'Incidents',
+    recordId: 'abc',
+    relationship: 'IncidentContainsTask',
+    targetId: 't1',
+  },
+  unlink_records: {
+    object: 'Incidents',
+    recordId: 'abc',
+    relationship: 'IncidentContainsTask',
+    targetId: 't1',
+  },
 };
 
 describe('every tool, over a stubbed tenant', () => {
@@ -112,7 +132,7 @@ describe('every tool, over a stubbed tenant', () => {
 
     for (const tool of tools) await tool.handler(ARGUMENTS[tool.name] ?? {});
 
-    for (const url of urls.filter((candidate) => candidate.startsWith('http'))) {
+    for (const url of urls.map((entry) => entry.replace(/^[A-Z]+ /, '')).filter((candidate) => candidate.startsWith('http'))) {
       expect(url, `unexpected surface: ${url}`).toMatch(/\/api\/(odata|rest)\//);
     }
   });

@@ -3,7 +3,12 @@ import type { Logger } from '../../logger.js';
 import { IvantiApiError, isIvantiNotFound } from '../../ivanti/http/errors.js';
 import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
 import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
+import {
+  ValidatedValueError,
+  WriteNotStoredError,
+} from '../../ivanti/write/validated-write.js';
 import { FieldNameError } from './explain-field-error.js';
+import { RequiredFieldsError } from './explain-required-fields.js';
 import { ObjectNotAllowedError } from './object-gate.js';
 import { errorResult } from './result.js';
 
@@ -33,6 +38,24 @@ export async function runTool(
 
     if (error instanceof ObjectNotAllowedError) {
       logger.debug('tool refused an object', { tool, ref: error.ref });
+      return errorResult(error.message);
+    }
+
+    // Refused before anything was written: the value was not on the list.
+    if (error instanceof ValidatedValueError) {
+      logger.debug('tool refused a validated value', { tool, field: error.field });
+      return errorResult(error.message);
+    }
+
+    // The write happened and did not take. This is the one failure that must never read as
+    // success, so it is logged at error level even though the caller can act on it.
+    if (error instanceof WriteNotStoredError) {
+      logger.error('ivanti write did not store', { tool });
+      return errorResult(error.message);
+    }
+
+    if (error instanceof RequiredFieldsError) {
+      logger.debug('tool reported required fields', { tool, fields: error.fields.length });
       return errorResult(error.message);
     }
 

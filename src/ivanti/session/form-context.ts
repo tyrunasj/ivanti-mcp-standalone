@@ -17,6 +17,18 @@ export interface ResolvedForm {
   formName: string;
   /** The fields whose values come from a list, keyed by field name. */
   validatedFields: Record<string, unknown>;
+  /**
+   * Display name (lowercased) → field name. Ivanti's refusals name the **display** name —
+   * "Required field Incident.Description value must be provided" means `Symptom` — so a caller
+   * cannot act on the message without this.
+   */
+  displayNames: Record<string, string>;
+  /**
+   * Link field → the identifier field that sets it: `ProfileLink` → `ProfileLink_RecID`. A link
+   * is written as a pair, the RecId and a `_Category` naming the target object, so being told
+   * "Customer is required" is only useful alongside this.
+   */
+  linkFields: Record<string, string>;
 }
 
 export interface FormContext {
@@ -35,7 +47,13 @@ interface WorkspaceData {
 interface FormViewData {
   formDef?: {
     FormMeta?: { Name?: string };
-    TableMeta?: { TableRef?: string; ValidatedFields?: Record<string, unknown> };
+    TableMeta?: {
+      TableRef?: string;
+      ValidatedFields?: Record<string, unknown>;
+      Fields?: Record<string, { DisplayName?: string }>;
+    };
+    /** `ProfileLink_RecID` → `ProfileLink`, the other way round from how it is written. */
+    LinkIdMap?: Record<string, string>;
   };
 }
 
@@ -91,7 +109,27 @@ export function createFormContext(
       return undefined;
     }
 
-    return { layoutName: workspace.layoutName, viewName, formName, validatedFields };
+    const displayNames: Record<string, string> = {};
+    for (const [name, meta] of Object.entries(table?.Fields ?? {})) {
+      const display = meta.DisplayName;
+      if (typeof display === 'string' && display !== '') {
+        displayNames[display.toLowerCase()] ??= name;
+      }
+    }
+
+    const linkFields: Record<string, string> = {};
+    for (const [idField, linkField] of Object.entries(view.formDef?.LinkIdMap ?? {})) {
+      if (typeof linkField === 'string') linkFields[linkField] = idField;
+    }
+
+    return {
+      layoutName: workspace.layoutName,
+      viewName,
+      formName,
+      validatedFields,
+      displayNames,
+      linkFields,
+    };
   };
 
   return {
@@ -107,4 +145,24 @@ export function createFormContext(
       return pending;
     },
   };
+}
+
+/**
+ * The fields a validated field's list is filtered by.
+ *
+ * Ivanti keeps them on the validated field itself: `Category.Condition.FieldRefs` is
+ * `["(other)[CI#Service.Rev2]Name", "Service"]`. The `(other)` entries point into another object
+ * and are not fields of this record, so only the plain names are usable as parents.
+ */
+export function constrainedBy(form: ResolvedForm, field: string): string[] {
+  const meta = form.validatedFields[field];
+  if (typeof meta !== 'object' || meta === null) return [];
+
+  const condition = (meta as Record<string, unknown>)['Condition'];
+  if (typeof condition !== 'object' || condition === null) return [];
+
+  const refs = (condition as Record<string, unknown>)['FieldRefs'];
+  if (!Array.isArray(refs)) return [];
+
+  return refs.filter((ref): ref is string => typeof ref === 'string' && !ref.startsWith('(other)'));
 }

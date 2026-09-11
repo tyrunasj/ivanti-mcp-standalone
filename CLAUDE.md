@@ -23,8 +23,11 @@ considered and turned down for stated reasons.
 **Stages B1-B3 are in.** Fourteen tools: `get_version`, plus the read tier — `list_business_objects`,
 `get_object_metadata`, `get_record`, `list_records`, `count_records`, `get_related_records`,
 `fulltext_search_object`, `list_assigned_work`, `get_service_request_parameters`,
-`get_service_request_parameter_options`, `get_attachment_details`, and the retrievable pair
-`search` / `fetch`. Every one of them is read-only. Writes and the workflow surface are later
+`get_service_request_parameter_options`, `get_attachment_details`, the retrievable pair
+`search` / `fetch`, `get_pick_list_values`, and the writes — `create_record`, `update_record`,
+`delete_record`, `link_records`, `unlink_records`. In `enduser` mode only `create_record` is
+registered among the writes: editing and deleting wait for B7 to define "own records", and until
+then an end-user deployment must not let anyone change anyone's ticket. Writes and the workflow surface are later
 stages.
 
 **The Ivanti session is a second authentication protocol, not a header.** OData and REST take
@@ -196,6 +199,23 @@ Ivanti answer 500 while trying to render CSDL as JSON. `IVANTI_BASE_URL` and
 `IVANTI_API_KEY(_FILE)` are optional today and must be set together; with neither, the server
 starts and warns. A configured tenant that cannot be reached **fails the startup** rather than
 deferring the error to the first tool call.
+
+**Every write resolves, then verifies.** `resolveValidatedWrite` turns a picklist value into the
+value *plus its option's RecId* — Ivanti stores the pair, and a value written alone can be
+accepted and stored as nothing — and `confirmWrite` reads the record back before any tool reports
+success. A value that is not on the list is refused before anything is written, with the list.
+**The form is the authority on what is validated, not `$metadata`**: Task's CSDL reports no
+validated fields while its form declares twenty.
+
+**Ivanti's write refusals speak a different language.** A required-field message names the
+*display* name (`Incident.Description` is `Symptom`) and sometimes names a link rather than a
+field (`Incident.Customer` is `ProfileLink_RecID` + `ProfileLink_Category`).
+`explain-required-fields.ts` translates both through the form. The rules are conditional: an
+incident goes to `Logged` with nothing, and to `Active` only with Category and Owner.
+
+**`unlink_records` checks the link exists first.** Ivanti accepts an unlink of something that was
+never linked and, on a Contains relationship, severs the target from whichever record *is* its
+parent — damage to a third record that nothing in the reply mentions.
 
 **A validated field's allowed values live on a create form, nowhere else.** `$metadata` says a
 field *is* validated and stops there, so `get_pick_list_values` walks

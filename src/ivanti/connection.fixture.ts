@@ -22,7 +22,10 @@ import { createIvantiRoutes } from './odata/url.js';
 export interface ConnectionFixtureOptions {
   /** Keyed by lowercase CSDL entity name. */
   entities?: Record<string, Partial<EntityMetadata>>;
-  /** URL fragment → parsed payload, or an Error to throw. */
+  /**
+   * URL fragment → parsed payload, or an Error to throw. A key may be prefixed with a method
+   * (`'POST incidents'`) when a write and a read share a URL, which they do for a collection.
+   */
   responses?: Record<string, unknown>;
   /** Defaults to the OData tier: no session, as a customer with an analyst key would run. */
   capability?: Capability;
@@ -64,21 +67,35 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
     ]),
   );
 
-  const answer = (url: string): unknown => {
-    urls.push(url);
-    const match = Object.entries(options.responses ?? {}).find(([fragment]) =>
-      url.includes(fragment),
-    );
+  // Mutable so a DELETE can actually make a record stop existing: a tool that verifies its own
+  // delete would otherwise fail against a fixture that answers for ever.
+  const responses = new Map(Object.entries(options.responses ?? {}));
+
+  const answer = (url: string, method = 'GET'): unknown => {
+    urls.push(`${method} ${url}`);
+    const entries = [...responses.entries()];
+    // A method-qualified key wins over a bare one, so a POST can differ from the GET beside it.
+    const match =
+      entries.find(([key]) => key.startsWith(`${method} `) && url.includes(key.slice(method.length + 1))) ??
+      entries.find(([key]) => !/^[A-Z]+ /.test(key) && url.includes(key));
     if (match === undefined) return undefined; // Ivanti's empty body for "no rows"
     if (match[1] instanceof Error) throw match[1];
+
+    if (method === 'DELETE') {
+      for (const [key] of entries) {
+        if (url.includes(key.replace(/^[A-Z]+ /, ''))) responses.delete(key);
+      }
+    }
+
     return match[1];
   };
 
   const transport: IvantiTransport = {
     routes,
-    request: (url: string) => Promise.resolve(answer(url)) as Promise<never>,
-    requestRequired: (url: string) => {
-      const payload = answer(url);
+    request: (url: string, init?: { method?: string }) =>
+      Promise.resolve(answer(url, init?.method ?? 'GET')) as Promise<never>,
+    requestRequired: (url: string, init?: { method?: string }) => {
+      const payload = answer(url, init?.method ?? 'GET');
       if (payload === undefined) {
         return Promise.reject(
           new IvantiApiError({ status: 200, method: 'GET', url }, 'empty body'),
