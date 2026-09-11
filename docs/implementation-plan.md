@@ -220,7 +220,46 @@ combinations are 1 + 3 transports-and-doors, each against two surfaces:
 | `http` | `bearer` | constant-time compare, 401 on mismatch | ✓ |
 | `http` | `oauth` | verified identity, audience-bound | ✓ |
 
-**Do this first, before anything else in A4: test against a real Entra tenant.**
+### Entra: verified as far as is possible without a customer tenant (2026-09-11)
+
+Tested against a live tenant (`23afecaf-…`). **Proven:**
+
+- **Discovery works**, and only via the *third* probe — both path-insertion forms 404, so the
+  spec's full fallback chain is load-bearing rather than compliance decoration.
+- **Issuer exact-match and JWKS retrieval work** against the live tenant (6 keys).
+- **The PKCE-metadata worry was unfounded.** Entra advertises no
+  `code_challenge_methods_supported`, and the spec says a client MUST then refuse — but Claude
+  Code proceeded and issued a real authorization request. This was the single largest open risk
+  in the plan and it is now closed.
+
+**Deferred:** final token verification, blocked by a deployment constraint rather than by code.
+
+Two requirements meet and leave no room locally:
+
+- the **client** validates that the RFC 9728 `resource` equals the endpoint it connected to
+  (*"Protected resource … does not match expected …"*);
+- **Entra** requires `resource` to be a registered Application ID URI, and permits only
+  `api://<appId>` or HTTPS on a **tenant-verified domain**.
+
+So the server's own URL must *be* the Application ID URI — which means **an Entra deployment
+needs a public HTTPS hostname on a domain verified in that tenant**. That is the finding worth
+carrying forward; it is a deployment prerequisite, not a configuration option.
+
+Our homelab domain could not satisfy it: DNS was provably correct (both authoritative
+nameservers and four public resolvers returned the exact token Azure asked for), but the domain
+is claimed by another Microsoft tenant, which is an admin-takeover process rather than a config
+change. A real customer deploys into their own tenant with their own already-verified domain,
+where the configuration is the short version — App ID URI, `MCP_PUBLIC_URL`, `OAUTH_AUDIENCE`
+and the endpoint are one identical string.
+
+The remaining untested step is token verification, which is IdP-agnostic code already proven end
+to end against Zitadel over a public HTTPS hostname.
+
+**Revisit at the first real Entra deployment**, not before.
+
+---
+
+**Superseded — the original plan said:**
 Entra is the majority IdP and the only one of ten surveyed that does not advertise
 `code_challenge_methods_supported`, which the spec says makes a conformant client refuse to
 proceed (design §12). It also supports neither DCR nor introspection. If a strict client will

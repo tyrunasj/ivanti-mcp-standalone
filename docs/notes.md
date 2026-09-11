@@ -206,6 +206,17 @@ registered a brand-new app that was opaque again, and flipping one app to JWT la
 until the next re-auth. Pin the client id instead of chasing apps. Okta has the same shape — its
 *org* authorization server issues opaque tokens while a *custom* one issues JWTs.
 
+**Multi-tenant Entra apps are not supported, and the failure is subtle.**
+Microsoft's tenant-independent metadata returns an issuer containing a `{tenantid}` placeholder
+that a validator is expected to substitute with the token's own `tid` before comparing. Our
+verifier matches `iss` exactly, which is right for single-tenant and wrong for multi-tenant. Set
+`signInAudience: AzureADMyOrg`. A deployment per tenant is the supported shape anyway.
+
+**In Entra, a redirect URI under *Web* is not the same as one under *Mobile and desktop*.**
+They are different manifest arrays (`web.redirectUris` vs `publicClient.redirectUris`), and
+`allowPublicClient` defaults to **false** — so a CLI client registered under *Web* is treated as
+confidential and asked for a secret it does not have.
+
 **Entra does not advertise `code_challenge_methods_supported`.**
 It is the only one of ten surveyed that omits it, and the spec says a conformant client **MUST
 refuse to proceed** when it is absent. Entra does support PKCE S256 — it just does not say so.
