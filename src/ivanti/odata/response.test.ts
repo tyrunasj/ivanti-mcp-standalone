@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { IvantiApiError } from './errors.js';
-import { readCollection } from './odata-response.js';
+import { IvantiApiError } from '../http/errors.js';
+import { readCollection } from './response.js';
 
 const URL = 'https://t/HEAT/api/odata/businessobject/Incidents';
 

@@ -1,0 +1,73 @@
+import { z } from 'zod';
+import { suggestNames } from '../../ivanti/metadata/suggest-names.js';
+import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
+import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { IvantiToolDeps } from '../shared/deps.js';
+import { errorResult, jsonResult } from '../shared/result.js';
+import { resolveObject } from '../shared/resolve-object.js';
+import { runTool } from '../shared/run-tool.js';
+import { defineTool, type ToolDefinition } from '../tool-definition.js';
+
+export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinition {
+  return defineTool({
+    name: 'get_related_records',
+    title: 'Get related records',
+    description:
+      'Follows a named relationship from one record to the records on the other side — the ' +
+      'tasks under an incident, the journals attached to it, the CIs it affects.\n\n' +
+      'Relationship names come from get_object_metadata; they are Ivanti-specific ' +
+      '(`IncidentContainsTask`, `IncidentAssociatesCI`) and are not guessable. A name this ' +
+      'object does not have is rejected here with the list of the ones it does.\n\n' +
+      'This is the only way to read related records: `$expand` is silently ignored by Ivanti ' +
+      'under API-key authentication, so a request that looks like it inlined them did not.',
+    annotations: {
+      title: 'Get related records',
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      object: z.string().describe('The Business Object the record belongs to.'),
+      recordId: z.string().describe('The 32-character RecId of the record to start from.'),
+      relationship: z
+        .string()
+        .describe('Relationship name from get_object_metadata, e.g. `IncidentContainsTask`.'),
+      fields: z.string().optional().describe('Comma-separated fields to return per related row.'),
+    },
+    handler: (args) =>
+      runTool('get_related_records', deps.logger, async () => {
+        const { entity, entitySet } = await resolveObject(deps, args.object);
+
+        // Checked here rather than by Ivanti: a wrong name answers 404 "No HTTP resource was
+        // found", which says nothing about what the right names are.
+        const known = entity.relationships.map((relationship) => relationship.name);
+        const match = known.find(
+          (name) => name.toLowerCase() === args.relationship.toLowerCase(),
+        );
+        if (match === undefined) {
+          const close = suggestNames(args.relationship, known, 5);
+          return errorResult(
+            `${entity.name} has no relationship named '${args.relationship}'. ` +
+              (close.length > 0
+                ? `Did you mean: ${close.join(', ')}?`
+                : `It has ${String(known.length)}: ${known.slice(0, 15).join(', ')}${known.length > 15 ? ', …' : ''}`) +
+              ' Full list: get_object_metadata.',
+          );
+        }
+
+        const url = deps.connection.transport.routes.related(entitySet, args.recordId, match);
+        const payload = await deps.connection.transport.request<OdataRecord>(url);
+        // Ivanti answers an empty relationship with `{"value": "No instances found."}` — a
+        // string, not an array. `readCollection` turns that into no rows rather than nineteen.
+        const rows = readCollection<OdataRecord>(payload, url);
+
+        return jsonResult({
+          object: entitySet,
+          relationship: match,
+          target: entity.relationships.find((r) => r.name === match)?.target,
+          returned: rows.length,
+          rows: projectRows(rows, parseFieldList(args.fields)),
+        });
+      }),
+  });
+}

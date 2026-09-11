@@ -1,5 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Config } from '../config/env-schema.js';
+import type { IvantiConnection } from '../ivanti/connect.js';
+import type { Logger } from '../logger.js';
 import { registerTools, selectTools } from '../tools/register-tools.js';
 import { readPackageMetadata } from '../version.js';
 
@@ -24,10 +26,18 @@ export interface ServerFactory {
  * they register need not be. Building them once keeps a session cheap: its cost is a map of
  * names pointing at shared objects, not a rebuilt copy of every schema.
  */
-export function createServerFactory(config: Config): ServerFactory {
+export interface ServerFactoryDeps {
+  logger: Logger;
+  /** Absent when no tenant is configured. */
+  ivanti?: IvantiConnection;
+}
+
+export function createServerFactory(config: Config, deps: ServerFactoryDeps): ServerFactory {
   const tools = selectTools(config, {
     serverName: SERVER_NAME,
     serverVersion: SERVER_VERSION,
+    logger: deps.logger,
+    ...(deps.ivanti === undefined ? {} : { ivanti: deps.ivanti }),
   });
 
   return {

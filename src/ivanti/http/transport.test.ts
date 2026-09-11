@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Logger } from '../logger.js';
+import type { Logger } from '../../logger.js';
 import { IvantiApiError, isIvantiNotFound } from './errors.js';
 import { createTransport, type FetchLike } from './transport.js';
 

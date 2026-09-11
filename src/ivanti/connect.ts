@@ -1,6 +1,7 @@
 import type { Logger } from '../logger.js';
-import { probeBasePath, type ProbeFetch } from './base-path.js';
-import { createTransport, type FetchLike, type IvantiTransport } from './transport.js';
+import { probeBasePath, type ProbeFetch } from './http/base-path.js';
+import { createTransport, type FetchLike, type IvantiTransport } from './http/transport.js';
+import { createMetadataCatalog, type MetadataCatalog } from './metadata/catalog.js';
 
 export interface ConnectOptions {
   baseUrl: string;
@@ -20,6 +21,8 @@ export interface IvantiConnection {
    */
   readonly metadataUrl: string;
   readonly transport: IvantiTransport;
+  /** The tenant's schema, read through that CSDL document and cached for the process lifetime. */
+  readonly metadata: MetadataCatalog;
 }
 
 /**
@@ -44,16 +47,19 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     attempts: probe.attempted.length,
   });
 
+  const transport = createTransport({
+    baseUrl,
+    basePath: probe.basePath,
+    apiKey,
+    logger,
+    fetchImpl,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  });
+
   return {
     basePath: probe.basePath,
     metadataUrl: probe.metadataUrl,
-    transport: createTransport({
-      baseUrl,
-      basePath: probe.basePath,
-      apiKey,
-      logger,
-      fetchImpl,
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    }),
+    transport,
+    metadata: createMetadataCatalog({ transport, seedUrl: probe.metadataUrl, logger }),
   };
 }

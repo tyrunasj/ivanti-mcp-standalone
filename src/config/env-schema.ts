@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { toCsdlEntity } from '../ivanti/metadata/entity-names.js';
 import { LOG_LEVELS } from '../logger.js';
 
 /** The door: may this client talk to the server at all? Only meaningful over HTTP. */
@@ -70,7 +71,15 @@ export const envSchema = z.object({
   /** One key, one Ivanti "MCP user" — see design §3. Also accepted as IVANTI_API_KEY_FILE. */
   IVANTI_API_KEY: z.string().min(1).optional(),
 
-  ENDUSER_BUSINESS_OBJECTS: commaSeparated.default([]),
+  /**
+   * Business Objects an end user may create on. Any of Ivanti's three naming dialects is
+   * accepted and normalised to one — `Incident#`, `Incidents` and `incident` name the same
+   * object, and an allowlist that missed by dialect would fail open or closed for no reason a
+   * reader could see.
+   */
+  ENDUSER_BUSINESS_OBJECTS: commaSeparated
+    .default([])
+    .transform((objects) => objects.map((object) => toCsdlEntity(object).toLowerCase())),
 
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
 });

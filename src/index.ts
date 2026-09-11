@@ -33,7 +33,10 @@ async function main(): Promise<void> {
 
   // Tool definitions are built once here; each connection gets its own server around them,
   // because `connect()` binds one transport at a time.
-  const factory = createServerFactory(config);
+  const factory = createServerFactory(config, {
+    logger,
+    ...(ivanti === undefined ? {} : { ivanti }),
+  });
 
   if (config.STDIO_TRANSPORT_ON) {
     await startStdio(factory.create());

@@ -1,4 +1,5 @@
-import { createOdataRoutes } from './odata-url.js';
+import { looksLikeCsdl } from '../metadata/csdl.js';
+import { createIvantiRoutes } from '../odata/url.js';
 
 /**
  * Ivanti tenants serve the API either under `/HEAT` or at the root, and which one is not
@@ -47,11 +48,6 @@ export interface BasePathProbe {
   attempted: { url: string; status: number | 'error' }[];
 }
 
-/** A CSDL document, as opposed to a login page or a WAF interstitial answering 200. */
-function looksLikeCsdl(body: string): boolean {
-  return /<(edmx:)?Edmx[\s>]/i.test(body);
-}
-
 /**
  * Finds the base path by asking for `$metadata` under each candidate.
  *
@@ -71,7 +67,7 @@ export async function probeBasePath(
 
   for (const candidate of BASE_PATH_CANDIDATES) {
     for (const graph of METADATA_GRAPHS) {
-      const url = createOdataRoutes(baseUrl, candidate).metadata(graph);
+      const url = createIvantiRoutes(baseUrl, candidate).metadata(graph);
       try {
         const response = await fetchImpl(url, {
           headers: {

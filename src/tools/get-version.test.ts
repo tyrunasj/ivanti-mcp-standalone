@@ -36,8 +36,8 @@ describe('createGetVersionTool', () => {
     expect(config.annotations.openWorldHint).toBe(false);
   });
 
-  it('returns the version info as JSON text content', () => {
-    const result = createGetVersionTool(deps).handler();
+  it('returns the version info as JSON text content', async () => {
+    const result = await createGetVersionTool(deps).handler({});
     const [block] = result.content;
 
     expect(block?.type).toBe('text');

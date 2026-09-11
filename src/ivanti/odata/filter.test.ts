@@ -3,7 +3,7 @@ import {
   assertSupportedFilter,
   findUnsupportedFilter,
   maskStringLiterals,
-} from './odata-filter.js';
+} from './filter.js';
 
 describe('maskStringLiterals', () => {
   it('hides literal contents but keeps the quotes and length', () => {
