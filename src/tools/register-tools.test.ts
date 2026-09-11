@@ -1,21 +1,44 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { configFixture } from '../config/config.fixture.js';
+import { connectionFixture } from '../ivanti/connection.fixture.js';
+import type { Logger } from '../logger.js';
 import { registerTools, selectTools } from './register-tools.js';
 
-const context = { serverName: 'ivanti-mcp', serverVersion: '0.1.0' };
+const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+
+const context = { serverName: 'ivanti-mcp', serverVersion: '0.1.0', logger: logger() };
 
 const config = configFixture;
 
 describe('selectTools', () => {
-  it('exposes get_version in full mode', () => {
+  it('exposes only get_version when no tenant is configured', () => {
+    // Without a connection the Ivanti tools do not exist at all, rather than existing and
+    // failing: an unregistered tool never appears in tools/list.
     expect(selectTools(config(), context).map((tool) => tool.name)).toEqual(['get_version']);
+    expect(selectTools(config({ MCP_MODE: 'enduser' }), context).map((t) => t.name)).toEqual([
+      'get_version',
+    ]);
   });
 
-  it('exposes get_version in enduser mode', () => {
-    const tools = selectTools(config({ MCP_MODE: 'enduser' }), context);
+  it('adds the schema tools once a tenant is configured', () => {
+    const { connection } = connectionFixture();
 
-    expect(tools.map((tool) => tool.name)).toEqual(['get_version']);
+    const names = selectTools(config(), { ...context, ivanti: connection }).map((t) => t.name);
+
+    expect(names).toContain('list_business_objects');
+    expect(names).toContain('get_object_metadata');
+  });
+
+  it('gives an end user the same read-only schema tools', () => {
+    const { connection } = connectionFixture();
+
+    const names = selectTools(config({ MCP_MODE: 'enduser', ENDUSER_BUSINESS_OBJECTS: ['Incident'] }), {
+      ...context,
+      ivanti: connection,
+    }).map((t) => t.name);
+
+    expect(names).toContain('get_object_metadata');
   });
 });
 

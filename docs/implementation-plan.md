@@ -382,7 +382,7 @@ for B2 to reuse.
 
 ---
 
-## Stage B2 — Metadata, naming, and reads *(no session required)*
+## Stage B2 — Metadata, naming, and reads ✅ done *(no session required)*
 
 **Goal:** a genuinely useful read-only server that works with **any** key role.
 
@@ -420,6 +420,32 @@ this tier serves every customer regardless of what their API key can do.
 **Exit criteria:** safe to point at production, because nothing can mutate. A realistic question
 is answerable end to end. An English-plural entity name is reported as a naming error with
 suggestions rather than as zero rows.
+
+**Landed as** `src/ivanti/metadata/` (`csdl`, `catalog`, `entity-names`, `suggest-names`),
+`src/ivanti/odata/` (`query`, `projection` beside the B1 modules),
+`src/ivanti/service-request/parameter-shape`, and eleven read tools under `src/tools/` —
+`list_business_objects`, `get_object_metadata`, `get_record`, `list_records`, `count_records`,
+`get_related_records`, `fulltext_search_object`, `list_assigned_work`,
+`get_service_request_parameters`, `get_service_request_parameter_options`,
+`get_attachment_details`, plus the retrievable pair `search` / `fetch`. `ENDUSER_BUSINESS_OBJECTS`
+now normalises every dialect on load.
+
+**Verified against the live staging tenant (2026-09-11).** All three naming dialects resolve to
+one entity; `Categories` answers *"Did you mean: categorys?"*; a mistyped field answers *"incident
+has no field named 'Description'"* instead of Ivanti's "No such entry exists";
+`list_assigned_work('JSmith')` returns 8 incidents, 1 task and 13 changes with the exclusion filter
+echoed; `search('printer')` returns 14 hits across three objects in 218 ms and `fetch` reads one
+back; a service-request template returns 7 parameters with `required` decoded, and its Department
+parameter 24 options.
+
+**Found in the process** (all in `docs/notes.md`): Ivanti fabricates a field-less entity type for
+an unknown entity set, only a graph's root carries relationships, `$top` caps at 100,
+`@odata.count` arrives unasked and can contradict its rows, `$search` works where `$expand` is
+silently ignored, the validation-list endpoint is a POST, and `/rest/Attachment` streams the file
+rather than describing it.
+
+**Not in this stage:** the resources tier (`ivanti://reference/…`), saved searches, quick actions
+and pick-list tools — they need either the session or their own design pass.
 
 ---
 

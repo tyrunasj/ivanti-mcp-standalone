@@ -1,8 +1,11 @@
 /**
- * URL builders for Ivanti's OData routes. Pure — the transport supplies the origin and base
- * path, these only know the shapes.
+ * URL builders for the surfaces one API key reaches: OData for records, REST for the handful of
+ * services that never got an OData shape, and CSDL for the schema. They share an origin and a
+ * base path, so they are built together; the transport supplies both and these only know shapes.
+ *
+ * Pure by design — every one of them is a string function, testable without a tenant.
  */
-export interface OdataRoutes {
+export interface IvantiRoutes {
   /** `…/api/odata/businessobject/Incidents` */
   entitySet: (entitySet: string) => string;
   /** `…/api/odata/businessobject/Incidents('<RecId>')` */
@@ -11,6 +14,8 @@ export interface OdataRoutes {
   related: (entitySet: string, recId: string, relationship: string) => string;
   /** `…/Incidents('<RecId>')/<Relationship>('<TargetId>')/$Ref` — link and unlink */
   ref: (entitySet: string, recId: string, relationship: string, targetId: string) => string;
+  /** `…/api/rest/<path>` — the REST surface, on the same key as OData. */
+  rest: (path: string) => string;
   /**
    * The CSDL document for a named graph — `incidents` returns the whole related graph — or the
    * service-root form when omitted, which most tenants have disabled.
@@ -29,7 +34,7 @@ function key(recId: string): string {
   return `('${encodeURIComponent(recId).replace(/'/g, '%27')}')`;
 }
 
-export function createOdataRoutes(baseUrl: string, basePath: string): OdataRoutes {
+export function createIvantiRoutes(baseUrl: string, basePath: string): IvantiRoutes {
   const root = `${baseUrl.replace(/\/+$/, '')}${basePath}`;
   const bo = `${root}/api/odata/businessobject`;
 
@@ -39,6 +44,7 @@ export function createOdataRoutes(baseUrl: string, basePath: string): OdataRoute
     related: (entitySet, recId, relationship) => `${bo}/${entitySet}${key(recId)}/${relationship}`,
     ref: (entitySet, recId, relationship, targetId) =>
       `${bo}/${entitySet}${key(recId)}/${relationship}${key(targetId)}/$Ref`,
+    rest: (path: string) => `${root}/api/rest/${path.replace(/^\/+/, '')}`,
     metadata: (graph) => `${root}/api/odata/${graph === undefined ? '' : `${graph}/`}$metadata`,
   };
 }

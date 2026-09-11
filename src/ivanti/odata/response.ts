@@ -1,4 +1,7 @@
-import { IvantiApiError } from './errors.js';
+import { IvantiApiError } from '../http/errors.js';
+
+/** One Ivanti record, as it arrives: a bag of fields whose shape is the tenant's business. */
+export type OdataRecord = Record<string, unknown>;
 
 /**
  * What Ivanti answers for a navigation property with nothing on the other side: a 200 whose

@@ -289,6 +289,49 @@ ASMX session. `$metadata` entity-type names need only `rest_api_key` and are **w
 access is governed by Object Permissions, not workspace membership, so an analyst role reads
 plenty of objects it has no workspace for.
 
+**An unknown entity set is not an error — Ivanti invents the entity.**
+`/api/odata/nonexistents/$metadata` answers **200** with valid CSDL containing
+`<EntityType Name="nonexistent" />` and an `EntitySet` to match: no fields, no relationships. Every
+real Business Object has at least RecId, so `parseCsdl` drops field-less entity types and the
+catalog reports the name as unknown *with suggestions*. Measured live 2026-09-11.
+
+**Only the graph's root entity carries relationships.**
+Measured live: in the incidents graph, `task` has 90 fields and **0** relationships; in
+`tasks/$metadata` the same entity has 90 fields and **29**. Field counts agree across graphs
+(90/90, 127/127, 278/278) — relationships do not. So a relationship-less hit is not an answer, it
+is a reason to fetch the entity's own graph, which is what `MetadataCatalog.entity()` does.
+
+**No single document lists the tenant's Business Objects.**
+A CSDL graph names only what its root relates to. The incidents graph names 38 entities; eight
+well-known graphs together name ~200, in under a second. The full ~1300-entry list lives behind
+`/HEAT/AdminUI/`, which an analyst key is refused — so the union of graphs is the widest catalog an
+ordinary key can reach, and `list_business_objects` says so rather than implying completeness.
+Lookups are not limited to it: `entity()` finds anything real by fetching its own graph.
+
+**`$top` is capped at 100.** 100 returns 100 rows; **101 answers 400** `ISM_4000 "Invalid Request
+Payload"`. `$skip` pages without repeating rows, so paging is the way past the cap.
+
+**`@odata.count` arrives unasked, and can contradict its own rows.**
+Ivanti includes it on plain queries without `$count=true`. It has been seen smaller than the page
+it came with; `readTotal` reports that as a **floor** (`exact: false`) rather than a total, because
+reporting a floor as a total is the failure the count tools exist to prevent.
+
+**`$search` is the only substring mechanism, and it works.**
+Case-insensitive, composes with `$filter`, and returns a count: `printer` matched 48 incidents on
+a live tenant where `contains(Subject,'printer')` returned the full unfiltered 545. `$expand`, by
+contrast, is silently ignored under `rest_api_key` — a request that looks like it inlined related
+records did not.
+
+**Null and dates in a filter.** An empty field matches only as `Owner eq '$NULL'`. Dates are bare
+and unquoted — `CreatedDateTime gt 2026-01-01`; the OData v2 form `datetime'…'` is rejected with a
+400 that blames the field rather than the literal.
+
+**The validation-list endpoint is a POST, and `/rest/Attachment` is a download.**
+`/api/rest/ServiceRequest/{paramRecId}/ValidationList` needs `POST` with a constraints body: a GET
+answers an empty XML array, which looks like "this list has no values". And
+`/api/rest/Attachment?ID=…` streams the **file bytes**, not metadata — attachment details come from
+the `attachment` Business Object, which also carries the parent link and description.
+
 **A refused key answers `401 ISM_4001`, not a 404.**
 `"Invalid Session key or Authentication token or Host"` — measured with a wrong key and with an
 empty one. The startup probe treats a 401/403 on any candidate as "the tenant is reachable, the

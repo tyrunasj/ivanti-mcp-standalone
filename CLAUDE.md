@@ -20,7 +20,12 @@ decided, why, and — in §10 — which alternatives were rejected and for what 
 before proposing architectural changes; several obvious-looking simplifications were already
 considered and turned down for stated reasons.
 
-The Ivanti tools do not exist yet. Only `get_version` is implemented.
+**Stage B2 is in.** Fourteen tools: `get_version`, plus the read tier — `list_business_objects`,
+`get_object_metadata`, `get_record`, `list_records`, `count_records`, `get_related_records`,
+`fulltext_search_object`, `list_assigned_work`, `get_service_request_parameters`,
+`get_service_request_parameter_options`, `get_attachment_details`, and the retrievable pair
+`search` / `fetch`. Every one of them is read-only and needs no ASMX session, so they work with
+any key role. Writes, the session and the workflow surface are later stages.
 
 ## Commands
 
@@ -66,10 +71,25 @@ Nothing lower in the stack reads `process.env`.
 
 ```
 config/   env-schema (shape) -> read-secret-file (*_FILE) -> validate-config (rules) -> load-config (orchestration)
-tools/    tool-definition (type) -> get-version (one tool) -> register-tools (which tools this mode exposes)
 server/   create-server (assembly) -> start-stdio | start-http; http/ holds pure request-policy functions
-ivanti/   base-path (startup probe) -> transport (rest_api_key HTTP) ; odata-url, odata-filter, errors are pure
+
+ivanti/   connect (composition: probe -> transport -> catalog)
+  http/       transport (rest_api_key), errors, base-path (startup probe)
+  odata/      url, filter, query, projection, response — all pure
+  metadata/   csdl (parser), catalog (fetch + cache), entity-names, suggest-names
+  service-request/  parameter-shape (decodes what Ivanti encodes oddly)
+
+tools/    tool-definition (defineTool) -> register-tools (which tools this mode exposes)
+  shared/     deps, result, run-tool, resolve-object, explain-field-error
+  schema/     list-business-objects, get-object-metadata
+  records/    get-record, list-records, count-records, get-related-records, list-assigned-work
+  search/     fulltext-search-object, search, fetch, record-identity
+  service-request/, attachments/
 ```
+
+`tools/` is the surface that gets tuned — descriptions, arguments, annotations — so it sits at the
+top of `src/`, not inside `ivanti/`. Nothing under `tools/` builds a URL or parses a response:
+that belongs to `ivanti/`, which knows nothing about MCP.
 
 Each file has one reason to change, and tests live next to the file they cover
 (`foo.ts` / `foo.test.ts`).
@@ -136,6 +156,18 @@ rows" and only one of them is an array: an entity set whose filter matches nothi
 with an empty body**, and an empty navigation property answers `{"value": "No instances found."}`
 — a string that cheerfully reports `.length === 19`. Unrecognised prose in `value` is an error,
 not an empty result.
+
+**Every tool resolves the object through the metadata catalog, never by string conversion.**
+`resolveObject()` costs nothing after the first call and turns a wrong name into a naming error
+*with suggestions* — Ivanti's own answer to a wrong entity set is an empty result, which reads as
+"there are no such records". The catalog also answers the reverse trap: an unknown entity set
+makes Ivanti **fabricate** a field-less entity type and return it as valid CSDL, so a parsed
+document with no fields is a typo, not a schema.
+
+**Projection is client-side, always.** `$select` on a single-record GET returns `@odata.context`
+and nothing else, and blanks the values on saved searches. `buildQuery` therefore has no
+`$select` and no `$expand` — the latter is silently ignored under API-key auth, so a caller would
+read "no related records" from a request that never happened. Use `get_related_records`.
 
 **Ivanti has no 404 and silently drops `$filter` functions.** Get-by-key answers
 `400 ISM_4000 "Invalid key"` — the same code as a bad field name — so `isIvantiNotFound()` owns

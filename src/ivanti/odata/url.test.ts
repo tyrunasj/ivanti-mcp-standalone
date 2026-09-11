@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createOdataRoutes } from './odata-url.js';
+import { createIvantiRoutes } from './url.js';
 
-const routes = createOdataRoutes('https://tenant.ivanti.com', '/HEAT');
-const bare = createOdataRoutes('https://tenant.ivanti.com', '');
+const routes = createIvantiRoutes('https://tenant.ivanti.com', '/HEAT');
+const bare = createIvantiRoutes('https://tenant.ivanti.com', '');
 
-describe('createOdataRoutes', () => {
+describe('createIvantiRoutes', () => {
   it('builds an entity-set URL under the base path', () => {
     expect(routes.entitySet('Incidents')).toBe(
       'https://tenant.ivanti.com/HEAT/api/odata/businessobject/Incidents',
@@ -44,8 +44,15 @@ describe('createOdataRoutes', () => {
   });
 
   it('tolerates a trailing slash on the configured base URL', () => {
-    expect(createOdataRoutes('https://t.example/', '/HEAT').entitySet('X')).toBe(
+    expect(createIvantiRoutes('https://t.example/', '/HEAT').entitySet('X')).toBe(
       'https://t.example/HEAT/api/odata/businessobject/X',
     );
+  });
+
+  it('builds REST URLs, which share the base path with OData', () => {
+    expect(routes.rest('ServiceRequest/abc/ValidationList')).toBe(
+      'https://tenant.ivanti.com/HEAT/api/rest/ServiceRequest/abc/ValidationList',
+    );
+    expect(routes.rest('/Attachment')).toBe('https://tenant.ivanti.com/HEAT/api/rest/Attachment');
   });
 });

@@ -33,7 +33,8 @@ describe('envSchema', () => {
       ENDUSER_BUSINESS_OBJECTS: 'Incident, ChangeRequest ,,ServiceReq',
     });
 
-    expect(config.ENDUSER_BUSINESS_OBJECTS).toEqual(['Incident', 'ChangeRequest', 'ServiceReq']);
+    // Normalised on the way in — see the dialect test below.
+    expect(config.ENDUSER_BUSINESS_OBJECTS).toEqual(['incident', 'changerequest', 'servicereq']);
   });
 
   it('coerces the port from its string environment form', () => {
@@ -44,5 +45,21 @@ describe('envSchema', () => {
     expect(
       envSchema.safeParse({ MCP_PUBLIC_URL: 'mcp.example.com' }).success,
     ).toBe(false);
+  });
+});
+
+describe('ENDUSER_BUSINESS_OBJECTS', () => {
+  it('normalises every naming dialect to one, so the allowlist cannot miss by spelling', () => {
+    const config = envSchema.parse({
+      AUTH_MODE: 'none',
+      ENDUSER_BUSINESS_OBJECTS: 'Incident#, Incidents , incident, CI#Computer',
+    });
+
+    expect(config.ENDUSER_BUSINESS_OBJECTS).toEqual([
+      'incident',
+      'incident',
+      'incident',
+      'ci__computer',
+    ]);
   });
 });

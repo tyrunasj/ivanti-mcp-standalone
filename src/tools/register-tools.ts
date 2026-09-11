@@ -1,11 +1,29 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Config } from '../config/env-schema.js';
+import type { IvantiConnection } from '../ivanti/connect.js';
+import type { Logger } from '../logger.js';
 import { createGetVersionTool } from './get-version.js';
+import { createCountRecordsTool } from './records/count-records.js';
+import { createGetRecordTool } from './records/get-record.js';
+import { createGetRelatedRecordsTool } from './records/get-related-records.js';
+import { createListAssignedWorkTool } from './records/list-assigned-work.js';
+import { createListRecordsTool } from './records/list-records.js';
+import { createGetAttachmentDetailsTool } from './attachments/get-attachment-details.js';
+import { createFetchTool } from './search/fetch.js';
+import { createFulltextSearchObjectTool } from './search/fulltext-search-object.js';
+import { createSearchTool } from './search/search.js';
+import { createGetServiceRequestParameterOptionsTool } from './service-request/get-service-request-parameter-options.js';
+import { createGetServiceRequestParametersTool } from './service-request/get-service-request-parameters.js';
+import { createGetObjectMetadataTool } from './schema/get-object-metadata.js';
+import { createListBusinessObjectsTool } from './schema/list-business-objects.js';
 import type { ToolDefinition } from './tool-definition.js';
 
 export interface ToolContext {
   serverName: string;
   serverVersion: string;
+  logger: Logger;
+  /** Absent when no tenant is configured: the Ivanti tools then do not exist at all. */
+  ivanti?: IvantiConnection;
 }
 
 /**
@@ -17,8 +35,31 @@ export interface ToolContext {
 export function selectTools(config: Config, context: ToolContext): ToolDefinition[] {
   const tools: ToolDefinition[] = [createGetVersionTool(context)];
 
+  if (context.ivanti === undefined) return tools;
+
+  const deps = { connection: context.ivanti, logger: context.logger };
+
+  // Reads first: they need no session and work with any key role.
+  tools.push(
+    createListBusinessObjectsTool(deps),
+    createGetObjectMetadataTool(deps),
+    createGetRecordTool(deps),
+    createListRecordsTool(deps),
+    createCountRecordsTool(deps),
+    createGetRelatedRecordsTool(deps),
+    createFulltextSearchObjectTool(deps),
+    createListAssignedWorkTool(deps),
+    createGetServiceRequestParametersTool(deps),
+    createGetServiceRequestParameterOptionsTool(deps),
+    createGetAttachmentDetailsTool(deps),
+    // The retrievable pair: a connector that lacks either one is marked as not implementing
+    // retrieval, and some clients then hide every other tool on it.
+    createSearchTool(deps),
+    createFetchTool(deps),
+  );
+
   if (config.MCP_MODE === 'full') {
-    // Business Object tools land here once they exist.
+    // Tools an end user must not have land here.
   }
 
   return tools;

@@ -1,6 +1,6 @@
-import type { Logger } from '../logger.js';
+import type { Logger } from '../../logger.js';
 import { IvantiApiError, scrubErrorBody } from './errors.js';
-import { createOdataRoutes, type OdataRoutes } from './odata-url.js';
+import { createIvantiRoutes, type IvantiRoutes } from '../odata/url.js';
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -35,7 +35,7 @@ export interface RequestInit {
 }
 
 export interface IvantiTransport {
-  readonly routes: OdataRoutes;
+  readonly routes: IvantiRoutes;
   /** Parsed JSON, or `undefined` for a 204. */
   request: <T>(url: string, init?: RequestInit) => Promise<T | undefined>;
   /** Same, but the caller requires a body — a 204 is an error. */
@@ -137,7 +137,7 @@ export function createTransport(options: TransportOptions): IvantiTransport {
   };
 
   return {
-    routes: createOdataRoutes(baseUrl, basePath),
+    routes: createIvantiRoutes(baseUrl, basePath),
 
     async request<T>(url: string, init: RequestInit = {}): Promise<T | undefined> {
       const { status, text } = await send(url, init);

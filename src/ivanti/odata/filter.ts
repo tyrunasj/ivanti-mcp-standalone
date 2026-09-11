@@ -78,9 +78,48 @@ export function describeUnsupportedFilter(unsupported: UnsupportedFilter): strin
     : `Ivanti rejects the OData v2 typed literal ${unsupported.literal}. Write the value plainly.`;
 }
 
+/**
+ * A filter this server refused to send. Distinct from an Ivanti failure: nothing was asked of
+ * Ivanti, the caller's query was the problem, and the fix is in the next tool call.
+ */
+export class UnsupportedFilterError extends Error {
+  readonly unsupported: UnsupportedFilter;
+
+  constructor(unsupported: UnsupportedFilter) {
+    super(describeUnsupportedFilter(unsupported));
+    this.name = 'UnsupportedFilterError';
+    this.unsupported = unsupported;
+  }
+}
+
 /** Throws when the filter uses a construct Ivanti would silently drop or refuse. */
 export function assertSupportedFilter(filter: string | undefined): void {
   if (filter === undefined || filter.trim() === '') return;
   const unsupported = findUnsupportedFilter(filter);
-  if (unsupported) throw new Error(describeUnsupportedFilter(unsupported));
+  if (unsupported) throw new UnsupportedFilterError(unsupported);
+}
+
+/**
+ * Field names a caller referenced in a query, so a rejection can name the one that is wrong.
+ *
+ * Quoted literals are stripped first: `Status eq 'Owner'` must never report `Owner` as a field.
+ * The optional identifier prefix takes an OData v2 typed literal with it, so `datetime'…'` does
+ * not leave `datetime` behind looking like a column.
+ */
+export function referencedFieldNames(parts: {
+  filter?: string | undefined;
+  fields?: readonly string[] | undefined;
+}): string[] {
+  const names = new Set(parts.fields ?? []);
+
+  if (parts.filter !== undefined) {
+    const withoutLiterals = parts.filter.replace(/(?:[A-Za-z_][A-Za-z0-9_]*)?'(?:[^']|'')*'/g, "''");
+    for (const match of withoutLiterals.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+      const token = match[0];
+      if (/^(eq|ne|gt|ge|lt|le|and|or|not|true|false|null)$/i.test(token)) continue;
+      names.add(token);
+    }
+  }
+
+  return [...names];
 }
