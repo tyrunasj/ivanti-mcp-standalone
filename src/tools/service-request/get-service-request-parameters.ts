@@ -5,6 +5,7 @@ import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/quer
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
+import { ObjectNotAllowedError } from '../shared/object-gate.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -66,6 +67,11 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
     },
     handler: (args) =>
       runTool('get_service_request_parameters', deps.logger, async () => {
+        // These exist to serve service requests; where that object is gated away, so are they.
+        if (!deps.gate.allows('ServiceReq')) {
+          throw new ObjectNotAllowedError('ServiceReq', deps.gate.allowed);
+        }
+
         const url = withQuery(
           deps.connection.transport.routes.entitySet(PARAMETER_OBJECT),
           buildQuery({

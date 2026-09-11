@@ -447,9 +447,20 @@ rather than describing it.
 **Not in this stage:** the resources tier (`ivanti://reference/…`), saved searches, quick actions
 and pick-list tools — they need either the session or their own design pass.
 
+**Three issues found in a later audit and closed (2026-09-11):**
+- **Unbounded row payloads.** `list_records` with no field list returned 187,278 characters for
+  its default page. Rows now default to a compact field set, with `fields: "*"` for whole records
+  and the response saying which was used — 9,496 characters for the same call.
+- **`ENDUSER_BUSINESS_OBJECTS` was documented as validated at startup and was not.** It is now
+  resolved against the tenant, and an unknown name exits 78 with suggestions rather than silently
+  narrowing what an end user may create on.
+- **"Did you mean" only saw the metadata graphs.** With an admin-tier credential it now draws on
+  the full 1324-object catalog: `OnboardingReq` answers *"Did you mean: onboardingrequest?"*,
+  which no graph fetched so far contained.
+
 ---
 
-## Stage B3 — Session bootstrap and the capability profile
+## Stage B3 — Session bootstrap and the capability profile ✅ done
 
 **Goal:** unlock the ASMX-backed half where the credential allows, and degrade cleanly where it
 does not.
@@ -483,6 +494,62 @@ does not.
 **Exit criteria:** an analyst-role key starts, logs its tier, and serves the `odata` tool set with
 no failures. An admin key serves everything. Neither path requires configuration.
 
+**Landed as** `src/ivanti/session/` — `asmx-session` (handshake, shared promise, 401-retry),
+`capability` (a three-tier probe at startup), `workspaces` (the role's own objects) and
+`admin-catalog` (the complete catalog when the console answers) — plus
+`src/server/instructions.ts` and `src/tools/admin-ui-guard.test.ts`, which drives every registered
+tool over a tenant whose admin console refuses and asserts that nothing fails and nothing requests
+that path.
+
+**The tier table changed after measuring.** The plan above said "never `/HEAT/AdminUI/`". That is
+wrong: an admin key reaches it, and it is the only source for the tenant's whole catalog — 1324
+objects against 194 from metadata. The rule is therefore *used when available, never required*,
+which is what the original instruction asked for. The path needs the `services/` segment.
+
+| Tier | Credential | Catalog |
+|---|---|---|
+| `odata` | API key only | ~194 names from metadata graphs |
+| `session` | handshake opens | + the role's 24 workspace objects, with display names |
+| `admin` | console answers | 1324 objects with display names and descriptions |
+
+**Verified against the live staging tenant (2026-09-11).** Startup — base-path probe, handshake
+and the full admin catalog — takes **131 ms** and reports `tier: admin`, role `Admin`, identity
+*Tyrunas Jokubauskas*. `list_business_objects` answers with the 24 objects people work in (4.7 KB)
+and reaches all 1324 on a search; no log line contains the API key. Handshake timings measured
+separately with curl: 18-68 ms per call.
+
+**`list_business_objects` was rebuilt around this.** Without a search it returns only what people
+work in — the role's workspaces plus Ivanti's own `commonlyUsed` flag — because 1324 rows is not
+an answer. A search reaches the whole catalog, matching display names as well as technical ones.
+Validation lists (354 of them) and audit tables are excluded unless asked for, and the response
+names its source so the model knows how complete "not found" is.
+
+**Object gating for `enduser` mode landed early** (it belongs to B7, but was needed now): the
+allowlist is read from the environment and enforced by `createObjectGate` at every tool that names
+an object. Verified live with `ENDUSER_BUSINESS_OBJECTS=Incident,Change,ServiceReq` — the catalog
+answers three objects, assigned work reports incidents/servicereqs/changes only, and
+`Employees`, `frs_hc_calllog` and `fetch('employees:…')` are all refused with the list of what is
+allowed. What B7 still owes: "edit only own records", which needs the customer-scoping design.
+
+**The three open items were investigated and two are closed (2026-09-11):**
+
+- **The `.ashx` convention is in.** The handler path was wrong, not missing:
+  `/HEAT/handlers/GridDataHandler/GridDataHandler.ashx`, a folder per handler, found by reading the
+  app's own `Default.aspx`. `session.callHandler()` implements it — form-urlencoded body, lowercase
+  `_csrftoken` header — and the tenant confirms the mechanics: 551 without the header, 200 with it.
+  Only the per-handler payload is unknown, which belongs to whichever stage calls one. The
+  multipart convention still waits for its first caller (attachment upload, B6).
+- **The tier now narrows something real.** `get_pick_list_values` is the first session-only tool:
+  the allowed values of a validated field live on a create form, which OData cannot see. It walks
+  workspace → layout → view → form, caches the walk per object, and decodes the column-shaped
+  reply. Verified live: Incident Status 7 values, Priority 5, Impact 3, Source 13, Category 5;
+  a second call costs 26 ms.
+- **The degraded paths are now testable.** `IVANTI_MAX_TIER=odata|session|admin` caps the server
+  below what the credential can do. It exists because `AuthenticateTenantAPIKey`'s `role` argument
+  is *ignored* — an admin account asked for `SelfService` still answers `Admin` — so nothing else
+  can show what a customer without admin rights gets. Verified live: `admin`/`session` serve 15
+  tools, `odata` serves 14 and drops `get_pick_list_values`.
+
 ---
 
 ## Stage B4 — Writes, and the hint system
@@ -493,6 +560,9 @@ no failures. An admin key serves everything. Neither path requires configuration
   `ProfileLink_Category` naming a target BO. Creating a child under a parent is
   `ParentLink_RecID` + `ParentLink_Category` **inline in the create**, which wires the
   relationship in one call; `link_records` is only for records that already exist.
+- The form chain and picklists landed early in B3 (`form-context`, `pick-lists`,
+  `get_pick_list_values`) — the write path resolves values against the same lists rather than
+  building its own.
 - **Validated-field writes**: omitting is not skipping — Ivanti auto-fills an omitted validated
   field and then rejects its own value. Resolve the value against the live cascade-filtered
   option list, attach the identifier, and **read the record back to confirm it stored**. On

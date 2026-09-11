@@ -42,7 +42,20 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args) =>
       runTool('search', deps.logger, async () => {
-        const objects = args.objects ?? [...DEFAULT_OBJECTS];
+        const objects = (args.objects ?? [...DEFAULT_OBJECTS]).filter((object) =>
+          deps.gate.allows(object),
+        );
+
+        if (objects.length === 0) {
+          return jsonResult({
+            results: [],
+            searched: [],
+            note:
+              deps.gate.allowed.length > 0
+                ? `This server only exposes ${deps.gate.allowed.join(', ')}.`
+                : 'No objects to search.',
+          });
+        }
         const skipped: { object: string; reason: string }[] = [];
 
         const found = await Promise.all(

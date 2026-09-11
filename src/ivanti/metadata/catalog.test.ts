@@ -165,4 +165,30 @@ describe('createMetadataCatalog', () => {
 
     await expect(metadata.entityNames()).rejects.toThrow(/could not be read/);
   });
+
+  it('suggests from the wider catalog when the credential can see it', async () => {
+    const { transport } = fakeTransport({ '/incidents/$metadata': csdl(entity('incident', NAV)) });
+    const metadata = createMetadataCatalog({
+      transport,
+      seedUrl: SEED_URL,
+      logger: logger(),
+      // What the admin console knows, which the metadata graphs do not.
+      suggestionNames: () => Promise.resolve(['xlj_car', 'onboardingrequest']),
+    });
+
+    // The object is in the admin console's catalog but in none of the graphs fetched here.
+    await expect(metadata.entity('OnboardingReq')).rejects.toThrow(/onboardingrequest/);
+  });
+
+  it('still answers when the wider catalog fails', async () => {
+    const { transport } = fakeTransport({ '/incidents/$metadata': csdl(entity('incident', NAV)) });
+    const metadata = createMetadataCatalog({
+      transport,
+      seedUrl: SEED_URL,
+      logger: logger(),
+      suggestionNames: () => Promise.reject(new Error('403')),
+    });
+
+    await expect(metadata.entity('Nonsense')).rejects.toThrow(UnknownEntityError);
+  });
 });

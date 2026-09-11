@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { COMPACT_ROW_FIELDS } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { buildQuery, DEFAULT_TOP, MAX_TOP, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
@@ -7,25 +8,6 @@ import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-
-/**
- * Roughly what Ivanti's own preview shows: an identifier, a title, and enough context to tell
- * two hits apart. Applied client-side, so the names an object lacks are simply absent.
- */
-const SEARCH_FIELDS = [
-  'RecId',
-  'IncidentNumber',
-  'ServiceReqNumber',
-  'ChangeNumber',
-  'ProblemNumber',
-  'AssignmentID',
-  'Subject',
-  'Name',
-  'DisplayName',
-  'Status',
-  'Owner',
-  'CreatedDateTime',
-];
 
 export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -83,7 +65,7 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
           query: args.query,
           returned: rows.length,
           ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),
-          rows: projectRows(rows, parseFieldList(args.fields) ?? SEARCH_FIELDS),
+          rows: projectRows(rows, parseFieldList(args.fields) ?? COMPACT_ROW_FIELDS),
         });
       }),
   });

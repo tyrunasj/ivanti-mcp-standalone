@@ -1,6 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture } from '../../ivanti/connection.fixture.js';
+import { OPEN_GATE } from '../shared/object-gate.js';
 import type { Logger } from '../../logger.js';
 import { createGetAttachmentDetailsTool } from './get-attachment-details.js';
 
@@ -24,7 +25,7 @@ const ROW = {
 
 const tool = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ responses });
-  return { urls, tool: createGetAttachmentDetailsTool({ connection, logger: logger() }) };
+  return { urls, tool: createGetAttachmentDetailsTool({ connection, gate: OPEN_GATE, logger: logger() }) };
 };
 
 describe('get_attachment_details', () => {

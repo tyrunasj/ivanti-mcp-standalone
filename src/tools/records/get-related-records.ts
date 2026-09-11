@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { suggestNames } from '../../ivanti/metadata/suggest-names.js';
+import { ALL_FIELDS, resolveRowFields } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
@@ -32,7 +33,13 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
       relationship: z
         .string()
         .describe('Relationship name from get_object_metadata, e.g. `IncidentContainsTask`.'),
-      fields: z.string().optional().describe('Comma-separated fields to return per related row.'),
+      fields: z
+        .string()
+        .optional()
+        .describe(
+          `Comma-separated fields per related row. Defaults to a compact set; "${ALL_FIELDS}" ` +
+            'returns whole records.',
+        ),
     },
     handler: (args) =>
       runTool('get_related_records', deps.logger, async () => {
@@ -61,12 +68,17 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
         // string, not an array. `readCollection` turns that into no rows rather than nineteen.
         const rows = readCollection<OdataRecord>(payload, url);
 
+        const projection = resolveRowFields(parseFieldList(args.fields), args.fields);
+
         return jsonResult({
           object: entitySet,
           relationship: match,
           target: entity.relationships.find((r) => r.name === match)?.target,
           returned: rows.length,
-          rows: projectRows(rows, parseFieldList(args.fields)),
+          ...(projection.defaulted && rows.length > 0
+            ? { fields: 'a compact default set — pass `fields`, or "*" for whole records' }
+            : {}),
+          rows: projectRows(rows, projection.fields),
         });
       }),
   });

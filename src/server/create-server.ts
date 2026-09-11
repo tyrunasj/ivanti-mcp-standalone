@@ -3,6 +3,7 @@ import type { Config } from '../config/env-schema.js';
 import type { IvantiConnection } from '../ivanti/connect.js';
 import type { Logger } from '../logger.js';
 import { registerTools, selectTools } from '../tools/register-tools.js';
+import { buildInstructions } from './instructions.js';
 import { readPackageMetadata } from '../version.js';
 
 // package.json is the single source of truth for both, so a published image and the version it
@@ -33,6 +34,8 @@ export interface ServerFactoryDeps {
 }
 
 export function createServerFactory(config: Config, deps: ServerFactoryDeps): ServerFactory {
+  const instructions = buildInstructions(deps.ivanti?.capability);
+
   const tools = selectTools(config, {
     serverName: SERVER_NAME,
     serverVersion: SERVER_VERSION,
@@ -43,7 +46,11 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
   return {
     toolNames: tools.map((tool) => tool.name),
     create: (): McpServer => {
-      const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+      const server = new McpServer(
+        { name: SERVER_NAME, version: SERVER_VERSION },
+        // Said once, at connect time, rather than repeated in every tool description.
+        instructions === undefined ? {} : { instructions },
+      );
       registerTools(server, tools);
       return server;
     },

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, field } from '../../ivanti/connection.fixture.js';
+import { OPEN_GATE } from '../shared/object-gate.js';
 import type { Logger } from '../../logger.js';
 import { createGetObjectMetadataTool } from './get-object-metadata.js';
 
@@ -18,7 +19,7 @@ const INCIDENT = {
 
 const tool = () => {
   const { connection } = connectionFixture({ entities: { incident: INCIDENT } });
-  return createGetObjectMetadataTool({ connection, logger: logger() });
+  return createGetObjectMetadataTool({ connection, gate: OPEN_GATE, logger: logger() });
 };
 
 type Payload = Record<string, unknown>;

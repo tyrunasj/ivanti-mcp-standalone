@@ -15,7 +15,9 @@ import { createSearchTool } from './search/search.js';
 import { createGetServiceRequestParameterOptionsTool } from './service-request/get-service-request-parameter-options.js';
 import { createGetServiceRequestParametersTool } from './service-request/get-service-request-parameters.js';
 import { createGetObjectMetadataTool } from './schema/get-object-metadata.js';
+import { createGetPickListValuesTool } from './schema/get-pick-list-values.js';
 import { createListBusinessObjectsTool } from './schema/list-business-objects.js';
+import { createObjectGate } from './shared/object-gate.js';
 import type { ToolDefinition } from './tool-definition.js';
 
 export interface ToolContext {
@@ -37,7 +39,11 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
 
   if (context.ivanti === undefined) return tools;
 
-  const deps = { connection: context.ivanti, logger: context.logger };
+  const deps = {
+    connection: context.ivanti,
+    gate: createObjectGate(config),
+    logger: context.logger,
+  };
 
   // Reads first: they need no session and work with any key role.
   tools.push(
@@ -57,6 +63,11 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
     createSearchTool(deps),
     createFetchTool(deps),
   );
+
+  // Needs the ASMX session: the allowed values live on a create form, which OData cannot see.
+  if (context.ivanti.capability.tier !== 'odata') {
+    tools.push(createGetPickListValuesTool(deps));
+  }
 
   if (config.MCP_MODE === 'full') {
     // Tools an end user must not have land here.

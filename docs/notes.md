@@ -267,8 +267,13 @@ fetch and asserts no URL contains that path — so reintroducing it fails in CI 
 an analyst-key tenant. Worth carrying over verbatim.
 
 **`AuthenticateTenantAPIKey`'s `role` argument is a request, not a guarantee.**
-Asking for a role the account does not hold silently downgrades to its real one — verified live.
-Read the effective role back from `Session.asmx/GetUserData`; never assume what was asked for.
+Asking for a role the account does not hold silently downgrades to its real one. On a live tenant
+in 2026-09 it went further: an account holding several roles (`HasMultipleRoles: True`) answered
+`ActiveRole: Admin` no matter what was asked for — `ServiceDeskAnalyst`, `SelfService` and
+`Employee` all came back as Admin, and the admin console answered 200 for each. So the argument
+cannot be used to *drop* privilege either, and a server cannot test its own degraded path by
+asking for a lesser role. Read the effective role back from `InitializeSession` (it reports
+`ActiveRole`) and refine it with `Session.asmx/GetUserData`; never assume what was asked for.
 
 **Anything Ivanti resolves "for the current user" answers for the service account.**
 A saved search called "My …" returns the API key's service account's items, never the caller's.
@@ -289,6 +294,63 @@ ASMX session. `$metadata` entity-type names need only `rest_api_key` and are **w
 access is governed by Object Permissions, not workspace membership, so an analyst role reads
 plenty of objects it has no workspace for.
 
+**`InitializeSession` already reports the effective role.**
+Its `SessionStatus` carries `ActiveRole`, `ActiveRoleDisplayName`, `UserName` and
+`SessionCsrfToken`, so the identity is known after step two and `GetUserData` only adds the display
+name. That matters because `GetUserData` is the step most likely to fail — treating it as optional
+keeps the session usable and the role honest. Measured live 2026-09-11.
+
+**The SID is not a GUID.** `AuthenticateTenantAPIKey` answers `"<host>#<KEY>#1"` — 58 characters on
+a live tenant. Anything validating it as a GUID would reject a working session.
+
+**`GetRoleWorkspaces` already carries the Business Object id — do not derive it from the layout.**
+Each row has `ID` (`Incident#`, `OnboardingRequest#`, `XLJ_Car#`, `CI#Service`) and a `Profile`;
+the object workspaces are the ones with `Profile === 'ObjectWorkspace'` — 24 of 31 on a live
+tenant, and every one of their ids is real. Deriving the object from `LayoutName` instead
+(`Onboarding` → `Onboarding#`, `CarLayout` → `Car#`) is wrong for exactly the interesting cases,
+and the confirmation call it forces — `GetWorkspaceData` — answers **HTTP 500** for a wrong guess
+rather than a clean "no". One call, no guessing, no 500s. *(Corrected 2026-09-11 after measuring;
+the earlier layout-derivation came from `overlord-service`.)*
+
+**The admin console is real, and the path needs `services/`.**
+`/HEAT/AdminUI/AppDesign.asmx/GetBriefBusinessObjects` answers **404**;
+`/HEAT/AdminUI/services/AppDesign.asmx/GetBriefBusinessObjects` answers **200** with the tenant's
+complete catalog — 1324 objects, 505 KB, ~50 ms warm — each with `id`, `name`, `displayName`,
+`description`, `commonlyUsed` and `pureValidationObject`. Booleans arrive as the strings `'True'`
+and `'False'`. An admin-rights key reaches it; a key without those rights does not, which is why
+everything built on it falls back to the workspace list and then to the metadata names.
+
+**`permissions` in that catalog is not an access boundary.**
+It takes the values 0, 2 and 3 (47 / 829 / 448 objects), and a `permissions: 0` object such as
+`CurrencyCode#` still reads perfectly well over OData. It describes admin-console design rights,
+not data access — filtering a catalog by it would hide objects the caller can read.
+
+**The handshake is fast.** Measured with curl on a live tenant: `AuthenticateTenantAPIKey` 18-58 ms,
+`InitializeSession` 29 ms, `GetUserData` 68 ms. A slow handshake means something else is wrong.
+
+**The `.ashx` handlers live one folder deeper than expected.**
+`/HEAT/handlers/GridDataHandler.ashx` answers 404; the real path is
+`/HEAT/handlers/GridDataHandler/GridDataHandler.ashx` — a folder per handler, found by reading the
+app's own `Default.aspx`. The third calling convention is confirmed there: a form-urlencoded body,
+the CSRF token as a **lowercase `_csrftoken` header**, and a `text/html` reply. Without that header
+the handler answers **551**; with it, 200. The payload each handler wants is its own business and
+is still unknown for GridDataHandler. *(Corrected 2026-09-11 — the earlier note said the handler
+was absent on this tenant.)*
+
+**A validated field's values are not in `$metadata`.**
+They live on the create form, reached by walking `GetRoleWorkspaces` → `GetWorkspaceData` →
+`FindFormViewData` → `GetFormDefaultData` → `GetFormValidationListData`. Calling the last one
+without that context fails with a misleading *"You do not have permission to view this item"*.
+The reply is columns, not objects: the stored value is at the **lowest** index in `FieldMap`,
+`DisplayName` labels it, `RecId` identifies it, and an empty list with `SameAs` means "reuse that
+field's options". Measured live: Incident Status has 7 values, Priority 5, Source 13.
+
+**A cascade parent supplied under the wrong name filters nothing, silently.**
+`GetFormValidationListData` takes the parents inside the data model, so a key the form does not
+have is simply ignored and the answer comes from the unfiltered list — whose values may not be
+valid for the record in hand. Nothing in the reply says so, which is why the tool compares the
+supplied keys against the form's own fields and reports the ones it ignored.
+
 **An unknown entity set is not an error — Ivanti invents the entity.**
 `/api/odata/nonexistents/$metadata` answers **200** with valid CSDL containing
 `<EntityType Name="nonexistent" />` and an `EntitySet` to match: no fields, no relationships. Every
@@ -307,6 +369,12 @@ well-known graphs together name ~200, in under a second. The full ~1300-entry li
 `/HEAT/AdminUI/`, which an analyst key is refused — so the union of graphs is the widest catalog an
 ordinary key can reach, and `list_business_objects` says so rather than implying completeness.
 Lookups are not limited to it: `entity()` finds anything real by fetching its own graph.
+
+**A page of whole records is 187,000 characters.**
+`list_records` with the default `top=25` and no field list measured **187,278 chars (~47k tokens)**
+on a live tenant — an incident carries ~180 fields. The same call projected to a compact set is
+9,496. A tool description asking the caller to narrow the fields does not prevent this; the
+default has to be narrow, with an explicit `"*"` for the rare case that wants everything.
 
 **`$top` is capped at 100.** 100 returns 100 rows; **101 answers 400** `ISM_4000 "Invalid Request
 Payload"`. `$skip` pages without repeating rows, so paging is the way past the cap.

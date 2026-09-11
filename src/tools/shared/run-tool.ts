@@ -4,6 +4,7 @@ import { IvantiApiError, isIvantiNotFound } from '../../ivanti/http/errors.js';
 import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
 import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
 import { FieldNameError } from './explain-field-error.js';
+import { ObjectNotAllowedError } from './object-gate.js';
 import { errorResult } from './result.js';
 
 /**
@@ -27,6 +28,11 @@ export async function runTool(
     // rather than a failure and does not belong in the error log.
     if (error instanceof UnsupportedFilterError) {
       logger.debug('tool refused a filter', { tool, kind: error.unsupported.kind });
+      return errorResult(error.message);
+    }
+
+    if (error instanceof ObjectNotAllowedError) {
+      logger.debug('tool refused an object', { tool, ref: error.ref });
       return errorResult(error.message);
     }
 

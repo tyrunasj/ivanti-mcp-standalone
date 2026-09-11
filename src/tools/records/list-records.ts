@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ALL_FIELDS, resolveRowFields } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { referencedFieldNames } from '../../ivanti/odata/filter.js';
 import { buildQuery, DEFAULT_TOP, MAX_TOP, readTotal, withQuery } from '../../ivanti/odata/query.js';
@@ -44,7 +45,14 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         .optional()
         .describe('Keyword search across the record\'s text fields — the only substring match.'),
       orderBy: z.string().optional().describe('e.g. "CreatedDateTime desc".'),
-      fields: z.string().optional().describe('Comma-separated fields to return.'),
+      fields: z
+        .string()
+        .optional()
+        .describe(
+          'Comma-separated fields to return. Defaults to a compact identifying set — a full ' +
+            `Ivanti record is ~180 fields and a page of them is enormous. Pass "${ALL_FIELDS}" ` +
+            'for whole records, and expect them to be large.',
+        ),
       top: z
         .number()
         .int()
@@ -71,6 +79,8 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           }),
         );
 
+        const projection = resolveRowFields(parseFieldList(args.fields), args.fields);
+
         const payload = await deps.connection.transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => {
@@ -94,7 +104,13 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
                 totalIsExact: total.exact,
                 hasMore: total.total > skipped + rows.length,
               }),
-          rows: projectRows(rows, parseFieldList(args.fields)),
+          ...(projection.defaulted && rows.length > 0
+            ? {
+                fields:
+                  'a compact default set — pass `fields` for others, or "*" for whole records',
+              }
+            : {}),
+          rows: projectRows(rows, projection.fields),
         });
       }),
   });

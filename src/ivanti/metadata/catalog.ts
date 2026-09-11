@@ -61,6 +61,12 @@ export interface MetadataCatalogDeps {
   /** The CSDL URL the startup probe found — the graph everything else is discovered from. */
   seedUrl: string;
   logger: Logger;
+  /**
+   * More names to suggest from, when the credential sees further than the metadata graphs — the
+   * admin console knows 1324 objects where the graphs know 194. Suggestions only: what `entity()`
+   * can resolve is unchanged.
+   */
+  suggestionNames?: () => Promise<string[]>;
 }
 
 /**
@@ -78,7 +84,7 @@ export interface MetadataCatalogDeps {
  *    makes every entity report "not found" for the life of the process.
  */
 export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalog {
-  const { transport, seedUrl, logger } = deps;
+  const { transport, seedUrl, logger, suggestionNames } = deps;
   const documents = new Map<string, Promise<CsdlDocument | undefined>>();
 
   const fetchDocument = (url: string): Promise<CsdlDocument | undefined> => {
@@ -180,6 +186,10 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
       // or `Categorie#` (English plural of the AdminUI id), and only one of the two stems
       // reaches `category`.
       const suggestions = await entityNames()
+        .then(async (names) => {
+          const extra = await (suggestionNames?.() ?? Promise.resolve([])).catch(() => []);
+          return [...new Set([...names, ...extra])];
+        })
         .then((names) => {
           const stems = new Set([toStem(toCsdlEntity(ref)), toStem(ref)]);
           const ranked = [...stems].flatMap((stem) => suggestNames(stem, names, 3));

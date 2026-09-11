@@ -23,6 +23,7 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   OAUTH_REQUIRED_SCOPES: [],
   IVANTI_BASE_URL: undefined,
   IVANTI_API_KEY: undefined,
+  IVANTI_MAX_TIER: undefined,
   ENDUSER_BUSINESS_OBJECTS: [],
   LOG_LEVEL: 'info',
   ...overrides,
