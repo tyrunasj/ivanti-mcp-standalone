@@ -254,8 +254,46 @@ ticket enumeration across the whole company; the model would happily walk #11160
 model, which is why read tools carry `openWorldHint: true` and why an asserted identity is pinned
 server-side rather than re-read from tool arguments.
 
-**The Ivanti REST auth header format is still a guess** in `ivanti-client` — commented as such.
-Verify against a real tenant before building on it. *(Open — Stage B1.)*
+**The Ivanti auth header is `rest_api_key=<key>` — equals sign, not a space.**
+`Authorization: rest_api_key=super-secret-key`. Asserted by a test in `overlord-service`; our
+first placeholder guessed the space form. *(Resolved 2026-09-11.)*
+
+**Never call `/HEAT/AdminUI/`.**
+Those are admin-console services. A tenant API key may carry *any* role and an analyst key is
+refused there, so depending on them works only for customers willing to issue an admin-rights
+key. `overlord-service` removed its two call sites (`AppDesign.asmx/GetBriefBusinessObjects`,
+`AdminAPI.asmx/GetObjectEx`) and keeps a test that drives every descended tool over a stubbed
+fetch and asserts no URL contains that path — so reintroducing it fails in CI rather than only on
+an analyst-key tenant. Worth carrying over verbatim.
+
+**`AuthenticateTenantAPIKey`'s `role` argument is a request, not a guarantee.**
+Asking for a role the account does not hold silently downgrades to its real one — verified live.
+Read the effective role back from `Session.asmx/GetUserData`; never assume what was asked for.
+
+**Anything Ivanti resolves "for the current user" answers for the service account.**
+A saved search called "My …" returns the API key's service account's items, never the caller's.
+Filtering by `Customer` is the only thing that reflects the person actually asking — which is why
+the effective `DisplayName` belongs in the server instructions.
+
+**The `/HEAT` prefix is usually present but not always.**
+`…/HEAT/api/odata/…` on some tenants, `…/api/odata/…` on others. Probe both once at startup and
+keep whichever answers, rather than making it a config field someone gets wrong.
+
+**Ivanti's single-record GET cannot be trusted with `$select`.**
+It answers **200 with an empty body**. Projection has to happen client-side — which also means a
+projected field the entity lacks is simply absent rather than an error.
+
+**The BO catalog has two sources and neither is strictly better.**
+`Workspace.asmx/GetRoleWorkspaces` is role-scoped and rich (display names, layouts) but needs the
+ASMX session. `$metadata` entity-type names need only `rest_api_key` and are **wider** — OData
+access is governed by Object Permissions, not workspace membership, so an analyst role reads
+plenty of objects it has no workspace for.
+
+**Three CSRF conventions on one session, differing only by casing and placement.**
+`.asmx` wants `_csrfToken` in the JSON body; `.ashx` handlers want lowercase `_csrftoken` as a
+header with a form-urlencoded body and reply with a JavaScript object literal rather than JSON;
+multipart uploads want `_csrfToken` as a header. Getting any of them wrong looks like an auth
+failure.
 
 ---
 
