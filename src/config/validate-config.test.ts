@@ -4,6 +4,7 @@ import {
   canonicalUriProblems,
   isExposedToNetwork,
   isHttpTransport,
+  isIvantiConfigured,
   validateConfig,
 } from './validate-config.js';
 
@@ -174,5 +175,35 @@ describe('validateConfig', () => {
     );
 
     expect(problems).toEqual([]);
+  });
+
+  it('refuses an Ivanti base URL without a key', () => {
+    const problems = validateConfig(config({ IVANTI_BASE_URL: 'https://t.ivanticloud.com' }));
+
+    expect(problems.some((problem) => problem.includes('IVANTI_API_KEY'))).toBe(true);
+  });
+
+  it('refuses an Ivanti key without a base URL', () => {
+    const problems = validateConfig(config({ IVANTI_API_KEY: 'k' }));
+
+    expect(problems.some((problem) => problem.includes('IVANTI_BASE_URL'))).toBe(true);
+  });
+
+  it('accepts both together, and neither at all', () => {
+    expect(
+      validateConfig(config({ IVANTI_BASE_URL: 'https://t.ivanticloud.com', IVANTI_API_KEY: 'k' })),
+    ).toEqual([]);
+    expect(validateConfig(config({}))).toEqual([]);
+  });
+});
+
+describe('isIvantiConfigured', () => {
+  it('is true only when both halves are present', () => {
+    expect(isIvantiConfigured(config({}))).toBe(false);
+    expect(isIvantiConfigured(config({ IVANTI_BASE_URL: 'https://t' }))).toBe(false);
+    expect(isIvantiConfigured(config({ IVANTI_API_KEY: 'k' }))).toBe(false);
+    expect(isIvantiConfigured(config({ IVANTI_BASE_URL: 'https://t', IVANTI_API_KEY: 'k' }))).toBe(
+      true,
+    );
   });
 });

@@ -5,7 +5,7 @@ import { readSecret } from './read-secret-file.js';
 import { validateConfig } from './validate-config.js';
 
 /** Settings that may also arrive via the `*_FILE` convention. */
-const SECRET_KEYS = ['BEARER_TOKEN'] as const;
+const SECRET_KEYS = ['BEARER_TOKEN', 'IVANTI_API_KEY'] as const;
 
 export class ConfigError extends Error {
   constructor(public readonly problems: string[]) {

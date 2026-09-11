@@ -343,7 +343,7 @@ on demand. **We have no resources tier at all** — adding one is part of this p
 
 ---
 
-## Stage B1 — Transport foundation
+## Stage B1 — Transport foundation ✅ done
 
 **Goal:** every wire convention, with nothing Ivanti-semantic on top.
 
@@ -360,6 +360,25 @@ on demand. **We have no resources tier at all** — adding one is part of this p
 
 **Exit criteria:** a real record returns from a staging tenant; a wrong key fails at startup, not
 at first tool call; an unsupported `$filter` is refused locally with an explanation.
+
+**Landed as** `src/ivanti/` — `errors`, `odata-filter`, `odata-url`, `odata-response`,
+`base-path`, `transport`, `connect` — plus `IVANTI_BASE_URL` / `IVANTI_API_KEY(_FILE)` and the
+startup probe in `index.ts`. The tenant stays optional for now: without it the server runs with
+the transport-level tools and warns.
+
+**Verified against a live staging tenant (2026-09-11).** Base path `/HEAT` detected on the first
+probe; a real incident returned 181 fields; a bogus key answered `400 ISM_4000 "Invalid key"` and
+`isIvantiNotFound()` caught it; `contains()` returned three rows for a subject that exists nowhere
+— **the silent-drop is real**, and `assertSupportedFilter` refuses it before the request. Three
+further conventions were discovered in the process and are now guarded: the `Accept` trap on
+`$metadata`, the `$metadata` graph ladder, and the three encodings of an empty collection
+(`readCollection`). All are in `docs/notes.md`.
+
+A follow-up audit against this list closed three gaps: the error body was size-capped but never
+**scrubbed** (the API key is now redacted by `scrubErrorBody`, verified live); the probe blamed
+`IVANTI_BASE_URL` for what a `401 ISM_4001` says is a credential problem; and the CSDL URL the
+probe found was discovered and then dropped rather than carried on `IvantiConnection.metadataUrl`
+for B2 to reuse.
 
 ---
 
