@@ -78,7 +78,7 @@ describe('createFormContext', () => {
     const first = await forms.get('Incident#');
     await forms.get('Incidents');
 
-    expect(first).toEqual({
+    expect(first).toMatchObject({
       layoutName: 'IncidentLayout.SD',
       viewName: 'formView',
       formName: 'Incident.Admin.Header',
@@ -118,6 +118,8 @@ describe('readPickLists', () => {
     viewName: 'formView',
     formName: 'Incident.Admin.Header',
     validatedFields: FORM.formDef.TableMeta.ValidatedFields,
+    displayNames: {},
+    linkFields: {},
   };
 
   it('decodes columns into values, taking the lowest index as the value', async () => {

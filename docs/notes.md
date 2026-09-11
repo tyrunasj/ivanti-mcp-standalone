@@ -337,6 +337,38 @@ the handler answers **551**; with it, 200. The payload each handler wants is its
 is still unknown for GridDataHandler. *(Corrected 2026-09-11 — the earlier note said the handler
 was absent on this tenant.)*
 
+**Ivanti's required-field refusals name DISPLAY names, and some of them are not fields.**
+`Required field Incident.Description value must be provided` means `Symptom`; `Incident.Customer`
+is not a field at all but a link, written as `ProfileLink_RecID` plus `ProfileLink_Category`. The
+translation lives on the form — `TableMeta.Fields[].DisplayName` and `LinkIdMap` — and without it
+a caller writes a field that does not exist. Measured live 2026-09-11.
+
+**Required-field rules are conditional, and fire on a status change.**
+An incident accepts `Status: 'Logged'` with nothing else, and refuses `Status: 'Active'` until
+`Category` and `Owner` are set — in the same call. Nothing asks for them beforehand, and
+`BusObjectRequiredRules` on the form lists thirteen fields without saying when each applies. So
+the useful thing to report is Ivanti's own message, translated.
+
+**The CSDL `validated` flag and the form disagree — in both directions.**
+Task's `$metadata` reports **no** validated fields while its form declares **twenty**; a role's
+form can equally be narrower than the object. Gating the write path on the CSDL flag therefore
+sent a picklist value out unresolved and Ivanti answered **500 with an empty message**. The form
+is the authority for a write; the form chain is cached per object, so consulting it costs three
+calls once.
+
+**A base type cannot be created — its subtypes can.**
+`Task#` is a base type with seven subtypes (`Task#Assignment`, `Task#WorkOrder`, …), and `TaskType`
+is its type *selector*, not a picklist: `get_pick_list_values` reports no options because there are
+none to choose. `POST /Tasks` answers `400 Required field Task.TaskType` and, once a plausible
+value is supplied, **500 ISM_5000 with an empty message**. `POST /task__assignments` with nothing
+but a Subject succeeds. Reading the base type is fine — `/Tasks` returns all 215 tasks whatever
+subtype each one is.
+
+Subtypes are visible in any catalog (`task__assignment` in CSDL, `Task#Assignment` in the admin
+console), so `get_object_metadata` reports them and a failed create names them. Detecting them
+needs the **widest** catalog: no default metadata graph contains `task__assignment`, so asking
+only the graphs reports "no subtypes" and the real cause never surfaces.
+
 **A validated field's values are not in `$metadata`.**
 They live on the create form, reached by walking `GetRoleWorkspaces` → `GetWorkspaceData` →
 `FindFormViewData` → `GetFormDefaultData` → `GetFormValidationListData`. Calling the last one

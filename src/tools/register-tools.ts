@@ -4,6 +4,11 @@ import type { IvantiConnection } from '../ivanti/connect.js';
 import type { Logger } from '../logger.js';
 import { createGetVersionTool } from './get-version.js';
 import { createCountRecordsTool } from './records/count-records.js';
+import { createCreateRecordTool } from './records/create-record.js';
+import { createDeleteRecordTool } from './records/delete-record.js';
+import { createUpdateRecordTool } from './records/update-record.js';
+import { createLinkRecordsTool } from './relationships/link-records.js';
+import { createUnlinkRecordsTool } from './relationships/unlink-records.js';
 import { createGetRecordTool } from './records/get-record.js';
 import { createGetRelatedRecordsTool } from './records/get-related-records.js';
 import { createListAssignedWorkTool } from './records/list-assigned-work.js';
@@ -69,8 +74,18 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
     tools.push(createGetPickListValuesTool(deps));
   }
 
+  // An end user may raise a ticket on an allowlisted object; the gate already holds that line.
+  tools.push(createCreateRecordTool(deps));
+
   if (config.MCP_MODE === 'full') {
-    // Tools an end user must not have land here.
+    // Editing and deleting wait for `enduser` to learn what "own records" means: without that,
+    // an end-user deployment would let anyone change anyone's ticket. Fail closed until B7.
+    tools.push(
+      createUpdateRecordTool(deps),
+      createDeleteRecordTool(deps),
+      createLinkRecordsTool(deps),
+      createUnlinkRecordsTool(deps),
+    );
   }
 
   return tools;

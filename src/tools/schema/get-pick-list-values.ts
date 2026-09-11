@@ -1,17 +1,12 @@
 import { z } from 'zod';
 import { visibleFields } from '../../ivanti/metadata/csdl.js';
-import { toCsdlEntity } from '../../ivanti/metadata/entity-names.js';
+import { toObjectId } from '../../ivanti/write/validated-write.js';
 import { readPickLists } from '../../ivanti/session/pick-lists.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-
-/** Ivanti's AdminUI id for an entity: `incident` → `Incident#`, `ci__computer` → `CI#Computer`. */
-function toObjectId(name: string): string {
-  return `${toCsdlEntity(name).replace(/__/g, '#')}#`.replace(/##$/, '#');
-}
 
 export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
