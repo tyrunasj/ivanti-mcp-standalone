@@ -96,6 +96,9 @@ export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition
           filename: args.filename,
           bytes,
           contentType: args.contentType ?? DEFAULT_CONTENT_TYPE,
+          // So the file is not stamped with this server's service account. Same attribution rule
+          // as a record created through `create_record`.
+          author: context.pin?.person()?.loginId,
         });
 
         deps.logger.info('ivanti attachment uploaded', {
@@ -110,6 +113,7 @@ export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition
           filename: uploaded.filename,
           sizeBytes: uploaded.sizeBytes,
           attached: true,
+          attributedTo: context.pin?.person()?.loginId ?? 'this server’s service account',
         });
       }),
   });

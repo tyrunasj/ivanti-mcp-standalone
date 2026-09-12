@@ -152,7 +152,10 @@ export function createListBusinessObjectsTool(deps: IvantiToolDeps): ToolDefinit
         return jsonResult({
           source:
             adminObjects.length > 0
-              ? 'admin console — the complete catalog'
+              ? deps.gate.allowed.length > 0
+                ? 'admin console, narrowed to the objects this deployment allows — NOT the ' +
+                  'whole catalog'
+                : 'admin console — the complete catalog'
               : workspaceObjects.length > 0
                 ? 'role workspaces and OData metadata — wide, but not the whole tenant'
                 : 'OData metadata only — wide, but not the whole tenant',

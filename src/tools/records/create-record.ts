@@ -16,6 +16,7 @@ import { ownershipFields } from '../shared/own-records.js';
 import { knownObjectNames } from '../shared/object-names.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { projectWritten } from '../shared/project-written.js';
 
 export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -47,10 +48,26 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
       fields: z
         .record(z.string(), z.unknown())
         .describe('Field names to values, e.g. { "Subject": "Printer jam", "Status": "Logged" }.'),
+      returnFields: z
+        .string()
+        .optional()
+        .describe(
+          'Comma-separated fields to return in the confirmation. Defaults to the fields you ' +
+            'wrote plus a compact identifying set — a whole Ivanti record is ~180 fields and ' +
+            'roughly 10 KB of JSON, which is a lot to spend confirming a write that has already ' +
+            'been verified. Pass "*" for the whole record.',
+        ),
     },
     handler: (args, context) =>
       runTool('create_record', deps.logger, async () => {
@@ -114,7 +131,7 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
           object: entitySet,
           recId,
           ...(Object.keys(owner).length === 0 ? {} : { filedFor: context.pin?.person()?.displayName }),
-          record: created,
+          record: projectWritten(created, args.returnFields, Object.keys(args.fields)),
         });
       }),
   });

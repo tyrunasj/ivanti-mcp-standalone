@@ -84,12 +84,20 @@ export function truncate(body: string, maxBytes: number = ERROR_BODY_MAX_BYTES):
  *
  * Only the *value* is replaced, so the shape of the error is still readable and the RecIds a
  * caller needs from an error body are untouched.
+ *
+ * The escaped forms matter: Ivanti nests the whole logging context inside a JSON **string**, so
+ * the fields arrive as `\\"SessionId\\":\\"…\\"` rather than `"SessionId":"…"`. A first pass at
+ * this matched only the unescaped form and redacted exactly one of the five — which is why the
+ * leak survived a round of testing and was found again.
  */
-const SENSITIVE_FIELDS = /"(SessionId|TenantId|LoginId|Hostname|ServiceName)"\s*:\s*"[^"]*"/gi;
+const SENSITIVE_FIELDS =
+  /\\?"(SessionId|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)\\?"\s*:\s*\\?"[^"\\]*\\?"/gi;
 
 export function scrubErrorBody(body: string, apiKey: string): string {
   const withoutKey = apiKey === '' ? body : body.split(apiKey).join('[REDACTED-API-KEY]');
-  const withoutInternals = withoutKey.replace(SENSITIVE_FIELDS, '"$1":"[REDACTED]"');
+  const withoutInternals = withoutKey.replace(SENSITIVE_FIELDS, (match, field: string) =>
+    match.startsWith('\\') ? `\\"${field}\\":\\"[REDACTED]\\"` : `"${field}":"[REDACTED]"`,
+  );
   return truncate(withoutInternals);
 }
 

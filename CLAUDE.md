@@ -20,7 +20,7 @@ decided, why, and — in §10 — which alternatives were rejected and for what 
 before proposing architectural changes; several obvious-looking simplifications were already
 considered and turned down for stated reasons.
 
-**Every stage is in.** **Thirty-four tools in `full` mode, twenty-five in `enduser`**:
+**Every stage is in.** **Forty tools in `full` mode, thirty-four in `enduser`**:
 `get_version`, `act_as`, the read tier, the retrievable pair `search` / `fetch`, the writes, B5's
 session-gated workflow surface, and B6's service catalog and attachments. Six reference documents
 are served as MCP resources. What is left is A4's Entra row, which is a deployment prerequisite
@@ -471,11 +471,16 @@ not an empty result.
 makes Ivanti **fabricate** a field-less entity type and return it as valid CSDL, so a parsed
 document with no fields is a typo, not a schema.
 
-**Row payloads default to a compact field set.** A full Ivanti record is ~180 fields, and a
-default page of 25 measured **187,278 characters** — one careless `list_records` would spend a
-context window. `resolveRowFields` returns `COMPACT_ROW_FIELDS` unless the caller names fields or
-passes `"*"`, and the response says which it did. Telling the model to pass a field list in the
-description is not a substitute for a safe default.
+**Row payloads default to a compact field set, and that set is a preference.** A full Ivanti
+record is ~180 fields, and a default page of 25 measured **187,278 characters** — one careless
+`list_records` would spend a context window. `COMPACT_ROW_FIELDS` names what the objects Ivanti
+ships call things, which is the limit of what it is worth: a tenant defines its own Business
+Objects and renames fields on the shipped ones, so `attachment` and `standarduserteam` match not
+one name in it and came back as a RecId and two timestamps. `compactFieldsFor` therefore falls
+back to the row's own leading fields and the response says that it did. Metadata cannot replace
+the list — CSDL reports `nullable: false` on almost nothing (zero required fields on `incident`
+and `change`) and under-reports validated fields — and the tenant's grid columns are not reachable
+(`GetWorkspaceData`'s `GridViewData` carries no column list).
 
 **Projection is client-side, always.** `$select` on a single-record GET returns `@odata.context`
 and nothing else, and blanks the values on saved searches. `buildQuery` therefore has no
@@ -535,3 +540,16 @@ fires only on an explicit DELETE. Being in-memory, replicas would need sticky ro
   person's name.
 - Business Object allowlists key on the **technical** BO name, never the display name, which
   is customizable per tenant.
+- **Nothing may depend on the Business Objects Ivanti ships.** A tenant defines its own objects
+  and edits the shipped ones — fields added, renamed, removed, made required or read-only, quick
+  actions written from scratch. So a fixed list of field names is a *preference with a fallback*,
+  never a definition: `record-identity` reads the row when its lists miss rather than reporting
+  "Untitled record", `list_notes` finds the journal relationship in the object's own metadata
+  instead of assuming `IncidentContainsJournal`, and `get_link_fields` reports the `_Category`
+  value observed on real rows instead of describing one. Where a name must appear in a
+  description, it is an illustration and says so.
+- **A bad `$orderby` answers 204, which every layer reads as "no rows".** Unlike a bad filter
+  field, which answers 400 and can be explained, a mistyped sort field or direction turns 548
+  records into none with no error. `assertOrderBy` refuses it locally, the way
+  `assertSupportedFilter` does — the two are the only client-side refusals, and both exist because
+  Ivanti's answer is a successful empty result.

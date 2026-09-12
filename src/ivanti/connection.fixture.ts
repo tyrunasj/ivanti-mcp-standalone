@@ -93,10 +93,27 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
     return match[1];
   };
 
+  /**
+   * The same answer, as a *rejected* promise rather than a synchronous throw.
+   *
+   * The real transport is async, so a failure always arrives as a rejection — and a `.catch()` on
+   * the call handles it. A fixture that throws on the way in escapes that `.catch` entirely,
+   * because there is no promise yet to attach it to. That difference hid a whole error path:
+   * `uploadAttachment` unpacks Ivanti's 300 in a `.catch`, and against this fixture the rejection
+   * sailed straight past it while behaving correctly on the live tenant.
+   */
+  const answerAsync = (url: string, method = 'GET'): Promise<unknown> => {
+    try {
+      return Promise.resolve(answer(url, method));
+    } catch (error: unknown) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+
   const transport: IvantiTransport = {
     routes,
     request: (url: string, init?: { method?: string }) =>
-      Promise.resolve(answer(url, init?.method ?? 'GET')) as Promise<never>,
+      answerAsync(url, init?.method ?? 'GET') as Promise<never>,
     requestRequired: (url: string, init?: { method?: string }) => {
       const payload = answer(url, init?.method ?? 'GET');
       if (payload === undefined) {
@@ -107,7 +124,7 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
       return Promise.resolve(payload) as Promise<never>;
     },
     // Multipart uploads answer from the same map, keyed `POST <fragment>` like any other write.
-    requestMultipart: (url: string) => Promise.resolve(answer(url, 'POST')) as Promise<never>,
+    requestMultipart: (url: string) => answerAsync(url, 'POST') as Promise<never>,
     // Files answer from the same map: the value is the text to hand back as bytes.
     requestBinary: (url: string) => {
       const payload = answer(url, 'GET');

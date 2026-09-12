@@ -6,6 +6,11 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { buildQuery, withQuery } from '../../ivanti/odata/query.js';
+import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+
+/** One page is enough to see which links this tenant actually uses, and cheap. */
+const SAMPLE_ROWS = 25;
 
 export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -30,11 +35,18 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
     },
     handler: (args) =>
       runTool('get_link_fields', deps.logger, async () => {
-        const { entity } = await resolveObject(deps, args.object);
+        const { entity, entitySet } = await resolveObject(deps, args.object);
         const form = await deps.connection.forms.get(toObjectId(entity.name));
 
         if (form === undefined) {
@@ -47,11 +59,51 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
 
         const links = linkFieldsOf(form);
 
+        /**
+         * What each `_Category` field actually holds, read off real rows rather than described.
+         *
+         * The tool named the pair and stopped there, which left the hardest half unanswered: the
+         * Category is an object NAME in the tenant's own casing, and some of them are dotted —
+         * measured on this tenant, `SLALink_Category` is `ServiceAgreement.SLA`, a group business
+         * object plus its extension. Nothing about the field name says that, and a caller
+         * guessing `SLA` or `ServiceAgreement` writes a link that is accepted and points nowhere.
+         *
+         * One page of rows, best effort: a value here is a value this tenant has really stored.
+         */
+        const observed = new Map<string, string>();
+        const sampleUrl = withQuery(
+          deps.connection.transport.routes.entitySet(entitySet),
+          buildQuery({ top: SAMPLE_ROWS }),
+        );
+        const sample = await deps.connection.transport
+          .request<OdataRecord>(sampleUrl)
+          .then((payload) => readCollection<OdataRecord>(payload, sampleUrl))
+          .catch(() => []);
+        for (const row of sample) {
+          for (const link of links) {
+            const value = row[link.categoryField];
+            if (typeof value === 'string' && value !== '' && !observed.has(link.categoryField)) {
+              observed.set(link.categoryField, value);
+            }
+          }
+        }
+
+        const described = links.map((link) => {
+          const categoryValue = observed.get(link.categoryField);
+          return categoryValue === undefined ? link : { ...link, categoryValue };
+        });
+
         return jsonResult({
           object: entity.name,
           count: links.length,
-          links,
-          note: 'Write both fields of a pair in the same call — a RecId without its Category is refused.',
+          links: described,
+          note:
+            'Write both fields of a pair in the same call — a RecId without its Category is ' +
+            'refused. `categoryValue` is the string this tenant actually stores in that ' +
+            "`_Category` field, taken from real records: use it verbatim. It is an object name " +
+            'in the tenant’s own casing and may be dotted (a group object plus its extension, ' +
+            'e.g. `ServiceAgreement.SLA`) — neither half alone is a valid value. A link with no ' +
+            `\`categoryValue\` was simply unset on all ${String(SAMPLE_ROWS)} rows sampled.`,
         });
       }),
   });

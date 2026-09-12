@@ -38,11 +38,23 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
       search: z
         .string()
         .optional()
-        .describe('Only fields whose name contains this (case-insensitive). Large objects carry 250+.'),
+        .describe(
+          'Narrows BOTH fields and relationships to those whose name contains this ' +
+            '(case-insensitive; a relationship also matches on the object it points at, so ' +
+            '`journal` finds `IncidentContainsJournal`). Large objects carry 250+ fields and 35+ ' +
+            'relationships — searching is how you find one without reading all of them.',
+        ),
       includeRelationships: z
         .boolean()
         .optional()
@@ -63,6 +75,21 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
             ...(field.validated ? { validated: true } : {}),
           }));
 
+        /**
+         * Relationships are searched too, on the name *and* on the target.
+         *
+         * `search` filtered fields only, so finding incident's journal relationship among its ~35
+         * meant dumping the whole list — past a client's display budget — and grepping it. The
+         * target match is what makes `journal` work when the relationship is called
+         * `IncidentContainsJournal`.
+         */
+        const relationships = entity.relationships.filter(
+          (relationship) =>
+            search === undefined ||
+            relationship.name.toLowerCase().includes(search) ||
+            relationship.target.toLowerCase().includes(search),
+        );
+
         return jsonResult({
           object: entity.name,
           entitySet,
@@ -77,7 +104,18 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
           fields,
           ...(args.includeRelationships === false
             ? {}
-            : { relationships: entity.relationships }),
+            : {
+                relationshipCount: relationships.length,
+                ...(search !== undefined && relationships.length === 0
+                  ? {
+                      relationshipsNote:
+                        `No relationship matches '${args.search ?? ''}'. Call again without ` +
+                        '`search` to see all ' +
+                        `${String(entity.relationships.length)} of them.`,
+                    }
+                  : {}),
+                relationships,
+              }),
         });
       }),
   });

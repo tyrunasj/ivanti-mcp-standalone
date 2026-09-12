@@ -157,8 +157,11 @@ export async function readPickLists(request: PickListRequest): Promise<PickListR
     let raw = answered[field];
     let sameAs: string | undefined;
 
-    // An empty list with `SameAs` means "reuse that field's options".
-    if (raw !== undefined && (raw.Data ?? []).length === 0 && raw.SameAs !== undefined) {
+    // An empty list with `SameAs` means "reuse that field's options". Ivanti sends JSON `null`
+    // rather than omitting the key when there is no such field, and `!== undefined` let that
+    // through — so every filtered-but-empty list reported `"sameAs": null`, which reads as a
+    // field that exists.
+    if (raw !== undefined && (raw.Data ?? []).length === 0 && typeof raw.SameAs === 'string' && raw.SameAs !== '') {
       sameAs = raw.SameAs;
       raw = answered[raw.SameAs] ?? raw;
     }

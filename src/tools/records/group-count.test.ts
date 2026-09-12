@@ -84,7 +84,26 @@ describe('group_count', () => {
 
     expect(result['total']).toBe(3);
     expect(result['unaccounted']).toBe(2);
-    expect(String(result['warning'])).toContain('partial picture');
+    // The caller named the values, so the warning must say "values you did NOT name" and not
+    // blame the field's list — a tester read the old wording as "your data is dirty" when it
+    // meant "you asked about two of seventeen buckets".
+    expect(String(result['warning'])).toContain('you did NOT name');
+    expect(String(result['warning'])).not.toContain("field's list");
+  });
+
+  it('blames the field’s list only when the values came from it', async () => {
+    const { deps: d } = deps({
+      "Status%20eq%20'Active'": { value: [], '@odata.count': 1 },
+      "Status%20eq%20'Closed'": { value: [], '@odata.count': 1 },
+      incidents: { value: [], '@odata.count': 9 },
+    });
+
+    const result = body(
+      await createGroupCountTool(d).handler({ object: 'Incidents', groupBy: 'Status' }),
+    );
+
+    expect(result).toMatchObject({ valuesFrom: 'the field’s own list' });
+    expect(String(result['warning'])).toContain("not on the field's list");
   });
 
   it('takes the values from the caller when it is given them', async () => {

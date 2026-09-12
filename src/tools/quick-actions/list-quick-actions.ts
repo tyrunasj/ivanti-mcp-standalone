@@ -37,8 +37,24 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
       search: z.string().optional().describe('Case-insensitive substring of the action name.'),
+      actionType: z
+        .string()
+        .optional()
+        .describe(
+          'Return only actions of this type. `UpdateObject` and `Composite` change the record; ' +
+            '`SendEmail` notifies people and changes nothing. Filtering by type is more reliable ' +
+            'than reading the names — three actions on incident are called "…Escalation…" and ' +
+            'all three only send mail.',
+        ),
     },
     handler: (args) =>
       runTool('list_quick_actions', deps.logger, async () => {
@@ -51,8 +67,11 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
           (action) => deps.actions.allows(action.name),
         );
         const search = args.search?.toLowerCase();
+        const wantedType = args.actionType?.toLowerCase();
         const matching = actions.filter(
-          (action) => search === undefined || action.name.toLowerCase().includes(search),
+          (action) =>
+            (search === undefined || action.name.toLowerCase().includes(search)) &&
+            (wantedType === undefined || action.actionType.toLowerCase() === wantedType),
         );
 
         return jsonResult({

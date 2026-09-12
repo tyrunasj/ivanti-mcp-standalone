@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { connectionFixture } from '../connection.fixture.js';
-import { OrphanedAttachmentError, uploadAttachment } from './upload.js';
+import { IvantiApiError } from '../http/errors.js';
+import {
+  AttachmentTypeRefusedError,
+  OrphanedAttachmentError,
+  uploadAttachment,
+} from './upload.js';
 
 const REC_ID = 'A'.repeat(32);
 const BYTES = new TextEncoder().encode('hello');
@@ -76,6 +81,35 @@ describe('uploadAttachment', () => {
     // The file exists and is on no record; the caller needs the id to clean it up.
     await expect(upload()).rejects.toThrow(OrphanedAttachmentError);
     await expect(upload()).rejects.toThrow(new RegExp(REC_ID));
+  });
+
+  it('explains a refused file EXTENSION, which arrives as a 300 rather than a failure', async () => {
+    // Measured live: `.log` answers 300 Multiple Choices with the outcome in the body, while the
+    // same bytes as `.txt` answer 200. The transport throws on any non-2xx, so without unpacking
+    // the rejection the caller saw a bare `Ivanti POST 300` and no reason.
+    const { upload } = setup({
+      "incidents('i1')": { RecId: 'i1' },
+      'POST Attachment': new IvantiApiError({
+        status: 300,
+        method: 'POST',
+        url: 'Attachment',
+        body: JSON.stringify([
+          { FileName: 'note.log', IsUploaded: false, Message: 'Upload Failed, Invalid attachment type.' },
+        ]),
+      }),
+    });
+
+    await expect(upload()).rejects.toThrow(AttachmentTypeRefusedError);
+    await expect(upload()).rejects.toThrow(/decides from the NAME/);
+  });
+
+  it('re-throws any other upload failure untouched', async () => {
+    const { upload } = setup({
+      "incidents('i1')": { RecId: 'i1' },
+      'POST Attachment': new IvantiApiError({ status: 500, method: 'POST', url: 'Attachment' }),
+    });
+
+    await expect(upload()).rejects.toThrow(IvantiApiError);
   });
 
   it('refuses when Ivanti answers without an attachment id', async () => {

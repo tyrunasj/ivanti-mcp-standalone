@@ -8,6 +8,7 @@ import { IdentityRequiredError, scopeToOwnRecords } from '../shared/own-records.
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { encodeRecordId, recordRecId, recordSummary, recordTitle } from './record-identity.js';
+import { QUERY_WORDS, noHitsNote } from './query-words.js';
 
 /** Where a question usually lands when the asker did not say which object. */
 const DEFAULT_OBJECTS = ['incidents', 'servicereqs', 'changes'] as const;
@@ -22,8 +23,12 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
       'Keyword search ACROSS Business Objects — the one to reach for when you do not know ' +
       'which object holds the answer. Returns `{ results: [{ id, title, text }] }`; pass an ' +
       '`id` to `fetch` for the whole record.\n\n' +
-      `Searches ${DEFAULT_OBJECTS.join(', ')} by default, ${String(PER_OBJECT_TOP)} hits each. ` +
-      'Name `objects` to look elsewhere — each one costs a request, so name only what you need.\n\n' +
+      `Searches ${DEFAULT_OBJECTS.join(', ')} by default, ${String(PER_OBJECT_TOP)} hits each — ` +
+      'the three Ivanti ships that hold most requests, NOT a statement about where this ' +
+      "tenant's answers live. A tenant can define its own Business Objects, and anything the " +
+      'default does not name is simply not searched. Pass `objects` to look elsewhere ' +
+      '(list_business_objects says what exists); each one costs a request, so name only what ' +
+      'you need.\n\n' +
       'This fans out Ivanti\'s per-object keyword search rather than using its cross-object ' +
       'search endpoint, which has been observed to answer an empty array for terms that ' +
       'per-object search matches dozens of times. An empty result means no match IN THE INDEXED TEXT, which is not the same as no such record: this searches the subject, description and notes Ivanti indexes, not every field. A value held in a structured field — a category, a chassis type, a filename — will not match even when it is exactly the word you searched. Say "nothing came up in the ticket text" rather than "there are none", and check with list_records and an `eq` filter before ruling it out.\n\n' +
@@ -35,7 +40,7 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
       openWorldHint: true,
     },
     inputSchema: {
-      query: z.string().describe('Words to look for. Case-insensitive.'),
+      query: z.string().describe(QUERY_WORDS),
       objects: z
         .array(z.string())
         .optional()
@@ -108,11 +113,16 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
         );
 
         const results = found.flat().slice(0, MAX_RESULTS);
+        // An object that could not be read was not searched. Reporting it under both keys said
+        // two contradictory things at once, and the reassuring one is the one that gets believed.
+        const failed = new Set(skipped.map((entry) => entry.object));
+        const searched = objects.filter((object) => !failed.has(object));
 
         return jsonResult({
           results,
-          searched: objects,
+          searched,
           ...(skipped.length > 0 ? { skipped } : {}),
+          ...(results.length === 0 ? { note: noHitsNote(args.query) } : {}),
         });
       }),
   });

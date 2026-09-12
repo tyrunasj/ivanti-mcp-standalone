@@ -21,7 +21,11 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
       'A search that matches nothing answers with no rows at all, and that is a real answer.\n\n' +
       'A name beginning "My" resolves against the account this server signs in as, never the ' +
       'person asking; the result says so. Rows are trimmed to a compact set of fields — pass ' +
-      '`fields`, or `"*"` for whole records.',
+      '`fields`, or `"*"` for whole records.\n\n' +
+      'THERE IS NO `orderBy`: rows arrive in the order the saved search itself defines, which ' +
+      'this server cannot change. For "the oldest" or "the most recent" of something, use ' +
+      'list_records with an `orderBy` instead — paging this to find an extreme is both slow and ' +
+      'unreliable.',
     annotations: {
       title: 'Run a saved search',
       readOnlyHint: true,

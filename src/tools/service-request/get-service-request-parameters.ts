@@ -121,15 +121,38 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
             answersUrl,
           );
 
+          // A date answer stores the UTC instant of the chosen LOCAL day, so the raw value reads
+          // back as the previous calendar date — narrating it verbatim tells the person they
+          // asked for 30 September when they chose 1 October. The local day is what they picked.
+          const offset = await deps.connection.serviceRequests.tenantOffset.get().catch(() => undefined);
+          const localDay = (value: unknown): string | undefined => {
+            if (typeof value !== 'string') return undefined;
+            const at = Date.parse(value);
+            if (Number.isNaN(at)) return undefined;
+            return new Date(at + (offset?.minutes ?? 0) * 60_000).toISOString().slice(0, 10);
+          };
+
           return jsonResult({
             requestId: args.requestId,
             returned: answered.length,
-            answers: answered.map((row) => ({
-              parameter: row['ParameterName'] ?? null,
-              value: row['ParameterValue'] ?? null,
-              displayValue: row['ParameterDisplayValue'] ?? null,
-              type: row['DisplayType'] ?? null,
-            })),
+            answers: answered.map((row) => {
+              const type = row['DisplayType'];
+              const value = row['ParameterValue'];
+              const day = type === 'date' ? localDay(value) : undefined;
+              return {
+                parameter: row['ParameterName'] ?? null,
+                // What to say to the person. Ivanti's own display value is the raw instant on a
+                // date, which is not the day they chose.
+                displayValue: day ?? row['ParameterDisplayValue'] ?? value ?? null,
+                value: value ?? null,
+                type: type ?? null,
+              };
+            }),
+            note:
+              '`parameter` is the technical name the template uses; call this with `templateId` ' +
+              'for the display names if you need to show the form back. A `date` answer is ' +
+              'stored as a UTC instant — `displayValue` is the local day the person actually ' +
+              'chose, and `value` is the raw instant.',
           });
         }
 
