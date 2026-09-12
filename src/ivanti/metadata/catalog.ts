@@ -152,16 +152,46 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
       fetchDocument(transport.routes.metadata(entitySet)),
 
     async entity(ref: string): Promise<EntityMetadata> {
-      const csdlName = toCsdlEntity(ref).toLowerCase();
+      /**
+       * The name as given first, then the singularised guess.
+       *
+       * `toCsdlEntity` strips a trailing `s`, which is right for `Incidents` and wrong for any
+       * object whose own CSDL name ends in one. `journal__notes` — the extension an end user
+       * writes a note to — became `journal__note`, so the catalog handed out a name its own
+       * tools then refused, suggesting the name it had just been given. The graph was even
+       * fetched correctly and the answer thrown away on the wrong key.
+       *
+       * Trying the exact name first costs nothing: a name that is already an entity is found,
+       * and a set name like `Incidents` simply misses and falls through to the guess.
+       */
+      const candidates = [ref.toLowerCase(), toCsdlEntity(ref).toLowerCase()];
+      const lookup = (document: CsdlDocument | undefined): EntityMetadata | undefined => {
+        for (const name of candidates) {
+          const found = document?.entities.get(name);
+          if (found !== undefined) return found;
+        }
+        return undefined;
+      };
 
-      const shared = (await fetchDocument(seedUrl))?.entities.get(csdlName);
+      const shared = lookup(await fetchDocument(seedUrl));
       if (shared !== undefined && shared.relationships.length > 0) return shared;
+
+      /**
+       * Which graph to ask for, with the same ambiguity in the other direction.
+       *
+       * An entity set is the entity name plus a literal `s`, so `journal__notes` lives in
+       * `journal__notess`. `toGuessedEntitySet` will not add an `s` to a name that already ends
+       * in one — right for `Incidents`, wrong here — so both are tried. The second is fetched
+       * only when the first missed, and a graph that does not exist is cached as a miss.
+       */
+      const graphs = [...new Set([toGuessedEntitySet(ref), `${ref.toLowerCase()}s`])];
 
       // Either the seed graph does not name it, or it named it without relationships — which is
       // what every non-root entity looks like there.
-      const ownGraph = await fetchDocument(transport.routes.metadata(toGuessedEntitySet(ref)));
-      const own = ownGraph?.entities.get(csdlName);
-      if (own !== undefined) return own;
+      for (const graph of graphs) {
+        const own = lookup(await fetchDocument(transport.routes.metadata(graph)));
+        if (own !== undefined) return own;
+      }
 
       // The shared graph's fields are complete even when its relationships are absent, so a
       // stale-but-real answer beats failing.

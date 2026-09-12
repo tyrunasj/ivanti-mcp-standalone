@@ -10,12 +10,16 @@ import {
 import { FieldNameError } from './explain-field-error.js';
 import { RequiredFieldsError } from './explain-required-fields.js';
 import { ObjectNotAllowedError } from './object-gate.js';
+import { ActionNotAllowedError } from './action-gate.js';
 import {
   IdentityRequiredError,
   NotYourRecordError,
+  RecordClosedError,
   UnscopableObjectError,
 } from './own-records.js';
 import { IdentityConflictError, VerifiedSessionError } from '../../auth/identity-pin.js';
+import { SubmitRefusedError } from '../../ivanti/service-request/submit.js';
+import { OrphanedAttachmentError, ParentNotFoundError } from '../../ivanti/attachments/upload.js';
 import { errorResult } from './result.js';
 
 /**
@@ -47,6 +51,11 @@ export async function runTool(
       return errorResult(error.message);
     }
 
+    if (error instanceof ActionNotAllowedError) {
+      logger.debug('tool refused an action', { tool });
+      return errorResult(error.message);
+    }
+
     // Refusals about who is asking. All of them are ordinary answers the model can act on — the
     // conversation has not said who it is helping, or has tried to become someone else — so none
     // of them is an error in the log. The one thing recorded is that it happened, never the name
@@ -57,6 +66,13 @@ export async function runTool(
       error instanceof VerifiedSessionError
     ) {
       logger.info('tool refused on identity', { tool, reason: error.name });
+      return errorResult(error.message);
+    }
+
+    // A closed record is final. Ivanti marks it read-only and then accepts the write anyway, so
+    // this refusal is the only thing between a caller and a silently-edited closed ticket.
+    if (error instanceof RecordClosedError) {
+      logger.debug('write refused, record closed', { tool });
       return errorResult(error.message);
     }
 
@@ -80,6 +96,29 @@ export async function runTool(
     // success, so it is logged at error level even though the caller can act on it.
     if (error instanceof WriteNotStoredError) {
       logger.error('ivanti write did not store', { tool });
+      return errorResult(error.message);
+    }
+
+    // Ivanti refused the submit inside a 200 and created nothing. The caller can fix it from
+    // the message, so it is a rejection rather than a failure.
+    if (error instanceof SubmitRefusedError) {
+      logger.debug('service request refused', { tool });
+      return errorResult(error.message);
+    }
+
+    // Nothing was sent: the record the file would hang off is not there.
+    if (error instanceof ParentNotFoundError) {
+      logger.debug('upload refused, no such parent', { tool });
+      return errorResult(error.message);
+    }
+
+    // The file is in Ivanti and on no record. Logged at error level because nobody asked for
+    // that outcome and someone has to clean it up.
+    if (error instanceof OrphanedAttachmentError) {
+      logger.error('attachment uploaded but not attached', {
+        tool,
+        attachmentId: error.attachmentId,
+      });
       return errorResult(error.message);
     }
 

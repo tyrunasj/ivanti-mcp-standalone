@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, entityFixture } from '../../ivanti/connection.fixture.js';
 import type { Logger } from '../../logger.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import { createLinkRecordsTool } from './link-records.js';
 import { createUnlinkRecordsTool } from './unlink-records.js';
 
@@ -24,7 +25,7 @@ const body = (result: CallToolResult): Record<string, never> =>
 
 const deps = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ entities: { incident: INCIDENT }, responses });
-  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false } };
+  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS } };
 };
 
 const ARGS = {

@@ -156,7 +156,29 @@ export async function ownershipFields(
     link.categoriesSeen.find((seen) => seen.toLowerCase() === person.category.toLowerCase()) ??
     person.category;
 
-  return { [link.recIdField]: person.recId, [link.categoryField]: category };
+  return {
+    [link.recIdField]: person.recId,
+    [link.categoryField]: category,
+    ...authorFields(person.loginId),
+  };
+}
+
+/**
+ * Who authored this, as opposed to who typed it.
+ *
+ * Ivanti fills `CreatedBy` from the session by default, which would put **this server's service
+ * account** on every ticket an end user raises — so the record would say the service desk filed
+ * it against them, and nothing would say who actually asked. `CreatedBy` accepts an override and
+ * keeps it; `LastModBy` does **not** (measured: a write reported it as changed and stored the
+ * session account regardless). That split is right rather than unfortunate — the person authored
+ * it, this server performed it, and the two fields now say exactly that.
+ *
+ * The attribution is only as strong as the identity behind it: verified under `oauth`, and an
+ * unverified claim otherwise. That is the same exposure the phone line has, and design §5 accepts
+ * it for the same reason.
+ */
+export function authorFields(loginId: string | undefined): Record<string, string> {
+  return loginId === undefined || loginId === '' ? {} : { CreatedBy: loginId };
 }
 
 /**
@@ -187,4 +209,61 @@ export async function assertOwnRecordById(
 
   if (record === undefined) throw new NotYourRecordError();
   await assertOwnRecord(deps, context, resolved, record);
+}
+
+/**
+ * A record Ivanti marks read-only, which it then lets you write to anyway.
+ *
+ * A closed ticket carries `ReadOnly: true` — measured across statuses, it is true for `Closed` and
+ * false for `Resolved`, `Active` and `Logged`, which is exactly the lifecycle rule: a resolved
+ * ticket can still be reopened, a closed one is final. `IsInFinalState` looks like the same signal
+ * and is **not** — it reads false even on closed records here.
+ *
+ * Ivanti does not enforce its own flag: a PATCH against a closed incident answered 200 and stored
+ * the change. So this is enforced here or nowhere.
+ */
+export class RecordClosedError extends Error {
+  constructor(what: string) {
+    super(
+      `That ${what} is closed, and closed is final — it cannot be edited, acted on, or ` +
+        'reopened. If there is more to do, raise a new one that references it. (A resolved ' +
+        'record is different: that one can still be reopened. Ivanti will accept a write to a ' +
+        'closed record without complaining, which is why this is refused here.)',
+    );
+    this.name = 'RecordClosedError';
+  }
+}
+
+/**
+ * The check every write to an existing record makes: is it the caller's, and is it still open.
+ *
+ * One read serves both, because both questions are answered by the same record — and a write path
+ * that fetched twice would pay for the ownership check even where the record turns out to be
+ * closed.
+ */
+export async function assertRecordWritable(
+  deps: IvantiToolDeps,
+  context: CallContext,
+  resolved: ResolvedObject,
+  recordId: string,
+): Promise<OdataRecord | undefined> {
+  if (deps.ownRecordsOnly) requirePerson(context);
+
+  const url = deps.connection.transport.routes.record(resolved.entitySet, recordId);
+  const record = await deps.connection.transport
+    .request<OdataRecord>(url)
+    .catch(() => undefined);
+
+  // A record that is not there is the caller's own tool to explain — each one says something
+  // different and better than a generic line here. In `enduser` it is not explained at all,
+  // because "gone" and "not yours" must read identically.
+  if (record === undefined) {
+    if (deps.ownRecordsOnly) throw new NotYourRecordError();
+    return undefined;
+  }
+
+  if (record['ReadOnly'] === true) throw new RecordClosedError(resolved.entity.name);
+
+  if (deps.ownRecordsOnly) await assertOwnRecord(deps, context, resolved, record);
+  return record;
 }

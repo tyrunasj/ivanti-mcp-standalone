@@ -39,19 +39,21 @@ whether one trivial call succeeds or fails.
 | B3 Session and capability tier | ✅ | the `.ashx` payload and multipart, which wait for a caller |
 | B4 Writes and hints | ✅ | — |
 | B5 Workflow surface | ✅ | — |
-| B6 Service requests, attachments | 🟡 | `submit_service_request`, offerings, every attachment write |
+| B6 Service requests, attachments | ✅ | — (the staged-upload pair is a deliberate divergence, below) |
 | B7 enduser and resources | ✅ | — |
 
-**Thirty tools are registered in `full` mode** and **twenty-one in `enduser`**: `get_version`,
-`act_as`, eleven reads, the retrievable pair, five writes, and B5's nine session-gated workflow
-tools. Against the 34-tool inventory below, the six not built are `submit_service_request`,
-`list_request_offerings` and B6's four attachment writes. `act_as` is not in that inventory:
-overlord has no equivalent.
+**Thirty-four tools are registered in `full` mode** and **twenty-five in `enduser`**:
+`get_version`, `act_as`, the read tier, the retrievable pair, the writes, B5's session-gated
+workflow surface, and B6's service-catalog and attachment tools. Two of overlord's 34 are
+deliberately not ported — `request_attachment_upload` and `check_attachment_upload` need a hosted
+upload page and a token store, which this server has no business owning (see B6 below). `act_as`
+is not in that inventory: overlord has no equivalent.
 
 **Six reference documents** are served as MCP resources under `ivanti://reference/` — five in
 `enduser`, which does not get `workflow`.
 
-**B6 is the only stage left**, and it is what unblocks attachments for end users.
+**Every stage is complete.** What remains is A4's Entra row, blocked on a deployment
+prerequisite rather than on code.
 
 ---
 
@@ -718,26 +720,50 @@ effects on retry.
 
 ---
 
-## Stage B6 — Service requests and attachments 🟡 the reads landed in B2
-
-**This stage is what unblocks attachments for end users.** Adding a file needs the multipart
-upload (it sets the parent pair itself) and removing one needs `delete_attachment`; `link_records`
-and `unlink_records` cannot stand in for either, since unlinking an attachment orphans it rather
-than detaching it — see `docs/notes.md`. Both new tools will need the same ownership check the
-read already has: the parent record must be the caller's.
+## Stage B6 — Service requests and attachments ✅ done
 
 **Already built (in B2):** `get_service_request_parameters`, `get_service_request_parameter_options`
-and `get_attachment_details` — all read-only and session-free. **Missing:**
-`submit_service_request`, `list_request_offerings`, and every attachment write
-(`upload_attachment`, `request_attachment_upload`, `check_attachment_upload`, `delete_attachment`),
-which is also where the multipart CSRF convention finally gets a caller.
+and `get_attachment_details` — read-only and session-free.
 
-The quirkiest area, and the one with the most one-way doors.
+**Landed 2026-09-12** as four tools: `list_request_offerings`, `submit_service_request`,
+`upload_attachment` and `delete_attachment`. All four work on the `rest_api_key` surface; only the
+optional top-level catalog view needs a session, and it degrades to the whole catalog while saying
+so.
 
-Attachments must be **staged before the request exists**, and only the ASMX submit binds them —
-REST accepts an `attachments` field and silently drops it. A staging token is **one-shot**: a
-second submit would *move* the file off the first request rather than copy it. Submission success
-says nothing about whether parameters stored, so the request is read back.
+Everything below was measured on the staging tenant that day, with every test record removed.
+
+| | |
+|---|---|
+| the catalog | 132 offerings, **144 KB** of JSON — projected to four fields; the top-level view returns 20 through `ServiceCatalog.asmx` |
+| two ids per offering | `subscriptionId` submits, `templateId` reads parameters. Mixing two offerings' ids creates a request with **none** of the answers on it, reported as success |
+| a refused submit | **HTTP 200** carrying `IsSuccess: false`; nothing created, one missing parameter named at a time |
+| a combo parameter | needs `par-<id>-recId` beside `par-<id>`, or *"validation list's value was submitted without it's identifier"* |
+| `localOffset` | the tenant offset **negated**: `-120` stored the date correctly, `0` stored the previous day, `+120` stored **`0001-01-01`** and still reported success |
+| the attachment upload | stores the bytes, answers with a RecId, and leaves `ParentLink` **null** — the file is on nothing until a second PATCH |
+| an upload against a missing parent | **succeeds**, creating an unreachable file. The parent is read before the bytes are sent |
+| a delete of an id that never existed | **204**, exactly like a real one — so existence is checked before and after |
+
+Verified end to end in `enduser` mode: a file uploaded to the caller's own incident and readable
+back through the relationship (carrying the tenant's own `Incident` spelling, not CSDL's
+`incident`); another person refused on both the upload and the delete with *"No such record is
+available to you."*; a request submitted with a date that stored exactly as sent because the
+offset was discovered and negated automatically; and a second delete of the same attachment
+refused rather than reported as a success.
+
+**Two of overlord's tools are deliberately not ported.** `request_attachment_upload` and
+`check_attachment_upload` hand the user a browser URL, host an upload page, and keep a token store
+with a TTL sweep. That is a product feature of a web service, and this server may be running over
+stdio with no HTTP listener at all — so instead `upload_attachment` takes the bytes as base64,
+capped at 2 MB because they cross the model's context twice. A deployment that wants the hosted
+flow should build it around this server rather than inside it.
+
+**The service-request attachment path is not built either.** Staging a file for a request that
+does not exist yet needs `GetUploadTicket` and a multipart POST to
+`UploadAttachmentHandler.ashx`, then the ASMX `SubmitRequestForUser` to bind it — REST's
+`/ServiceRequest/new` accepts an `attachments` field and silently drops it. Both ASMX endpoints
+were verified reachable with our credential, so this is a known, scoped piece of work rather than
+an unknown; a staging token is one-shot and a second submit would *move* the file off the first
+request, which is the part that needs care.
 
 ---
 

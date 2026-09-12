@@ -18,6 +18,7 @@ const session = (formDef: unknown): IvantiSession =>
     identity: () => Promise.resolve({ role: 'Admin' }),
     identityIfKnown: () => ({ role: 'Admin' }),
     callHandler: () => Promise.reject(new Error('unused')),
+    uploadToHandler: () => Promise.reject(new Error('no handler in this fixture')),
     call: (_service: string, method: string) =>
       Promise.resolve(
         method === 'GetWorkspaceData'

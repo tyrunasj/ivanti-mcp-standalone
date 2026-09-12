@@ -2,6 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, field } from '../../ivanti/connection.fixture.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import type { Logger } from '../../logger.js';
 import { createCountRecordsTool } from './count-records.js';
 import { createGetRecordTool } from './get-record.js';
@@ -22,7 +23,7 @@ const ROW = { RecId: 'abc', IncidentNumber: 10244, Subject: 'Printer', Status: '
 
 const fixture = (responses: Record<string, unknown> = {}) => {
   const { connection, urls } = connectionFixture({ entities: { incident: INCIDENT }, responses });
-  return { deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }, urls };
+  return { deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS }, urls };
 };
 
 const text = (result: CallToolResult): string => {

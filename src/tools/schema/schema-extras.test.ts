@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, entityFixture } from '../../ivanti/connection.fixture.js';
 import type { Logger } from '../../logger.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import { createGetLinkFieldsTool } from './get-link-fields.js';
 import { createGetPickListConstraintsTool } from './get-pick-list-constraints.js';
 
@@ -44,7 +45,7 @@ const deps = (sessionCalls = FORM_CHAIN) => {
     capability: { tier: 'session', identity: { role: 'Admin' } },
     sessionCalls,
   });
-  return { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false };
+  return { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS };
 };
 
 describe('get_link_fields', () => {

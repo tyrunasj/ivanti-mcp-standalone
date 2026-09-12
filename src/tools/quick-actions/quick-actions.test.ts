@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, entityFixture } from '../../ivanti/connection.fixture.js';
 import type { Logger } from '../../logger.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import { createListQuickActionsTool } from './list-quick-actions.js';
 import { createPreviewQuickActionTool } from './preview-quick-action.js';
 import { createRunQuickActionTool } from './run-quick-action.js';
@@ -40,7 +41,7 @@ const deps = (sessionCalls: Record<string, unknown>) => {
     capability: { tier: 'session', identity: { role: 'Admin' } },
     sessionCalls: { GetObjectQuickActions: ACTIONS, ...FORM_CHAIN, ...sessionCalls },
   });
-  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false } };
+  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS } };
 };
 
 const ARGS = { object: 'Incidents', recordId: 'rec-1', actionId: 'act-update' };
@@ -124,6 +125,7 @@ describe('preview_quick_action', () => {
       connection,
       gate: OPEN_GATE,
       ownRecordsOnly: false,
+      actions: OPEN_ACTIONS,
       logger: logger(),
     }).handler(ARGS);
 
@@ -166,6 +168,7 @@ describe('run_quick_action', () => {
         connection: { ...connection, session },
         gate: OPEN_GATE,
         ownRecordsOnly: false,
+      actions: OPEN_ACTIONS,
         logger: logger(),
       }).handler(ARGS),
     );

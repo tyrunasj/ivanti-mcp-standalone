@@ -2,6 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture } from '../../ivanti/connection.fixture.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import type { Logger } from '../../logger.js';
 import { createListBusinessObjectsTool } from './list-business-objects.js';
 
@@ -40,7 +41,7 @@ const WORKSPACES = {
 
 const tool = (options: Parameters<typeof connectionFixture>[0] = {}) => {
   const { connection } = connectionFixture(options);
-  return createListBusinessObjectsTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false });
+  return createListBusinessObjectsTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS });
 };
 
 const ADMIN_TENANT = {

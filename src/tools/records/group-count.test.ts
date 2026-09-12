@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, entityFixture, field } from '../../ivanti/connection.fixture.js';
 import type { Logger } from '../../logger.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import { createGroupCountTool } from './group-count.js';
 import { createPreviewDeleteTool } from './preview-delete.js';
 
@@ -42,7 +43,7 @@ const deps = (
     sessionCalls,
     responses,
   });
-  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false } };
+  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS } };
 };
 
 describe('group_count', () => {

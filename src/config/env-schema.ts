@@ -73,6 +73,20 @@ export const envSchema = z.object({
   OAUTH_IDENTITY_CLAIM: z.string().min(1).optional(),
 
   /**
+   * Which quick actions an `enduser` deployment may run, by name.
+   *
+   * A gate, and empty means none — the same shape as `ENDUSER_BUSINESS_OBJECTS`. Quick actions
+   * are the tenant's own procedures and the right way to close, reopen or cancel something, but
+   * Ivanti scopes the list by role and this server signs in as one account: on an admin key a
+   * stock incident offers **104** of them, including escalation notifications and analyst-only
+   * composites. So the deployment names the handful an end user should have rather than the
+   * server guessing from action names, which are tenant text.
+   *
+   * `full` mode is unaffected: IT staff get the whole surface.
+   */
+  ENDUSER_QUICK_ACTIONS: commaSeparated.default([]),
+
+  /**
    * The Ivanti tenant. Optional while the Ivanti tools are still being built — without it the
    * server runs with only the transport-level tools.
    */

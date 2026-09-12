@@ -411,6 +411,26 @@ bad one.
 
 ---
 
+### Attachments: bytes in a tool call, not a hosted upload page
+
+`overlord-service` attaches a file by handing the user a browser URL: it hosts an upload page,
+keeps a token store with a fifteen-minute TTL, and sweeps what expires. That is the right design
+for a web service that is already serving pages, and the wrong one here — this server may be
+running over **stdio with no HTTP listener at all**, and the transport it serves MCP on is an
+independent axis from whether it hosts anything (design §1).
+
+So `upload_attachment` takes the file as base64 in the tool call, capped at **2 MB**. The cap is
+the honest consequence rather than a tunable: base64 is four characters per three bytes and
+crosses the model's context twice, once written and once in the transcript. A deployment that
+wants the hosted flow should build it *around* this server — mint its own token, collect the file,
+and call `upload_attachment` server-side — rather than have the MCP process grow an HTTP surface
+it otherwise does not need.
+
+`request_attachment_upload` and `check_attachment_upload` are therefore **not ported**, and
+`src/resources/resources.test.ts` fails if a reference document starts promising them.
+
+---
+
 ## 6. Permissions: annotations, not roles
 
 The server implements **no** role/permission system. Auth modes differ in what identity
@@ -657,6 +677,10 @@ Four things follow:
 | Ivanti impersonation / on-behalf-of | Not needed once operations run as the one MCP user |
 | **RFC 7662 token introspection** | **Deferred, not abandoned — see below** |
 | Sharing the Ivanti layer as a package with `overlord-service` | Forked instead (2026-09-11): this server is expected to evolve independently, and shared code would make every divergence a negotiation. Cost — Ivanti discoveries travel manually — is accepted; see plan, "Fork, not shared package" |
+| Trimming `search_knowledge` from `full` mode, where the gate is open and `fulltext_search_object` reaches the same object | Kept (2026-09-12). Its job in `full` is not gating: `Details` is rich-text HTML — one published article is ~2,600 characters of `<FONT>` tags around 400 words — and the generic read returns it raw. The tool strips it to text, truncates with the cut stated, and surfaces `Status` so a Draft is visibly internal. One interface across both modes beats a tool that exists in one of them |
+| Exposing service-request staging ids to the caller, as `overlord-service` does | Staging happens **inside** `submit_service_request` (2026-09-12). A staging id is one-shot and a second submit *moves* the file off the first request rather than copying it; an id that never leaves the server cannot be reused, which designs the footgun out instead of documenting it |
+| Casting an approval through "Approve My Vote" on the approval record | Refused. Ivanti resolves "my" from the signed-in session, so it records **this server's service account** as the decision-maker, and on an admin key the override sibling bypasses the real approver. `vote_on_approval` acts on the `frs_approvalvotetracking` row instead, which already belongs to a named approver, and refuses any row whose `Owner` is not the pinned person |
+| Voting by setting the vote row's `Status` directly | Measured and rejected (2026-09-12): it stores the status, overwrites `VotedBy` with the session account, and leaves the approval `Pending` — the workflow never fires, so it is a vote that counts for nothing |
 
 ### Introspection — deferred
 

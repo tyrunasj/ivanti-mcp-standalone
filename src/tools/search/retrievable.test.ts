@@ -2,6 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture } from '../../ivanti/connection.fixture.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import type { Logger } from '../../logger.js';
 import { createFetchTool } from './fetch.js';
 import { decodeRecordId, encodeRecordId, recordSummary, recordTitle } from './record-identity.js';
@@ -18,7 +19,7 @@ const ENTITIES = { incident: {}, servicereq: {}, change: {} };
 
 const tools = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ entities: ENTITIES, responses });
-  const deps = { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false };
+  const deps = { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS };
   return { urls, search: createSearchTool(deps), fetch: createFetchTool(deps) };
 };
 

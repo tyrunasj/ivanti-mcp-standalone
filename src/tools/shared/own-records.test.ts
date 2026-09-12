@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, field } from '../../ivanti/connection.fixture.js';
 import { OPEN_GATE } from './object-gate.js';
+import { OPEN_ACTIONS } from './action-gate.js';
 import type { Logger } from '../../logger.js';
 import {
   IdentityRequiredError,
@@ -44,7 +45,7 @@ function setup(ownRecordsOnly = true, fields = ['ProfileLink']) {
       employees: { value: [] },
     },
   });
-  return { deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly } };
+  return { deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly, actions: OPEN_ACTIONS } };
 }
 
 function pinned(): CallContext {
@@ -137,6 +138,9 @@ describe('ownershipFields', () => {
     expect(await ownershipFields(deps, pinned(), resolved)).toEqual({
       ProfileLink_RecID: 'E1',
       ProfileLink_Category: 'Employee',
+      // The person authored it; the service account merely performed it. Ivanti would otherwise
+      // put this server's account on every ticket an end user raises.
+      CreatedBy: 'HSanders',
     });
   });
 

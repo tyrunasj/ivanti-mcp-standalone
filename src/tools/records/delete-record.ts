@@ -4,7 +4,7 @@ import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { assertOwnRecordById } from '../shared/own-records.js';
+import { assertRecordWritable } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -39,7 +39,7 @@ export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
         const { entitySet } = target;
         const url = deps.connection.transport.routes.record(entitySet, args.recordId);
 
-        await assertOwnRecordById(deps, context, target, args.recordId);
+        await assertRecordWritable(deps, context, target, args.recordId);
 
         // Ivanti has no 404: asking first turns "already gone" into a clear answer rather than a
         // 400 that reads like a malformed request.

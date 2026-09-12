@@ -26,6 +26,10 @@ const tools = () => {
           field('ProfileLink_RecID'),
           field('ProfileLink_Category'),
         ],
+        relationships: [
+          { name: 'IncidentOwnerEmployee', target: 'employee' },
+          { name: 'IncidentContainsJournal', target: 'journal' },
+        ],
       },
       change: {},
       servicereq: {},
@@ -98,6 +102,37 @@ describe('enduser mode gates every object-taking tool', () => {
     expect(text(result)).toContain('"returned": 1');
     // The answer says whose records these are, rather than implying they are everyone's.
     expect(text(result)).toContain('"scopedTo": "Jon Smith"');
+  });
+
+  it('refuses a relationship that reaches a gated object', async () => {
+    // The allowlist guards the object you NAME; without this it did not guard the object you
+    // REACH. Measured on a live tenant: `IncidentOwnerEmployee` from an allowed incident handed
+    // back the owning analyst's login and email, on a deployment that refuses `Employees`.
+    const { tool, context, actAs } = tools();
+    await actAs();
+
+    const result = await tool('get_related_records').handler(
+      { object: 'Incidents', recordId: 'i1', relationship: 'IncidentOwnerEmployee' },
+      context,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('leads to employee records');
+  });
+
+  it('points at list_notes when a relationship reaches the journal', async () => {
+    // Journals carry staff-internal notes on the caller's own ticket, which `list_notes` filters
+    // and a raw traversal does not.
+    const { tool, context, actAs } = tools();
+    await actAs();
+
+    const result = await tool('get_related_records').handler(
+      { object: 'Incidents', recordId: 'i1', relationship: 'IncidentContainsJournal' },
+      context,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('list_notes');
   });
 
   it('narrows the catalog to the allowlist', async () => {

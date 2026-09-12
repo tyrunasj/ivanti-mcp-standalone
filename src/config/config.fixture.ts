@@ -25,6 +25,7 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   IVANTI_API_KEY: undefined,
   IVANTI_MAX_TIER: undefined,
   ENDUSER_BUSINESS_OBJECTS: [],
+  ENDUSER_QUICK_ACTIONS: [],
   LOG_LEVEL: 'info',
   ...overrides,
 });

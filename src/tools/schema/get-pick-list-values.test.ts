@@ -5,6 +5,7 @@ import { connectionFixture, field } from '../../ivanti/connection.fixture.js';
 import type { Logger } from '../../logger.js';
 import { selectTools } from '../register-tools.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import { createGetPickListValuesTool } from './get-pick-list-values.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
@@ -43,7 +44,7 @@ describe('get_pick_list_values', () => {
     const { connection } = fixture();
 
     const result = body(
-      await createGetPickListValuesTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }).handler({
+      await createGetPickListValuesTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS }).handler({
         object: 'Incidents',
         fields: ['Status'],
       }),
@@ -59,7 +60,7 @@ describe('get_pick_list_values', () => {
     const { connection } = fixture();
 
     const result = body(
-      await createGetPickListValuesTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }).handler({
+      await createGetPickListValuesTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS }).handler({
         object: 'Incidents',
         fields: ['Status', 'Nope'],
       }),
@@ -79,6 +80,7 @@ describe('get_pick_list_values', () => {
       connection,
       gate: OPEN_GATE,
       ownRecordsOnly: false,
+      actions: OPEN_ACTIONS,
       logger: logger(),
     }).handler({ object: 'Employees', fields: ['Status'] });
 

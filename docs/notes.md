@@ -289,14 +289,6 @@ server-side rather than re-read from tool arguments.
 `Authorization: rest_api_key=super-secret-key`. Asserted by a test in `overlord-service`; our
 first placeholder guessed the space form. *(Resolved 2026-09-11.)*
 
-**Never call `/HEAT/AdminUI/`.**
-Those are admin-console services. A tenant API key may carry *any* role and an analyst key is
-refused there, so depending on them works only for customers willing to issue an admin-rights
-key. `overlord-service` removed its two call sites (`AppDesign.asmx/GetBriefBusinessObjects`,
-`AdminAPI.asmx/GetObjectEx`) and keeps a test that drives every descended tool over a stubbed
-fetch and asserts no URL contains that path — so reintroducing it fails in CI rather than only on
-an analyst-key tenant. Worth carrying over verbatim.
-
 **`AuthenticateTenantAPIKey`'s `role` argument is a request, not a guarantee.**
 Asking for a role the account does not hold silently downgrades to its real one. On a live tenant
 in 2026-09 it went further: an account holding several roles (`HasMultipleRoles: True`) answered
@@ -314,10 +306,6 @@ the effective `DisplayName` belongs in the server instructions.
 **The `/HEAT` prefix is usually present but not always.**
 `…/HEAT/api/odata/…` on some tenants, `…/api/odata/…` on others. Probe both once at startup and
 keep whichever answers, rather than making it a config field someone gets wrong.
-
-**Ivanti's single-record GET cannot be trusted with `$select`.**
-It answers **200 with an empty body**. Projection has to happen client-side — which also means a
-projected field the entity lacks is simply absent rather than an error.
 
 **The BO catalog has two sources and neither is strictly better.**
 `Workspace.asmx/GetRoleWorkspaces` is role-scoped and rich (display names, layouts) but needs the
@@ -523,11 +511,9 @@ records did not.
 and unquoted — `CreatedDateTime gt 2026-01-01`; the OData v2 form `datetime'…'` is rejected with a
 400 that blames the field rather than the literal.
 
-**The validation-list endpoint is a POST, and `/rest/Attachment` is a download.**
+**The validation-list endpoint is a POST.**
 `/api/rest/ServiceRequest/{paramRecId}/ValidationList` needs `POST` with a constraints body: a GET
-answers an empty XML array, which looks like "this list has no values". And
-`/api/rest/Attachment?ID=…` streams the **file bytes**, not metadata — attachment details come from
-the `attachment` Business Object, which also carries the parent link and description.
+answers an empty XML array, which looks like "this list has no values".
 
 **A refused key answers `401 ISM_4001`, not a 404.**
 `"Invalid Session key or Authentication token or Host"` — measured with a wrong key and with an
@@ -587,8 +573,9 @@ callers being well behaved. *(Found while building B1, 2026-09-11.)*
 **Three CSRF conventions on one session, differing only by casing and placement.**
 `.asmx` wants `_csrfToken` in the JSON body; `.ashx` handlers want lowercase `_csrftoken` as a
 header with a form-urlencoded body and reply with a JavaScript object literal rather than JSON;
-multipart uploads want `_csrfToken` as a header. Getting any of them wrong looks like an auth
-failure.
+multipart uploads want `_csrfToken` as a **header, mixed-case**. Getting any of them wrong looks
+like an auth failure. *(All three now have callers; the multipart casing was confirmed
+2026-09-12 by the service-request attachment path.)*
 
 **Keyword `search` over-matches, and the extra rows look exactly like real ones.**
 `search: "John"` on Employees returns John Smith, John Davis, John M Doe — **and Scott Johnson**,
@@ -605,6 +592,143 @@ so the full name a person types for themselves routinely fails to `eq`-match it.
 Harold Sanders. Useful — no normalisation needed on either side — but worth knowing rather than
 assuming, since it is the opposite of what `eq` means in several other OData implementations.
 *(Measured 2026-09-12.)*
+
+**`CreatedBy` can be overridden; `LastModBy` cannot.** Ivanti fills both from the session, but a
+create that sends `CreatedBy` keeps it — measured on an incident and on a note. `LastModBy` is
+stamped by the engine on every write even when sent explicitly, and the write **reports it as
+changed** while storing the session account. That split is useful rather than annoying: an end
+user's ticket can say they authored it while `LastModBy` records the account that performed it,
+which is what actually happened. *(Measured 2026-09-12.)*
+
+**A raw field update is not a vote.** Setting an approval vote row's `Status` to `Approved` stored
+the status, overwrote `VotedBy` with the **session account** despite being sent the approver's
+login, and left the parent approval `Pending` — the workflow never fired. The verbs that work are
+the `Approve Vote` / `Deny Vote` quick actions on the **vote row**, not "Approve My Vote" on the
+approval, which resolves "my" from the session and would record the wrong person. Because the row
+already belongs to a named approver, acting on it records *their* decision.
+*(Measured 2026-09-12.)*
+
+**A quick action runs through the form path with an empty form name.** `frs_approvalvotetracking`
+has no form for the Admin role, so `run_quick_action` refuses it — but `SaveDataExecuteAction` with
+`FormParams` and `formName: ''` executed it correctly (`saved: true, status: OK`) and moved the
+row. So the no-form refusal is about not being able to *preview*, not about being unable to run:
+where a run is intended and verified afterwards, the empty form name is enough and the grid path
+is still never needed. *(Measured 2026-09-12.)*
+
+**A vote that registers does not always advance its approval.** The vote row moved to `Approved`
+with a fresh `VotedDateTime`, and the parent `frs_approval` stayed `Pending` — one voter, no
+quorum to wait for, and no change after waiting. Whether that is specific to a 16-month-old demo
+record or general is not established, so `vote_on_approval` reads **both** rows back and says
+plainly when the vote is in but the approval has not moved. *(Measured 2026-09-12.)*
+
+**A service request's attachments are staged before the request exists, and only the ASMX submit
+binds them.** Three calls in order: `GetPackageDataSDA` (a session side effect, and the submit
+refuses staged ids without it having run again immediately beforehand), `GetUploadTicket`, then a
+multipart POST to `SelfService/handlers/UploadAttachmentHandler.ashx` carrying `objectId: ''`,
+`objectType: 'ServiceReq#'`, the ticket and `multiplefiles: true`. The handler answers a
+JavaScript object literal, not JSON: `{ attachmentIds:[ { filename:"x" ,attachmentId:"CE16…" } ] }`
+— unquoted keys, leading commas. `SubmitRequestForUser` then takes `attachmentsToUpload` as
+`[[id, filename]]` pairs, and its two location fields are not what they are named:
+`strCustomerLocation` carries the form name `ServiceReqHeader.New`. Verified end to end — the file
+lands with `ParentLink_Category: 'ServiceReq'` pointing at the new request.
+*(Measured 2026-09-12.)*
+
+**Closed is final, and Ivanti means it everywhere except updates.** A closed record is read-only:
+a DELETE answers 400 and a reopen action answers `saved: true, status: 'error'` while changing
+nothing — both expected, and the second is another outing for the untrustworthy `saved` flag. A
+resolved record is not read-only and reopens normally. The **update** path is the one place Ivanti
+does not hold the line: a PATCH to a closed record is accepted and stored, which is the gap this
+server closes. A test record closed in passing therefore cannot be tidied away — it stays until
+the tenant is reset. *(Measured 2026-09-12.)*
+
+**Ivanti marks a closed record read-only and then writes to it anyway.** A closed incident carries
+`ReadOnly: true` — measured across statuses, true for `Closed` and false for `Resolved`, `Active`
+and `Logged`, which is exactly the lifecycle: a resolved ticket can still be reopened, a closed one
+is final. A PATCH against one answered **200 and stored the change**. `IsInFinalState` looks like
+the same signal and is not: it reads false even on closed records. So the flag is enforced in this
+server or nowhere. *(Measured 2026-09-12.)*
+
+**A file downloads from the same endpoint that deletes it.** `GET /api/rest/Attachment?ID=<recid>`
+streams the bytes with a real `content-type` and `content-disposition`; it is the same path as the
+`DELETE`, differing only in method. Read it as bytes, never as text — decoding a PNG as UTF-8
+produces something that is no longer a PNG. *(Measured 2026-09-12.)*
+
+**An approval step holds no approver.** `frs_approval` has `Owner`/`OwnerTeam` for the step itself;
+the people are on its `frs_approvalvotetracking` rows, where `Owner` is the approver's **login**
+(`OwnerRecId` is null on this tenant), and `PrimaryParentObject` / `PrimaryParentID` name what is
+waiting. So "what needs my approval" is a filter on the vote-tracking object, not on the approval.
+*(Measured 2026-09-12.)*
+
+**An object allowlist guards the object you NAME, not the object you REACH.** `get_related_records`
+gated only its source, so on a tenant whose `ENDUSER_BUSINESS_OBJECTS` refuses `Employees`,
+`IncidentOwnerEmployee` from an allowed incident returned the owning analyst's full employee record
+— login, email, status. Traversal now checks the relationship's *target* against the same gate.
+The same hole exposed staff-internal journal notes on the caller's own ticket, which `list_notes`
+filters by `PublishToWeb` and a raw traversal did not.
+*(Found 2026-09-12 while wiring notes; a gate that is enforced in one direction only is not a
+gate.)*
+
+**A group Business Object's extension name can end in `s`, and the name resolver singularised it
+away.** `journal__notes` — the extension a person writes a note to — became `journal__note`, so
+`list_business_objects` handed out a name that `list_records` then refused, suggesting the name it
+had just been given. The entity set is the CSDL name plus a literal `s` (`journal__notess`), and
+the guess that builds it would not add a second `s` either, so the right graph was never fetched.
+Both directions now try the name as given before the guess. *(Found 2026-09-12.)*
+
+**`Journal` is a group object; a note is its `journal__notes` extension, and the two behave
+differently.** Creating on the group needs `JournalType` by hand and puts the text in `Subject`;
+creating on the extension sets the type itself, defaults `Category` to `Memo`, and has a real
+`NotesBody` field. Reading through the group relationship returns Ivanti's own email traffic —
+**7 of 7** journals on this tenant's incidents are `JournalType: Email` — while querying the
+extension returns notes only. `PublishToWeb` is what separates a reply to the customer from an
+internal note, and it defaults to **false**. *(Measured 2026-09-12.)*
+
+**A knowledge article has an audience, and it is a row-level rule.** Ivanti's self-service portal
+searches only articles whose `Status` is `Published`; Draft, In Review, Reviewed, Expired,
+Archived and Rejected are internal. On this tenant that is 27 published against 18 that are not.
+An object allowlist cannot express "this object, but only these rows", which is why the knowledge
+base is reached through its own tool rather than by allowlisting `FRS_Knowledge`.
+*(Measured 2026-09-12; states from the Ivanti admin docs.)*
+
+**The attachment upload does half the job and reports success.** `POST /api/rest/Attachment`
+stores the bytes and answers `[{FileName, IsUploaded: true, Message: '<RecId>'}]` — and leaves
+`ParentLink_RecID` and `ParentLink_Category` **null**. The file exists, belongs to nothing, and is
+reachable only by searching the attachment table for its name. Linking it is a second request, a
+PATCH of the pair. Worse, the upload does not check the parent: posting against a RecId of all
+zeroes answered 200 and created an attachment, so the parent has to be read *before* the bytes go.
+*(Measured 2026-09-12; overlord recorded the same in May.)*
+
+**A delete of an attachment that never existed answers 204.** So does a real one. `deleted: true`
+means nothing unless the record was read before and after. *(Measured 2026-09-12.)*
+
+**A service-request submit answers HTTP 200 when it refuses.** The envelope is
+`{IsSuccess: false, ErrorText: "...", ServiceRequests: []}` and nothing is created. It names one
+missing parameter at a time, by parameter *name*, so fixing one reveals the next.
+*(Measured 2026-09-12.)*
+
+**A service-request datetime needs the tenant offset NEGATED, and the sign is destructive.**
+Sending `2026-09-30T00:00:00Z` to a UTC+2 tenant stored, by `localOffset`: `-120` →
+`2026-09-30T00:00:00Z` (correct), `0` → `2026-09-29T22:00:00Z` (a day early), `+120` →
+**`0001-01-01T00:00:00`** — the value destroyed, while the submit still reported `IsSuccess: true`.
+The offset in a rendered Ivanti datetime is the one in force *at that instant*, so reading it off
+an old row gets a daylight-saving-shifted answer; the newest row is the one to ask.
+*(Measured 2026-09-12.)*
+
+**A combo service-request parameter needs its option's RecId as a sibling key.** `par-<id>` holds
+the value and `par-<id>-recId` the option; without it the submit is refused with *"'Department'
+validation list's value was submitted without it's identifier."* — Ivanti's own apostrophes.
+*(Measured 2026-09-12.)*
+
+**`strUserId` on a service request is the person's RecId**, and `Frs_CompositeContract_Contacts`
+shares it: the contact row for an employee or an external contact has the *same* RecId as the
+person. So the id `act_as` pins is the one the submit wants, with no second lookup.
+*(Measured 2026-09-12.)*
+
+**An offering carries two different ids.** `strSubscriptionId` is what a submit takes and
+`strRecId` what the parameter tools take. Mixing two offerings' ids creates a request with **none**
+of the answers applied, which Ivanti reports as success — the only signal is an empty
+`parameterTemplateParameterIds` in the reply. The whole catalog is also 144 KB of JSON for 132
+offerings, most of it per-offering rendering hints. *(Measured 2026-09-12.)*
 
 **An attachment's "relationship" to its ticket is just the attachment's own parent fields, so
 unlinking one orphans it.** `IncidentContainsAttachment` and

@@ -79,7 +79,7 @@ describe('createTransport', () => {
   });
 
   it('serialises a body and sets Content-Type only when there is one', async () => {
-    const seen: { headers: Record<string, string>; body?: string }[] = [];
+    const seen: { headers: Record<string, string>; body?: string | FormData }[] = [];
     const t = transport((_u, init) => {
       seen.push({ headers: init.headers, ...(init.body === undefined ? {} : { body: init.body }) });
       return Promise.resolve(reply(200, '{}'));

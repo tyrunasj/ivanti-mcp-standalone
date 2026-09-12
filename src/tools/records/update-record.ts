@@ -11,7 +11,7 @@ import { explainFieldError } from '../shared/explain-field-error.js';
 import { explainRequiredFields } from '../shared/explain-required-fields.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { assertOwnRecordById } from '../shared/own-records.js';
+import { assertRecordWritable } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -50,9 +50,9 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         const target = await resolveObject(deps, args.object);
         const { entity, entitySet } = target;
 
-        // Checked before anything is resolved, let alone written: in `enduser` mode this is the
-        // line between editing your own ticket and editing anyone's.
-        await assertOwnRecordById(deps, context, target, args.recordId);
+        // Before anything is resolved, let alone written: whether it is the caller's, and
+        // whether it is still open. Ivanti happily updates a closed record.
+        await assertRecordWritable(deps, context, target, args.recordId);
 
         const resolved = await resolveValidatedWrite({
           connection: deps.connection,

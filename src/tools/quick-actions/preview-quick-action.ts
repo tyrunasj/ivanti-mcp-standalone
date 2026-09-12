@@ -9,6 +9,8 @@ import { toObjectId } from '../../ivanti/write/validated-write.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { assertRecordWritable } from '../shared/own-records.js';
+import { ActionNotAllowedError } from '../shared/action-gate.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { NO_OP_ACTION_TYPE } from './list-quick-actions.js';
@@ -39,15 +41,24 @@ export function createPreviewQuickActionTool(deps: IvantiToolDeps): ToolDefiniti
       recordId: z.string().describe('The 32-character RecId to preview against.'),
       actionId: z.string().describe('`actionId` from list_quick_actions.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('preview_quick_action', deps.logger, async () => {
-        const { entity } = await resolveObject(deps, args.object);
+        const resolved = await resolveObject(deps, args.object);
+        const { entity } = resolved;
         const objectId = toActionObjectId(toObjectId(entity.name));
+
+        // An end user runs the tenant's procedures on their own record, and only the procedures
+        // the deployment named. Both are no-ops in `full`, where the audience is IT staff.
+        await assertRecordWritable(deps, context, resolved, args.recordId);
 
         const known = await listQuickActions(deps.connection.session, objectId);
         const action = known.find(
           (candidate) => candidate.actionId.toLowerCase() === args.actionId.toLowerCase(),
         );
+        if (action !== undefined && !deps.actions.allows(action.name)) {
+          throw new ActionNotAllowedError(action.name, deps.actions.allowed);
+        }
+
         if (action === undefined) {
           return errorResult(
             `No quick action ${args.actionId} on ${objectId} for this role. Action ids are ` +

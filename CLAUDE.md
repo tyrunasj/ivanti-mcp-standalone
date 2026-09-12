@@ -20,10 +20,11 @@ decided, why, and — in §10 — which alternatives were rejected and for what 
 before proposing architectural changes; several obvious-looking simplifications were already
 considered and turned down for stated reasons.
 
-**Stages B1-B5 are in, and B7's ownership half.** **Thirty tools in `full` mode, twenty-one in
-`enduser`**: `get_version`, `act_as`, the read tier, the retrievable pair `search` / `fetch`, the
-writes, and B5's session-gated workflow surface. B6 is what remains — `submit_service_request`,
-`list_request_offerings` and the four attachment writes — along with the resources tier.
+**Every stage is in.** **Thirty-four tools in `full` mode, twenty-five in `enduser`**:
+`get_version`, `act_as`, the read tier, the retrievable pair `search` / `fetch`, the writes, B5's
+session-gated workflow surface, and B6's service catalog and attachments. Six reference documents
+are served as MCP resources. What is left is A4's Entra row, which is a deployment prerequisite
+rather than code.
 
 **The Ivanti session is a second authentication protocol, not a header.** OData and REST take
 `Authorization: rest_api_key=<key>`; the ASMX services take a SID cookie plus a CSRF token,
@@ -62,6 +63,28 @@ refuses, asserting that none of them fails and none of them requests that path.
 
 **The path needs the `services/` segment**: `/HEAT/AdminUI/services/AppDesign.asmx/…`.
 Without it Ivanti answers 404, which reads as "this tenant has no admin console".
+
+**A service request is refused inside a 200.** `POST /api/rest/ServiceRequest/new` answers
+`{IsSuccess: false, ErrorText}` with HTTP 200 and creates nothing, naming one missing parameter at
+a time. A **combo** parameter needs its option's RecId as a sibling key (`par-<id>-recId`), and a
+**checkbox** stores only the exact lowercase string `'true'`. An offering carries **two different
+ids** — `subscriptionId` submits, `templateId` reads parameters — and mixing two offerings' ids
+creates a request with none of the answers on it, which Ivanti also calls success. Every submit is
+read back and the stored answers compared with what was sent.
+
+**A service-request datetime needs the tenant's UTC offset NEGATED, and the sign is destructive.**
+Measured on a UTC+2 tenant: `-120` stored the value as sent, `0` stored the previous day, and
+`+120` stored **`0001-01-01T00:00:00`** while still reporting success. The offset is discovered
+from the *newest* record Ivanti renders, because the offset in a rendered datetime is the one in
+force at that instant and an old row is a daylight-saving change behind.
+
+**An upload is two halves and Ivanti does one.** `POST /api/rest/Attachment` stores the bytes and
+leaves `ParentLink_RecID`/`ParentLink_Category` null — the file belongs to nothing until a second
+PATCH. It also accepts an upload against a parent that does not exist, so the parent is read
+**before** the bytes are sent; afterwards the caller owns an orphan they were never told about.
+A delete answers **204 for an id that never existed**, so existence is checked before and after.
+`upload_attachment` takes base64 capped at 2 MB: bytes cross the model's context twice, and the
+hosted-upload-page flow overlord has is deliberately not ported — this server may be stdio-only.
 
 **`act_as` says who the conversation is helping, and `enduser` mode will not answer without it.**
 One tool, called once per conversation — not an argument on every tool, which fails silently the
@@ -250,6 +273,68 @@ logged, and an asserted subject is never logged as though it were a fact.
 **Two audience modes, chosen at startup.** `MCP_MODE=full` (IT staff, everything) or
 `enduser`. Tool narrowing happens in `selectTools()` at registration time, never inside a handler:
 an unregistered tool never appears in `tools/list`, so the model cannot call it at all.
+
+**A service request's files are staged before it exists, and go in the submit.** They are collected
+on the offering's form, so there is no record to attach them to yet — `submit_service_request`
+takes them, stages each through `GetPackageDataSDA` → `GetUploadTicket` → the multipart
+`UploadAttachmentHandler.ashx`, and submits through **ASMX**, which is the only path that binds
+them (REST's `/ServiceRequest/new` takes an `attachments` field and drops it silently). Staging
+happens inside the submit deliberately: a staging id is one-shot and a second submit would *move*
+the file off the first request, so an id nothing can reuse cannot do that.
+
+**A vote is cast on the vote row, never on the approval.** "Approve My Vote" resolves "my" from the
+session — this server's service account — and on an admin key its override sibling bypasses the
+real approver. `Approve Vote` on the `frs_approvalvotetracking` row acts on a row that already
+belongs to a named approver, so the decision is theirs; `vote_on_approval` refuses any row whose
+`Owner` is not the pinned person, and that check is the whole safety argument. `VotedBy` still
+records the service account, which is accurate: their decision, this server's hands. A raw status
+update is **not** a vote — it stores nothing meaningful and the workflow never runs.
+
+**An end user's record says they authored it.** Ivanti fills `CreatedBy` from the session, which
+would put this server's service account on every ticket an end user raises. It accepts an override
+and keeps it, so `enduser` writes stamp the pinned person — while `LastModBy`, which cannot be
+overridden, keeps recording the account that performed the write. The two fields then say exactly
+what happened. The attribution is only as strong as the identity behind it: verified under `oauth`,
+an unverified claim otherwise.
+
+**A closed record is read-only, and only this server enforces that.** Ivanti sets `ReadOnly: true`
+on a closed ticket (`Resolved` stays false — it can still be reopened) and then accepts a PATCH to
+it, answering 200. `assertRecordWritable` refuses the write instead, and every write to an existing
+record goes through it. `IsInFinalState` is the plausible-looking field that does **not** work.
+
+**Approvals are read, never cast.** Voting is a quick action and Ivanti resolves "my vote" from the
+signed-in session — this server's single service account — so a vote cast here is recorded as that
+account, and an admin key's override actions bypass the real approver entirely. `list_approvals`
+reads the `frs_approvalvotetracking` rows whose `Owner` is the pinned person's login; deciding
+belongs to the person, in Ivanti.
+
+**The gate applies to what a relationship reaches, not only to what was named.** `get_related_records`
+once checked its source object alone, so an allowlisted incident was a doorway into every object
+related to it — `IncidentOwnerEmployee` returned the owning analyst's login and email on a
+deployment that refuses `Employees`. The relationship's target is now checked against the same
+gate.
+
+**Quick actions are gated by name, not inferred from one.** An `enduser` deployment runs the
+tenant's own procedures — closing, reopening, cancelling — through `run_quick_action`, but only the
+ones `ENDUSER_QUICK_ACTIONS` names, and only on the caller's own open record. Empty means none, the
+same fail-closed shape `ENDUSER_BUSINESS_OBJECTS` has. The names are the tenant's own text
+("Close From Self Service" here), so the server never pattern-matches them: an earlier attempt at
+dedicated `close_ticket` / `reopen_ticket` tools was removed for exactly that reason — it had to
+guess which of 104 actions meant "close", which is the same mistake as teaching one object's field
+names as the general rule. `list_quick_actions` shows only what the gate allows, so a refusal is
+never the first a caller hears of it.
+
+**Row-level audience rules need a tool, because the gate cannot express them.** The allowlist says
+*which objects*; it cannot say *which rows of one*. Two cases: a knowledge article is internal
+unless `Status` is `Published` (27 of 45 here), and a note is internal unless `PublishToWeb` is
+true. So `search_knowledge` and `list_notes` own those filters, and neither object is allowlisted —
+reaching them any other way is refused, which is what keeps the rule un-bypassable.
+
+**A note is an extension, not an object of its own.** `Journal` is a *group* Business Object;
+people write `journal__notes`. Creating on the extension sets `JournalType` itself and has a real
+`NotesBody` field, where the group object needs the type by hand and puts text in `Subject`.
+Reading through the group relationship returns Ivanti's own email traffic — 7 of 7 journals on
+this tenant's incidents are `Email` — so notes are read off the extension instead.
 
 **In `enduser` mode, `ENDUSER_BUSINESS_OBJECTS` is a gate, not a hint.** `createObjectGate` is
 built once at registration and every object-taking tool passes through it — `resolveObject`

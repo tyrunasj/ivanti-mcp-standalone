@@ -43,6 +43,13 @@ export interface IvantiSession {
    * header the handler answers **551**, with it 200.
    */
   callHandler: (handlerPath: string, form: Record<string, string>) => Promise<string>;
+  /**
+   * The **multipart** convention, which is the third casing of the same token: `_csrfToken` as a
+   * header, mixed-case this time, where the form-urlencoded handlers want it lowercase and the
+   * `.asmx` services want it in the body. Content-Type is left to fetch, because only fetch knows
+   * the boundary it generated.
+   */
+  uploadToHandler: (handlerPath: string, form: FormData) => Promise<string>;
   /** Establishes the session if needed and reports who it belongs to. */
   identity: () => Promise<SessionIdentity>;
   /** The identity only if a session already exists — never worth a handshake just to label a row. */
@@ -262,7 +269,47 @@ export function createSession(options: SessionOptions): IvantiSession {
     return text;
   };
 
+  const postMultipart = async (url: string, form: FormData): Promise<string> => {
+    const { sid, csrf } = await ensure();
+
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        Cookie: `SID=${sid}`,
+        // Mixed-case here. The same token is `_csrftoken` on a form-urlencoded handler and
+        // `_csrfToken` in an `.asmx` body — three spellings, one session.
+        _csrfToken: csrf,
+      },
+      body: form,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new IvantiApiError({
+        status: response.status,
+        method: 'POST',
+        url,
+        body: scrubErrorBody(text, apiKey),
+      });
+    }
+    return text;
+  };
+
   return {
+    async uploadToHandler(handlerPath: string, form: FormData): Promise<string> {
+      const url = routes.service(handlerPath);
+      try {
+        return await postMultipart(url, form);
+      } catch (error: unknown) {
+        if (error instanceof IvantiApiError && error.status === 401) {
+          session = undefined;
+          return postMultipart(url, form);
+        }
+        throw error;
+      }
+    },
+
     async callHandler(handlerPath: string, form: Record<string, string>): Promise<string> {
       const url = routes.service(`handlers/${handlerPath}`);
       try {
