@@ -6,6 +6,7 @@ import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { assertOwnRecordById } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -41,9 +42,10 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
             'returns whole records.',
         ),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('get_related_records', deps.logger, async () => {
-        const { entity, entitySet } = await resolveObject(deps, args.object);
+        const resolved = await resolveObject(deps, args.object);
+        const { entity, entitySet } = resolved;
 
         // Checked here rather than by Ivanti: a wrong name answers 404 "No HTTP resource was
         // found", which says nothing about what the right names are.
@@ -61,6 +63,10 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
               ' Full list: get_object_metadata.',
           );
         }
+
+        // Related rows cannot be filtered, so the gate is the parent: someone else's incident
+        // must not become a way to read its tasks and journals.
+        await assertOwnRecordById(deps, context, resolved, args.recordId);
 
         const url = deps.connection.transport.routes.related(entitySet, args.recordId, match);
         const payload = await deps.connection.transport.request<OdataRecord>(url);

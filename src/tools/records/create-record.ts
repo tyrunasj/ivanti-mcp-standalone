@@ -12,6 +12,7 @@ import { explainFieldError } from '../shared/explain-field-error.js';
 import { explainRequiredFields } from '../shared/explain-required-fields.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { ownershipFields } from '../shared/own-records.js';
 import { knownObjectNames } from '../shared/object-names.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -51,9 +52,14 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         .record(z.string(), z.unknown())
         .describe('Field names to values, e.g. { "Subject": "Printer jam", "Status": "Logged" }.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('create_record', deps.logger, async () => {
-        const { entity, entitySet } = await resolveObject(deps, args.object);
+        const target = await resolveObject(deps, args.object);
+        const { entity, entitySet } = target;
+
+        // In `enduser` mode the record is stamped with the caller, and the stamp wins: a ticket
+        // filed under someone else's name is the thing this mode exists to prevent.
+        const owner = await ownershipFields(deps, context, target);
 
         const resolved = await resolveValidatedWrite({
           connection: deps.connection,
@@ -63,7 +69,7 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
           fields: args.fields,
         });
 
-        const body = { ...args.fields, ...resolved.values, ...resolved.companions };
+        const body = { ...args.fields, ...resolved.values, ...resolved.companions, ...owner };
         const url = deps.connection.transport.routes.entitySet(entitySet);
 
         const created = await deps.connection.transport
@@ -104,7 +110,12 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         deps.logger.info('ivanti record created', { object: entitySet });
 
-        return jsonResult({ object: entitySet, recId, record: created });
+        return jsonResult({
+          object: entitySet,
+          recId,
+          ...(Object.keys(owner).length === 0 ? {} : { filedFor: context.pin?.person()?.displayName }),
+          record: created,
+        });
       }),
   });
 }

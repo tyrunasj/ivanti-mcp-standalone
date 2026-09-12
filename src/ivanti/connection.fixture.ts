@@ -8,6 +8,8 @@ import { createAdminCatalog } from './session/admin-catalog.js';
 import type { Capability } from './session/capability.js';
 import { createFormContext } from './session/form-context.js';
 import { createWorkspaceCatalog } from './session/workspaces.js';
+import { createPersonDirectory } from './people/directory.js';
+import { createCustomerLinks } from './people/customer-link.js';
 import type { EntityField, EntityMetadata } from './metadata/csdl.js';
 import { createLogger } from '../logger.js';
 import { createIvantiRoutes } from './odata/url.js';
@@ -141,6 +143,11 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
 
   const workspaces = createWorkspaceCatalog(session, fixtureLogger);
 
+  // The real implementations over the fixture's transport, so a test that scopes a read
+  // exercises the same resolution a tenant would. With no `employee` entity registered there are
+  // no person objects, which is how a test opts out.
+  const directory = createPersonDirectory({ transport, metadata, logger: fixtureLogger });
+
   return {
     urls,
     connection: {
@@ -152,6 +159,14 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
       workspaces,
       admin: createAdminCatalog(session, fixtureLogger),
       forms: createFormContext(session, workspaces, fixtureLogger),
+      people: {
+        directory,
+        customerLinks: createCustomerLinks({
+          transport,
+          personObjects: directory.personObjects,
+          logger: fixtureLogger,
+        }),
+      },
       capability: options.capability ?? { tier: 'odata', reason: 'fixture default' },
     },
   };

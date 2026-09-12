@@ -3,6 +3,8 @@ import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/quer
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
+import { assertOwnRecordById } from '../shared/own-records.js';
+import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -44,7 +46,7 @@ export function createGetAttachmentDetailsTool(deps: IvantiToolDeps): ToolDefini
     inputSchema: {
       attachmentId: z.string().describe('The 32-character RecId of the attachment.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('get_attachment_details', deps.logger, async () => {
         // Read through the Business Object rather than `/rest/Attachment?ID=`: that endpoint
         // streams the file itself, so metadata would have to be sniffed from response headers,
@@ -68,6 +70,29 @@ export function createGetAttachmentDetailsTool(deps: IvantiToolDeps): ToolDefini
           return errorResult(
             `That attachment belongs to a ${parent} record, which this server does not expose. ` +
               `It serves ${deps.gate.allowed.join(', ')}.`,
+          );
+        }
+
+        // An end user may read an attachment only on a record that is theirs. The parent pair
+        // names both the object and the record, which is exactly what the check needs.
+        const parentRecId = row['ParentLink_RecID'];
+        if (deps.ownRecordsOnly) {
+          if (
+            typeof parent !== 'string' ||
+            parent === '' ||
+            typeof parentRecId !== 'string' ||
+            parentRecId === ''
+          ) {
+            return errorResult(
+              'That attachment does not say which record it belongs to, so I cannot tell ' +
+                'whether it is yours. Refusing rather than guessing.',
+            );
+          }
+          await assertOwnRecordById(
+            deps,
+            context,
+            await resolveObject(deps, parent),
+            parentRecId,
           );
         }
 

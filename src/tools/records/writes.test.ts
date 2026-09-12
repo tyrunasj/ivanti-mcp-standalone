@@ -49,7 +49,7 @@ const deps = (responses: Record<string, unknown>) => {
     sessionCalls: FORM_CHAIN,
     responses,
   });
-  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger() } };
+  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false } };
 };
 
 describe('create_record', () => {

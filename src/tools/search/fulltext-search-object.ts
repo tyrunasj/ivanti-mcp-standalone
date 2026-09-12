@@ -6,6 +6,7 @@ import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -41,15 +42,17 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
         .describe('Comma-separated fields to return. Defaults to a compact identifying set.'),
       top: z.number().int().min(1).max(MAX_TOP).optional().describe(`Default ${String(DEFAULT_TOP)}.`),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('fulltext_search_object', deps.logger, async () => {
-        const { entitySet } = await resolveObject(deps, args.object);
+        const resolved = await resolveObject(deps, args.object);
+        const { entitySet } = resolved;
+        const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
 
         const url = withQuery(
           deps.connection.transport.routes.entitySet(entitySet),
           buildQuery({
             search: args.query,
-            filter: args.filter,
+            filter: scoped.filter,
             orderBy: args.orderBy,
             top: args.top ?? DEFAULT_TOP,
             count: true,
@@ -62,6 +65,7 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
 
         return jsonResult({
           object: entitySet,
+          ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
           query: args.query,
           returned: rows.length,
           ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),

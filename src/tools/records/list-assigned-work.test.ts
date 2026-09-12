@@ -18,7 +18,7 @@ const body = (result: CallToolResult): Record<string, never> => {
 
 const tool = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ responses });
-  return { urls, tool: createListAssignedWorkTool({ connection, gate: OPEN_GATE, logger: logger() }) };
+  return { urls, tool: createListAssignedWorkTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }) };
 };
 
 describe('list_assigned_work', () => {

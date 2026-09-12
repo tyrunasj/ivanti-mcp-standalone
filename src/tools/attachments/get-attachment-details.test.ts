@@ -25,7 +25,7 @@ const ROW = {
 
 const tool = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ responses });
-  return { urls, tool: createGetAttachmentDetailsTool({ connection, gate: OPEN_GATE, logger: logger() }) };
+  return { urls, tool: createGetAttachmentDetailsTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }) };
 };
 
 describe('get_attachment_details', () => {

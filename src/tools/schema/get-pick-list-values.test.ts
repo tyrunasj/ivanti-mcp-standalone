@@ -43,7 +43,7 @@ describe('get_pick_list_values', () => {
     const { connection } = fixture();
 
     const result = body(
-      await createGetPickListValuesTool({ connection, gate: OPEN_GATE, logger: logger() }).handler({
+      await createGetPickListValuesTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }).handler({
         object: 'Incidents',
         fields: ['Status'],
       }),
@@ -59,7 +59,7 @@ describe('get_pick_list_values', () => {
     const { connection } = fixture();
 
     const result = body(
-      await createGetPickListValuesTool({ connection, gate: OPEN_GATE, logger: logger() }).handler({
+      await createGetPickListValuesTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }).handler({
         object: 'Incidents',
         fields: ['Status', 'Nope'],
       }),
@@ -78,6 +78,7 @@ describe('get_pick_list_values', () => {
     const result = await createGetPickListValuesTool({
       connection,
       gate: OPEN_GATE,
+      ownRecordsOnly: false,
       logger: logger(),
     }).handler({ object: 'Employees', fields: ['Status'] });
 

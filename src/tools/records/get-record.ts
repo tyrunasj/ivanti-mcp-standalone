@@ -4,6 +4,7 @@ import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { assertOwnRecord } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -37,9 +38,10 @@ export function createGetRecordTool(deps: IvantiToolDeps): ToolDefinition {
         .optional()
         .describe('Comma-separated field names to return, e.g. "Subject,Status,Owner".'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('get_record', deps.logger, async () => {
-        const { entitySet } = await resolveObject(deps, args.object);
+        const resolved = await resolveObject(deps, args.object);
+        const { entitySet } = resolved;
         const url = deps.connection.transport.routes.record(entitySet, args.recordId);
 
         const record = await deps.connection.transport.request<OdataRecord>(url);
@@ -49,6 +51,10 @@ export function createGetRecordTool(deps: IvantiToolDeps): ToolDefinition {
               'which for a read by key means the record is not there.',
           );
         }
+
+        // Read, then refused: a single-record GET cannot be filtered, so ownership is checked
+        // before anything is returned.
+        await assertOwnRecord(deps, context, resolved, record);
 
         const fields = parseFieldList(args.fields);
         return jsonResult({

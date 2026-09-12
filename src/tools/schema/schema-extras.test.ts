@@ -44,7 +44,7 @@ const deps = (sessionCalls = FORM_CHAIN) => {
     capability: { tier: 'session', identity: { role: 'Admin' } },
     sessionCalls,
   });
-  return { connection, gate: OPEN_GATE, logger: logger() };
+  return { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false };
 };
 
 describe('get_link_fields', () => {

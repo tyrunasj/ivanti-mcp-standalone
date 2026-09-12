@@ -20,15 +20,10 @@ decided, why, and — in §10 — which alternatives were rejected and for what 
 before proposing architectural changes; several obvious-looking simplifications were already
 considered and turned down for stated reasons.
 
-**Stages B1-B3 are in.** Fourteen tools: `get_version`, plus the read tier — `list_business_objects`,
-`get_object_metadata`, `get_record`, `list_records`, `count_records`, `get_related_records`,
-`fulltext_search_object`, `list_assigned_work`, `get_service_request_parameters`,
-`get_service_request_parameter_options`, `get_attachment_details`, the retrievable pair
-`search` / `fetch`, `get_pick_list_values`, and the writes — `create_record`, `update_record`,
-`delete_record`, `link_records`, `unlink_records`. In `enduser` mode only `create_record` is
-registered among the writes: editing and deleting wait for B7 to define "own records", and until
-then an end-user deployment must not let anyone change anyone's ticket. Writes and the workflow surface are later
-stages.
+**Stages B1-B5 are in, and B7's ownership half.** **Thirty tools in `full` mode, twenty-one in
+`enduser`**: `get_version`, `act_as`, the read tier, the retrievable pair `search` / `fetch`, the
+writes, and B5's session-gated workflow surface. B6 is what remains — `submit_service_request`,
+`list_request_offerings` and the four attachment writes — along with the resources tier.
 
 **The Ivanti session is a second authentication protocol, not a header.** OData and REST take
 `Authorization: rest_api_key=<key>`; the ASMX services take a SID cookie plus a CSRF token,
@@ -67,6 +62,54 @@ refuses, asserting that none of them fails and none of them requests that path.
 
 **The path needs the `services/` segment**: `/HEAT/AdminUI/services/AppDesign.asmx/…`.
 Without it Ivanti answers 404, which reads as "this tenant has no admin console".
+
+**`act_as` says who the conversation is helping, and `enduser` mode will not answer without it.**
+One tool, called once per conversation — not an argument on every tool, which fails silently the
+first time the model forgets it and then answers for the service account. Matching is on
+`LoginID`, `PrimaryEmail` and `FirstName` + `LastName` across `employee` *and* `externalcontact`;
+never on `DisplayName`, which is assembled and carries the middle name ("John M Doe"), so the full
+name a person types for themselves routinely fails to equal it.
+
+Ivanti's keyword search is a substring match and **over-matches**: `"John"` returns three Johns
+**and Scott Johnson**. Candidates are therefore re-filtered client-side on whole-token equality,
+which drops the stranger and still matches "Katherine Joseph" to "Katherine M Joseph".
+
+The mode decides what the tool *is*: a **gate** in `enduser`, where nothing returns a record until
+it succeeds, and a **preference** in `full`, where it only decides who "my" means — an IT agent
+legitimately works other people's tickets. A `Terminated` record is refused; `New` and `On Leave`
+pin with a flag. Resolving a claim never makes it true: the provenance stays `asserted`.
+
+**The field tying a record to a person is discovered, never named.** An incident uses
+`ProfileLink_RecID`, a service request has that *and* `AlternateContactLink_RecID`, and a change
+has neither — it uses `RequestorLink_RecID`. `customer-link.ts` samples rows and sees which
+`*_Category` actually holds a person object, keeping a name ladder only as a tie-break and for an
+object with no records yet. It also reads the category's **spelling** off those rows, because CSDL
+says `employee` and records say `Employee`.
+
+**Own records has two shapes and one guard.** A tool that composes a filter gets the constraint
+folded in (the caller's filter parenthesised first — `A or B and mine` is a different question);
+a tool that names one record reads it and refuses. The refusal is *"No such record is available to
+you."* whether the record is missing or someone else's, because incident numbers are sequential and
+a message that told them apart would be an enumeration oracle. `src/tools/own-records-guard.test.ts`
+makes **every** registered tool declare whether it may answer without an identity, so a tool added
+later cannot quietly skip the check.
+
+**Reference material lives in MCP resources, not in tool descriptions.** Six documents under
+`ivanti://reference/` — `entity-naming`, `field-names`, `queries`, `write-recipes`, `picklists`
+(session) and `workflow` (full + session). They are built once and shared by reference like the
+tools, and they cost nothing until something reads them.
+
+**What must not move there.** A resource is a *pull*, and plenty of clients never pull one. So
+anything whose absence would **mislead** stays in the tool description that needs it — that
+`$filter` functions are silently dropped, that zero rows means zero records, that a compact field
+set was returned. Descriptions carry what is dangerous not to know; resources carry what is
+expensive to repeat. Today that is ~19k characters of description sent on every `tools/list`
+against ~19k of reference fetched on demand.
+
+**Resources narrow the way tools do**, and for the same reason: a document naming a tool this
+deployment does not register is worse than no document, because a model cannot tell "not
+registered here" from "you called it wrong". `src/resources/resources.test.ts` drives all six
+mode × tier combinations and fails if any registered document names an unregistered tool.
 
 **The server's `instructions` carry the identity.** This process signs in as one account, so
 anything Ivanti resolves "for the current user" answers for that account and not for whoever is
@@ -182,12 +225,23 @@ argument, bound per session by `registerTools`. Only the closure is per session;
 stays shared, so the zod schemas still exist once. `get_version` reports the provenance and never
 the person: a tool that answered *who* would be an identity oracle for anyone who can call it.
 
-**Three rules from design §5 live in `identity-pin.ts`.** A verified session ignores any claim
+**Three rules from design §5 live in `identity-pin.ts`.** A verified session refuses any claim
 outright — not merged, not preferred, or the strong path has a bypass. A session with no token
-pins the first claim. A later, different claim is **refused**, because Ivanti ticket text is
-written by whoever filed the ticket and a conversation can be told to become someone else by a
-record it merely read. An HTTP session also belongs to the subject that opened it: another
-verified subject presenting its own valid token gets 403.
+pins the first person it resolves. A later, *different* person is **refused**, because Ivanti
+ticket text is written by whoever filed the ticket and a conversation can be told to become
+someone else by a record it merely read. An HTTP session also belongs to the subject that opened
+it: another verified subject presenting its own valid token gets 403.
+
+The pin is a **per-conversation object**, not a map keyed by session id — a server is already
+created per connection, so its lifetime *is* the session's, and stdio (which has no session id)
+is covered by the same mechanism as everything else rather than falling through the rules.
+
+On a verified session the lookup term is the **token's** claim, never the caller's argument: a
+claimed name may only choose between records the token already matched. Which claim that is varies
+by provider — Entra sends `preferred_username` or `upn`, most others `email`, and `sub` is opaque —
+so `OAUTH_IDENTITY_CLAIM` pins it and the default is a probe order. An exact match pins silently;
+anything less asks for confirmation **and shows what matched what**, because the token proves who
+the person is and not which record is theirs.
 
 **Every tool call is audited in `registerTools`**, the one place they all pass through: tool,
 session, provenance — and the subject only when an issuer vouched for it. Arguments are never
@@ -283,6 +337,13 @@ probe — and is the only tool marked destructive *and* non-idempotent.
 **`unlink_records` checks the link exists first.** Ivanti accepts an unlink of something that was
 never linked and, on a Contains relationship, severs the target from whichever record *is* its
 parent — damage to a third record that nothing in the reply mentions.
+
+**An attachment is not linked to its ticket; it *contains* the pointer.** `IncidentContainsAttachment`
+is a view over `ParentLink_RecID` + `ParentLink_Category` on the attachment row, so `unlink_records`
+nulls both and leaves a file on no ticket — unreachable, and unmatched by any ownership check, so
+nobody can clean it up. Attaching a file is the multipart upload (it sets the pair); detaching one
+is `delete_attachment`. `link_records` and `unlink_records` are the wrong verbs for attachments in
+both directions, which is why they stay out of `enduser` mode rather than being scoped into it.
 
 **A validated field's allowed values live on a create form, nowhere else.** `$metadata` says a
 field *is* validated and stops there, so `get_pick_list_values` walks

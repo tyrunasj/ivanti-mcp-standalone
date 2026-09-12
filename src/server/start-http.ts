@@ -99,7 +99,14 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): Serve
     return session;
   };
 
-  const handleMcp = createMcpHandler<Session>({ sessions, logger, createSession });
+  const handleMcp = createMcpHandler<Session>({
+    sessions,
+    logger,
+    createSession,
+    ...(config.OAUTH_IDENTITY_CLAIM === undefined
+      ? {}
+      : { directoryClaim: config.OAUTH_IDENTITY_CLAIM }),
+  });
 
   const http = createHttpServer((request, response): void => {
     void (async (): Promise<void> => {

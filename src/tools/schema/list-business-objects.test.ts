@@ -40,7 +40,7 @@ const WORKSPACES = {
 
 const tool = (options: Parameters<typeof connectionFixture>[0] = {}) => {
   const { connection } = connectionFixture(options);
-  return createListBusinessObjectsTool({ connection, gate: OPEN_GATE, logger: logger() });
+  return createListBusinessObjectsTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false });
 };
 
 const ADMIN_TENANT = {

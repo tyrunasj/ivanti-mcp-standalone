@@ -4,6 +4,7 @@ import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { IdentityRequiredError, scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { encodeRecordId, recordRecId, recordSummary, recordTitle } from './record-identity.js';
@@ -40,7 +41,7 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
         .optional()
         .describe(`Business Objects to search. Default: ${DEFAULT_OBJECTS.join(', ')}.`),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('search', deps.logger, async () => {
         const objects = (args.objects ?? [...DEFAULT_OBJECTS]).filter((object) =>
           deps.gate.allows(object),
@@ -56,15 +57,26 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
                 : 'No objects to search.',
           });
         }
+        // Checked once, before the fan-out: inside it, a per-object failure is swallowed into
+        // `skipped` so one unreadable object cannot empty the answer — which would turn "I do
+        // not know who you are" into an empty result set, the one thing this must never be.
+        if (deps.ownRecordsOnly && context.pin?.person() === undefined) {
+          throw new IdentityRequiredError();
+        }
+
         const skipped: { object: string; reason: string }[] = [];
 
         const found = await Promise.all(
           objects.map(async (object) => {
             try {
-              const { entitySet } = await resolveObject(deps, object);
+              const resolved = await resolveObject(deps, object);
+              const { entitySet } = resolved;
+              // Every object in the fan-out is narrowed on its own, because the field that ties
+              // a record to a person is not the same field on each of them.
+              const scoped = await scopeToOwnRecords(deps, context, resolved);
               const url = withQuery(
                 deps.connection.transport.routes.entitySet(entitySet),
-                buildQuery({ search: args.query, top: PER_OBJECT_TOP }),
+                buildQuery({ search: args.query, filter: scoped.filter, top: PER_OBJECT_TOP }),
               );
               const rows = readCollection<OdataRecord>(
                 await deps.connection.transport.request<OdataRecord>(url),

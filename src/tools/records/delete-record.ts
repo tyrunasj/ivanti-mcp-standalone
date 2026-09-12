@@ -4,6 +4,7 @@ import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { assertOwnRecordById } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -32,10 +33,13 @@ export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
       object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
       recordId: z.string().describe('The 32-character RecId of the record to delete.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('delete_record', deps.logger, async () => {
-        const { entitySet } = await resolveObject(deps, args.object);
+        const target = await resolveObject(deps, args.object);
+        const { entitySet } = target;
         const url = deps.connection.transport.routes.record(entitySet, args.recordId);
+
+        await assertOwnRecordById(deps, context, target, args.recordId);
 
         // Ivanti has no 404: asking first turns "already gone" into a clear answer rather than a
         // 400 that reads like a malformed request.

@@ -274,6 +274,143 @@ session. OAuth then upgrades it to "show me my tickets from last month".
 
 ---
 
+### Resolving the person: `act_as`
+
+Identity arrives through **one tool, called once per session**, not through an argument on every
+tool. An argument repeated across fifteen tools fails silently the first time the model forgets
+it — the call then answers for the service account, which is exactly the class of quiet wrong
+answer this server exists to refuse. A single `act_as` fails loudly instead: nothing person-scoped
+works until it has been called.
+
+`act_as` does two different jobs, and the mode decides which:
+
+| Mode | What `act_as` is | If it was never called |
+|---|---|---|
+| `enduser` | a **gate** | every record-returning tool refuses |
+| `full` | a **preference** — who "my" means | everything still works; "my" questions answer for the service account and say so |
+
+An IT agent legitimately works other people's tickets, so gating `full` mode on a pin would be
+wrong. One tool, two jobs, and the description has to differ or one of them is a lie.
+
+**The three keys.** A person is matched on `LoginID`, on `PrimaryEmail`, or on
+`FirstName` + `LastName` — never on `DisplayName`, which is assembled and carries the middle name
+("John M Doe", "Katherine M Joseph"), so the full name a person types for themselves frequently
+does not equal it. Match on the parts; *display* `DisplayName`.
+
+Measured on the staging tenant (2026-09-12):
+
+| | |
+|---|---|
+| Person objects | `employee` (628) and `externalcontact` (2) — both carry all three keys, and both populate them |
+| `eq` comparison | **case-insensitive**: `FirstName eq 'harold' and LastName eq 'SANDERS'` matches Harold Sanders |
+| Keyword `search` | substring, and it **over-matches**: `"John"` returns John Smith, John Davis, John M Doe — and **Scott Johnson** |
+| `Employee.Status` | `Active`, `New`, `On Leave`, `Terminated` |
+| The link | `ProfileLink_RecID` **+** `ProfileLink_Category` (`"Employee"`) — a pin is the **pair**, never the id alone |
+
+`$filter` has no string functions and drops them silently, so partial-name resolution has to go
+through Ivanti's keyword search and then be **re-filtered client-side against the three keys**.
+Presenting the raw search result would ask someone to choose between themselves and a stranger
+whose surname merely contains their first name.
+
+**The ladder:**
+
+1. Exact `eq` on `LoginID`, on `PrimaryEmail`, or on `FirstName`+`LastName` → one row: resolved.
+2. Otherwise keyword search, re-filtered client-side, capped → candidates.
+3. Nothing survives → **refused**.
+
+**How each entry point uses it:**
+
+| Provenance | Behaviour |
+|---|---|
+| `anonymous` | The model asks who the user is and runs the ladder on the answer. One candidate → confirm, then pin. Several → present them and let the user choose. None → refuse. |
+| `verified` | An **exact** match on the configured claim pins silently. Anything less pins only after the user confirms — and the confirmation must **show what was matched against what**. |
+
+The second row is the load-bearing one. The token proves **who the person is**; it does not prove
+**which record is theirs**. Accepting a near-match silently because the token validated is how this
+feature would hand someone a colleague's tickets.
+
+**A candidate list is not a claim.** Only the user's choice pins — otherwise offering three
+candidates would read as three assertions and trip the "a later, different claim is refused" rule
+in `identity-pin.ts`. Once pinned, the pin is final for the session: a wrong choice is corrected by
+starting a new session, and the refusal has to say so or it is not actionable.
+
+**A confident match is still `asserted`.** Resolving a claimed name to a real Employee record does
+not make the claim true — it makes it well-formed. Provenance stays `asserted`, and the audit log
+keeps reading as a claim rather than a fact.
+
+**Refusals, all failing closed:**
+
+| Case | Answer |
+|---|---|
+| No match | Refuse — *"could not find you in Ivanti"*, **never** an empty result, which a model reports as "you have no tickets" |
+| Too many matches | Cap the list, ask for something narrower; never dump the directory |
+| `Status` is `Terminated` | Refuse |
+| `Status` is `New` or `On Leave` | Pin, flagged |
+| Verified token, no Ivanti record | Refuse — and say they cannot file one either, since Ivanti requires a Customer |
+| The same person in both objects | **Open** — see below |
+
+**`act_as` is a directory search, and has to be bounded like one.** Free-text name lookup is
+available to anyone who can reach the server, and in `bearer` mode the token is shared, so one
+holder could otherwise walk the entire employee directory. Minimum query length, a capped candidate
+list, only the fields that disambiguate (the name, and an email only when the email is what
+separates two candidates), and an attempt limit per session. `IPCM_SearchableByName` looks like the
+tenant's own answer to this question and **is not**: it belongs to Ivanti Voice, and most tenants
+never populate it.
+
+**The pin comes before any ticket text.** Rule 3 already refuses a *later*, different claim, which
+covers re-pinning by injection — but not the **first** claim, if the model read a record before the
+user introduced themselves. So in `enduser` mode every record-returning tool requires the pin. No
+untrusted content can then reach the model before the pin exists, and the window closes entirely
+instead of narrowing.
+
+**Two knock-on effects.** The claim to match on varies by provider — Entra sends
+`preferred_username` or `upn`, others `email`, and `sub` is opaque and pairwise — so it needs
+configuring the way `OAUTH_AUDIENCE` turned out to. And `list_saved_searches` today flags 13 of 25
+searches as answering for the service account; once a pin exists, that flag means **"answers for
+someone other than you"**, which is a sharper warning and should read as one.
+
+**Caching, asymmetrically.** A verified session may cache `subject → {recId, category}` and skip the
+confirmation next time — the token subject is a strong key. An asserted session must never cache,
+because that only makes an unverified claim sticky.
+
+**A person is in one object or the other, not both — decided 2026-09-12.** Ivanti does not keep
+the same human as an Employee *and* an External Contact, and the staging tenant agrees: neither
+external contact's login or email appears among the 628 employees. So the pin is one record, and
+"my tickets" is complete. If a tenant ever does produce both, nothing merges them silently — the
+directory searches both objects, so the caller is shown two candidates and picks one, which is a
+visible choice rather than a quiet half-answer.
+
+**One person per MCP session — and the multi-person gateway is deferred, not solved.** The pin
+lives on the session, and a session is whatever the client opened. One person per client — Claude
+Code, Claude Desktop, an IDE — is one session each, which is the normal case and is safe.
+
+A **gateway** is the case that is not: a Slack or Teams bot, or a web chat front end, connecting
+once at start-up and multiplexing everybody's conversations over one session. The first person to
+call `act_as` pins it; the second is either shown the first person's records or refused with a
+conflict. Under `oauth` this cannot arise — every request carries its own token, and
+`sameSubject()` already answers 403 when a second verified subject uses a session it did not open.
+Under `none` and `bearer` there is no per-request principal at all: a shared token is the same
+credential for everyone holding it, so there is nothing to compare.
+
+**Deferred deliberately, because the eventual answer is a better one than a session rule.** A Slack
+or Teams user is *already authenticated* — by Slack, by Teams, by Entra behind it — and the gateway
+knows exactly who sent each message. So the shape of the real solution is not "make the gateway
+open more sessions", it is **let the gateway carry the identity it already has**, per request: the
+gateway authenticates as itself, and asserts a subject on behalf of the person. That is a third
+provenance between the two we have — stronger than `asserted` (a platform authenticated them,
+not the person claiming) and weaker than `verified` (we are trusting the gateway's word, not an
+issuer's signature to us) — and it needs a trust relationship with the gateway that nothing in the
+config expresses yet. Designing it against a real Slack or Teams deployment will produce a better
+answer than designing it now against an imagined one.
+
+Until then the interim position is disclosure, not enforcement: `MCP_MODE=enduser` over HTTP
+without `oauth` logs a startup warning that each person must get their own session. A hard refusal
+was considered and rejected — `bearer` with one session per user is a legitimate deployment, and
+the setting cannot tell the two shapes apart, so refusing would break the good case to stop the
+bad one.
+
+---
+
 ## 6. Permissions: annotations, not roles
 
 The server implements **no** role/permission system. Auth modes differ in what identity

@@ -8,6 +8,7 @@ import type { IvantiToolDeps } from '../shared/deps.js';
 import { explainFieldError } from '../shared/explain-field-error.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -62,15 +63,20 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         .describe(`Rows to return, default ${String(DEFAULT_TOP)}, max ${String(MAX_TOP)}.`),
       skip: z.number().int().min(0).optional().describe('Rows to skip, for paging.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('list_records', deps.logger, async () => {
-        const { entity, entitySet } = await resolveObject(deps, args.object);
+        const resolved = await resolveObject(deps, args.object);
+        const { entity, entitySet } = resolved;
         const top = args.top ?? DEFAULT_TOP;
+
+        // In `enduser` mode this narrows the filter to the caller's own records, and refuses
+        // when nobody has said who that is.
+        const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
 
         const url = withQuery(
           deps.connection.transport.routes.entitySet(entitySet),
           buildQuery({
-            filter: args.filter,
+            filter: scoped.filter,
             search: args.search,
             orderBy: args.orderBy,
             top,
@@ -96,6 +102,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
 
         return jsonResult({
           object: entitySet,
+          ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
           returned: rows.length,
           ...(total === undefined
             ? {}

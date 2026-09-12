@@ -11,4 +11,12 @@ export interface IvantiToolDeps {
   connection: IvantiConnection;
   gate: ObjectGate;
   logger: Logger;
+  /**
+   * Whether a caller may only see their own records — `enduser` mode, and the reason `act_as`
+   * is a gate there rather than a preference.
+   *
+   * A flag rather than the config object: what a tool may do was decided when it was selected,
+   * and handing handlers the configuration would invite them to decide it again, differently.
+   */
+  ownRecordsOnly: boolean;
 }
