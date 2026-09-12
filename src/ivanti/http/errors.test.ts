@@ -57,6 +57,23 @@ describe('isIvantiNotFound', () => {
 });
 
 describe('scrubErrorBody', () => {
+  it('redacts the session internals an unhandled Ivanti exception volunteers', () => {
+    // Measured: a 500 from PreDeleteObject handed the caller SessionId, TenantId, LoginId,
+    // Hostname and ServiceName in the body. The API key was the only thing being looked for.
+    const body =
+      '{"Message":"NullReference","SessionId":"abc-123","TenantId":"t-9","LoginId":"tyrunasj",' +
+      '"Hostname":"IVNT-APP-01","ServiceName":"FRS.Svc","RecId":"0072F54922704AD58D761BE5FCBE5CA7"}';
+
+    const scrubbed = scrubErrorBody(body, 'unused-key');
+
+    for (const leaked of ['abc-123', 't-9', 'tyrunasj', 'IVNT-APP-01', 'FRS.Svc']) {
+      expect(scrubbed).not.toContain(leaked);
+    }
+    // The shape stays readable, and a RecId the caller needs survives.
+    expect(scrubbed).toContain('"SessionId":"[REDACTED]"');
+    expect(scrubbed).toContain('0072F54922704AD58D761BE5FCBE5CA7');
+  });
+
   const KEY = 'super-secret-api-key';
 
   it('redacts the API key wherever it appears', () => {

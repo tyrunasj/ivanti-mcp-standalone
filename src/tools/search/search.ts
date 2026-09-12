@@ -26,7 +26,7 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
       'Name `objects` to look elsewhere — each one costs a request, so name only what you need.\n\n' +
       'This fans out Ivanti\'s per-object keyword search rather than using its cross-object ' +
       'search endpoint, which has been observed to answer an empty array for terms that ' +
-      'per-object search matches dozens of times. An empty result here genuinely means no match.\n\n' +
+      'per-object search matches dozens of times. An empty result means no match IN THE INDEXED TEXT, which is not the same as no such record: this searches the subject, description and notes Ivanti indexes, not every field. A value held in a structured field — a category, a chassis type, a filename — will not match even when it is exactly the word you searched. Say "nothing came up in the ticket text" rather than "there are none", and check with list_records and an `eq` filter before ruling it out.\n\n' +
       'For one known object use fulltext_search_object; for an exact value use list_records.',
     annotations: {
       title: 'Search across Business Objects',

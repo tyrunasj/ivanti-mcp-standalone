@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { buildQuery, MAX_TOP, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
+import { resolveSubject } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -49,20 +50,13 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
     handler: (args, context) =>
       runTool('list_approvals', deps.logger, async () => {
         const pinned = context.pin?.person();
-        const login = args.person ?? pinned?.loginId;
+        // Refuses in `enduser` both when nobody is pinned and when the name is somebody else's.
+        const login = resolveSubject(deps, context, args.person, (person) => person.loginId);
 
         if (login === undefined) {
           return errorResult(
-            'Whose approvals? Call `act_as` with the person you are helping, or pass `person` ' +
-              'with their Ivanti login id.',
-          );
-        }
-
-        // An end user sees their own queue and nobody else's; naming a colleague would turn this
-        // into a way to read who is holding up whose request.
-        if (deps.ownRecordsOnly && pinned !== undefined && login !== pinned.loginId) {
-          return errorResult(
-            `This server answers for ${pinned.displayName} only.`,
+            'Whose approvals? Call `act_as` with the person you are helping, and I will use ' +
+              'them.',
           );
         }
 
@@ -90,7 +84,10 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
           waitingOn: row['PrimaryParentObject'] ?? null,
           reference: row['PrimaryParentID'] ?? null,
           status: row['Status'] ?? null,
-          due: row['DueDateTime'] ?? null,
+          // The vote row's own date, which is NOT the approval's: measured on a live tenant the
+          // two differed by three years, so reporting this one unlabelled turned a 16-month
+          // overdue approval into "due in 2028".
+          voteDue: row['DueDateTime'] ?? null,
           ...(row['Reason'] === null || row['Reason'] === undefined ? {} : { reason: row['Reason'] }),
           ...(row['VotedDateTime'] === null || row['VotedDateTime'] === undefined
             ? {}

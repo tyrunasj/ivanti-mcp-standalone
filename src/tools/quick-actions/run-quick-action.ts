@@ -23,6 +23,15 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
     description:
       'Runs one of Ivanti\'s own actions against a record: escalate it, send the email, close it ' +
       'with a template.\n\n' +
+      'SOME ACTIONS CANNOT BE UNDONE. One whose name contains Close or Cancel usually moves the ' +
+      'record to a final state, after which it refuses every write — no edits, no notes, no ' +
+      'attachments, and no reopening, even where the object also has a Reopen action. Prefer ' +
+      'Resolved over Closed where the tenant offers both, and confirm with the person before ' +
+      'running anything final. A `SendEmail` action reaches real people and cannot be recalled.\n\n' +
+      '`saved: true` MEANS IVANTI ACCEPTED THE COMMIT, NOT THAT THE RECORD CHANGED. An action ' +
+      'whose preconditions the record does not meet commits cleanly and does nothing — a reopen ' +
+      'run against an already-resolved record reported `saved: true` and moved nothing. Read the ' +
+      'record back before telling anyone it worked.\n\n' +
       'THIS REPEATS ITS SIDE EFFECTS ON RETRY. An action that sends an email sends another one; ' +
       'one that creates a child record creates a second. If a call fails ambiguously, check the ' +
       'record before running it again.\n\n' +

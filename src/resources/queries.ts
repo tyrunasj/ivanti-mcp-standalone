@@ -53,6 +53,28 @@ pass \`"*"\`, and they tell you which they did. Ask for \`"*"\` deliberately, on
 All three are normalised to no rows. Prose in \`value\` that is not recognised is treated as an
 error rather than as an empty result.
 
+## Keyword search covers indexed fields, not every field
+
+\`search\` reaches what Ivanti indexes for keyword search — a ticket's subject, description and
+notes. It does **not** reach every text field, and on some objects it reaches very little.
+Measured: \`png\` finds none of this tenant's **344 PNG attachments**, and \`laptop\` finds
+neither computer whose \`ChassisType\` is literally "Laptop".
+
+So an empty keyword result means *"not in the indexed text"*, never *"no such record"*. Before
+telling anyone there are none, retry with \`list_records\` and an \`eq\` filter on the field you
+actually mean. The two questions look identical from the outside and are answered by different
+mechanisms.
+
+## A grouped count can be a partial picture
+
+Grouping a field takes its buckets from that field's validation list — the values a **create
+form** offers — and records can hold values the list no longer offers. Measured: a change's
+statuses bucketed to 12 of 51 records, and an incident's categories to 81 of 547, with every
+bucket correctly flagged \`exact: true\`. The counts were right; the set of buckets was short.
+
+An answer of that shape reports \`total\` and \`unaccounted\` for exactly this reason. A non-zero
+\`unaccounted\` means it is not a breakdown of the whole and must not be presented as one.
+
 ## Counts are a floor, not always a total
 
 \`@odata.count\` sometimes tracks the page rather than the match, and can report 0 alongside real

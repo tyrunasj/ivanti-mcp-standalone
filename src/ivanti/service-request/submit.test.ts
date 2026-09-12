@@ -145,6 +145,62 @@ describe('verifyStoredAnswers', () => {
     expect(check).toEqual({ mismatches: [], missing: [] });
   });
 
+  it('accepts a date stored as the UTC instant of local midnight', async () => {
+    // Ivanti stores `2026-10-01` on a UTC+2 tenant as 2026-09-30T22:00Z. That is correct, and
+    // calling it a mismatch sent a tester into a second, non-idempotent submit to "fix" it.
+    const check = await verifyStoredAnswers(
+      withStored([
+        {
+          ParameterName: 'ValidFrom',
+          ParameterValue: '2026-09-30T22:00:00.0000000Z',
+          SvcReqTmplParamLink_RecID: 'P1',
+        },
+      ]),
+      'sr1',
+      { P1: '2026-10-01' },
+      -120,
+    );
+
+    expect(check).toEqual({ mismatches: [], missing: [] });
+  });
+
+  it('accepts a bare date stored at the offset in force on that date, not today', async () => {
+    // The clocks change between the record the offset was read from and the date being stored:
+    // `2026-11-01` submitted in September stores as 2026-10-31T23:00Z — local midnight at the
+    // winter offset. Correct, and an instant comparison called it a mismatch.
+    const check = await verifyStoredAnswers(
+      withStored([
+        {
+          ParameterName: 'ValidFrom',
+          ParameterValue: '2026-10-31T23:00:00.0000000Z',
+          SvcReqTmplParamLink_RecID: 'P1',
+        },
+      ]),
+      'sr1',
+      { P1: '2026-11-01' },
+      -120,
+    );
+
+    expect(check).toEqual({ mismatches: [], missing: [] });
+  });
+
+  it('still catches a bare date that landed on the wrong day', async () => {
+    const check = await verifyStoredAnswers(
+      withStored([
+        {
+          ParameterName: 'ValidFrom',
+          ParameterValue: '2026-09-28T22:00:00.0000000Z',
+          SvcReqTmplParamLink_RecID: 'P1',
+        },
+      ]),
+      'sr1',
+      { P1: '2026-09-30' },
+      -120,
+    );
+
+    expect(check.mismatches).toHaveLength(1);
+  });
+
   it('catches a date that landed on the wrong day', async () => {
     // What a wrong localOffset does, and the only way to see it: Ivanti reports the submit clean.
     const check = await verifyStoredAnswers(
@@ -157,6 +213,7 @@ describe('verifyStoredAnswers', () => {
       ]),
       'sr1',
       { P1: '2026-09-30T00:00:00Z' },
+      0,
     );
 
     expect(check.mismatches).toEqual([

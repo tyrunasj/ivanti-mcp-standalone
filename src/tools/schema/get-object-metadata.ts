@@ -25,7 +25,11 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
       'Accepts any of the three naming forms: `Incident#`, `Incidents` or `incident`.\n\n' +
       'When `subtypes` comes back, the object is a base type — readable, but **not creatable**. ' +
       'Create one of the subtypes instead.\n\n' +
-      '`validated: true` marks a field whose value comes from a picklist rather than free text. ' +
+      '`validated: true` marks a field whose value comes from a picklist. It is a FLOOR, not a ' +
+      'ceiling: it comes from `$metadata`, and a field without the flag may still be backed by a ' +
+      'list the form knows about — `Employee.Department` carries no flag and has 17 values. If a ' +
+      'field looks enumerable, try get_pick_list_values regardless of the flag rather than paging ' +
+      'the table to find out. ' +
       'Relationships are the names the related-records tool takes.',
     annotations: {
       title: 'Get Business Object metadata',

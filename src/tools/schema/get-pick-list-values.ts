@@ -19,7 +19,13 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
       'list rather than free text; this is how to see that list. Ivanti does not expose it over ' +
       'OData at all, so guessing a value is how filters return nothing and writes get rejected.\n\n' +
       'Some lists CASCADE: the categories depend on the service, the sub-status on the status. ' +
-      'Pass the parent value in `filters` — without it the answer is the unfiltered list, whose ' +
+      'WITHOUT `filters` THE ANSWER IS A SUBSET, NOT THE WHOLE LIST. Measured: an incident\'s ' +
+      'Category answers 5 values unfiltered, 13 under one Service, and its backing object holds ' +
+      '69 — so an unfiltered answer presented as "the categories" understates by an order of ' +
+      'magnitude. Call get_pick_list_constraints first to learn which parents apply, then pass ' +
+      'them here. To enumerate everything a field could ever hold, read its backing object ' +
+      'directly (list_business_objects with includeValidationLists).\n\n' +
+      'Pass the parent value in `filters` — without it the answer is that default subset, whose ' +
       'values may not be valid together. The response echoes what it filtered by, and names any ' +
       'filter the form did not recognise.',
     annotations: {

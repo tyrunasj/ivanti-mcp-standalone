@@ -102,7 +102,18 @@ export function createDownloadAttachmentTool(deps: IvantiToolDeps): ToolDefiniti
         );
 
         const kind = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
-        const kb = Math.max(1, Math.round(bytes.byteLength / 1024));
+        // A 3-byte file reported as "1 KB" reads as a rounding bug and makes the size useless
+        // for judging whether a read is worth the context.
+        const size =
+          bytes.byteLength < 1024
+            ? `${String(bytes.byteLength)} bytes`
+            : `${String(Math.round(bytes.byteLength / 1024))} KB`;
+        // Ivanti stores an unrecognised upload as `application/octet-stream`, so telling the
+        // person "what the file is" needs the name when the type says nothing.
+        const described =
+          kind === '' || kind === 'application/octet-stream'
+            ? `${name.split('.').pop()?.toUpperCase() ?? 'unknown'} file`
+            : kind;
 
         if (TEXT_TYPES.test(kind)) {
           const decoded = new TextDecoder().decode(bytes);
@@ -113,7 +124,7 @@ export function createDownloadAttachmentTool(deps: IvantiToolDeps): ToolDefiniti
               {
                 type: 'text',
                 text:
-                  `${name} (${kind}, ${String(kb)} KB)` +
+                  `${name} (${kind}, ${size})` +
                   (cut > 0 ? ` — first ${String(MAX_TEXT_CHARS)} characters of ${String(decoded.length)}` : '') +
                   `\n\n${shown}`,
               },
@@ -124,22 +135,22 @@ export function createDownloadAttachmentTool(deps: IvantiToolDeps): ToolDefiniti
         if (IMAGE_TYPES.has(kind)) {
           if (bytes.byteLength > MAX_IMAGE_BYTES) {
             return errorResult(
-              `'${name}' is ${String(kb)} KB, over the ${String(MAX_IMAGE_BYTES / 1024)} KB limit ` +
+              `'${name}' is ${size}, over the ${String(MAX_IMAGE_BYTES / 1024)} KB limit ` +
                 'for an image read through a conversation. Open it in Ivanti instead.',
             );
           }
           return {
             content: [
-              { type: 'text', text: `${name} (${kind}, ${String(kb)} KB)` },
+              { type: 'text', text: `${name} (${kind}, ${size})` },
               { type: 'image', data: Buffer.from(bytes).toString('base64'), mimeType: kind },
             ],
           };
         }
 
         return errorResult(
-          `'${name}' is ${kind === '' ? 'of an unknown type' : kind} and ${String(kb)} KB. That ` +
-            'is not a format I can read — it would arrive as bytes with no meaning. Tell the ' +
-            'person what the file is and offer to open it in Ivanti.',
+          `'${name}' is a ${described} of ${size}. That is not a format I can read — it would ` +
+            'arrive as bytes with no meaning. Tell the person what the file is and offer to ' +
+            'open it in Ivanti.',
         );
       }),
   });

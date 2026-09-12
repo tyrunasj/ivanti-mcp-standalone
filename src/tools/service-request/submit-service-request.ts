@@ -10,6 +10,7 @@ import {
   type ParameterAnswer,
 } from '../../ivanti/service-request/submit.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
+import { resolveSubject } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -67,7 +68,15 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
           "Keyed by the parameter's RecId from get_service_request_parameters. A combo is " +
             '`{value, recId}`; everything else is a plain value.',
         ),
-      subject: z.string().optional().describe("Overrides the request's subject."),
+      subject: z
+        .string()
+        .optional()
+        .describe(
+          "Proposed subject. MOST OFFERINGS IGNORE IT — the template computes the subject from " +
+            'itself, and the read-back does not check this field, so a request commonly comes ' +
+            "back titled after the offering whatever is passed here. Do not promise the person " +
+            'their wording will appear.',
+        ),
       person: z
         .string()
         .optional()
@@ -103,22 +112,13 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
     handler: (args, context) =>
       runTool('submit_service_request', deps.logger, async () => {
         const pinned = context.pin?.person();
-        const personRecId = args.person ?? pinned?.recId;
+        const personRecId = resolveSubject(deps, context, args.person, (person) => person.recId);
 
         if (personRecId === undefined) {
           return errorResult(
             'Who is this request for? A service request is filed against a person, so this ' +
               'needs one: call `act_as` with the name of the person you are helping, or pass ' +
               '`person` with their RecId.',
-          );
-        }
-
-        // An end user files for themselves. Naming someone else would let anyone order
-        // equipment, access or a laptop in a colleague's name.
-        if (deps.ownRecordsOnly && pinned !== undefined && personRecId !== pinned.recId) {
-          return errorResult(
-            `This server files requests for ${pinned.displayName} only. Ask them to file their ` +
-              'own, rather than filing it in their name.',
           );
         }
 
@@ -204,6 +204,7 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
           deps.connection.transport,
           submitted.recId,
           answers,
+          localOffset,
         ).catch(() => undefined);
 
         return jsonResult({

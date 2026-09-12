@@ -41,13 +41,24 @@ export function projectRow(
   return Object.keys(projected).length > 0 ? projected : row;
 }
 
+/**
+ * The identifier every other tool needs, kept whether or not it was asked for.
+ *
+ * Naming `fields` used to drop `RecId`, so a caller who narrowed the columns got rows they could
+ * not then read, update, annotate or delete — the id is the only handle the record tools take,
+ * and nothing in the answer carried it. Adding it back costs one key per row and removes a
+ * whole round trip.
+ */
+const ALWAYS = 'RecId';
+
 export function projectRows(
   rows: readonly OdataRecord[],
   fields: readonly string[] | undefined,
   options: ProjectOptions = {},
 ): OdataRecord[] {
   if (fields === undefined || fields.length === 0) return [...rows];
-  return rows.map((row) => projectRow(row, fields, options));
+  const withId = fields.includes(ALWAYS) ? fields : [ALWAYS, ...fields];
+  return rows.map((row) => projectRow(row, withId, options));
 }
 
 /** Splits a comma-separated field list, tolerating the spaces a caller will include. */

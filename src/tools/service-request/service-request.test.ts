@@ -91,6 +91,6 @@ describe('get_service_request_parameter_options', () => {
     const result = body(await options.handler({ parameterId: 'p1' }));
 
     expect(result.returned).toBe(0);
-    expect(String(result.note)).toContain('constraints');
+    expect(String(result.note)).toContain('constrained by another answer');
   });
 });

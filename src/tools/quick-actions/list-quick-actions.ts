@@ -18,6 +18,13 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
       "The buttons Ivanti itself offers on a record — escalate, send this email, close with a " +
       'template, clone. They are the tenant\'s encoded procedures, so running one is usually ' +
       'more correct than reproducing its field updates by hand.\n\n' +
+      'EVERY ACTION DEFINED ON THE OBJECT, not the ones valid for one record. Whether an action ' +
+      'applies depends on that record\'s state and the list does not say — a Reopen action sits ' +
+      'beside a Close action even where the record can only go one way.\n\n' +
+      'READ `actionType` BEFORE CHOOSING BY NAME. `SendEmail` notifies real people and changes ' +
+      'nothing on the record — three actions here are named "…Escalation…" and all three only ' +
+      'send mail, while the one that actually reassigns is called "Reassign Owner Team". ' +
+      '`UpdateObject` and `Composite` change the record.\n\n' +
       'Action ids are per-tenant AND role-scoped, so they are discovered here rather than ' +
       'remembered: one seen on another tenant, or under another role, will not exist.\n\n' +
       `Actions of type \`${NO_OP_ACTION_TYPE}\` are marked \`doesNothingServerSide\` — they are ` +

@@ -20,10 +20,18 @@ export function createPreviewQuickActionTool(deps: IvantiToolDeps): ToolDefiniti
     name: 'preview_quick_action',
     title: 'Preview a quick action',
     description:
-      'Asks Ivanti what an action would do to one record, and what it would ask for, WITHOUT ' +
-      'running it.\n\n' +
-      'Preview before running anything whose name you are inferring. The reply lists any ' +
-      '`prompts` the action needs answered — run_quick_action takes those values.\n\n' +
+      'Asks Ivanti what an action would ASK FOR, without running it.\n\n' +
+      'IT DOES NOT REPORT WHAT THE ACTION WOULD CHANGE. A preview returns the action\'s prompts ' +
+      'and nothing else, so an action that sends an email, one that closes the record for good, ' +
+      'and one that does nothing all preview identically as `wouldPrompt: false`. An empty ' +
+      'preview is not reassurance — it means the action needs no input from you, not that it is ' +
+      'harmless.\n\n' +
+      'Judge the action by its NAME and `actionType` before running it: `SendEmail` notifies ' +
+      'someone and cannot be recalled; `UpdateObject` and `Composite` change the record, and a ' +
+      'name containing Close or Cancel usually moves it to a state nothing can edit or reopen. ' +
+      'When a person asks you to close something, confirm that is what they mean.\n\n' +
+      'The reply lists any `prompts` the action needs answered — run_quick_action takes those ' +
+      'values.\n\n' +
       'A preview needs a form this role can reach: Ivanti honours "do not save" only on the form ' +
       'path, and the other path would RUN the action while reporting itself as a probe. Where ' +
       'there is no form, this refuses rather than guessing.\n\n' +

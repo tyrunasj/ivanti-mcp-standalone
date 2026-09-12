@@ -33,7 +33,9 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
       'category narrows the software. Those parameters carry `constraints`; pass the ' +
       "constraining parameter's `ConstraintFieldName` and the value chosen for it, or the list " +
       'comes back empty or wrong.\n\n' +
-      'An empty list is a real answer: it usually means a constraint has not been supplied yet.',
+      'An empty list has three causes and the answer says which: no constraint supplied for a ' +
+      'dependent list, a constraint whose value matches nothing, or a `search` term that does ' +
+      'not begin an option label.',
     annotations: {
       title: 'Get service request parameter options',
       readOnlyHint: true,
@@ -42,7 +44,15 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
     },
     inputSchema: {
       parameterId: z.string().describe('RecId of the parameter, from get_service_request_parameters.'),
-      search: z.string().optional().describe('Narrow a long list by substring.'),
+      search: z
+        .string()
+        .optional()
+        .describe(
+          'Matches the START of the option LABEL, case-insensitively — not a substring, and ' +
+            'never the value. `Bob` finds "Bob M Levitt"; `Levitt` finds nothing, and so does ' +
+            '`BLevitt`, which is the value you would have to submit. Search by the first word, ' +
+            'or omit it and read the whole list.',
+        ),
       constraints: z
         .array(
           z.object({
@@ -98,11 +108,22 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
         return jsonResult({
           parameterId: args.parameterId,
           returned: options.length,
+          // Three different causes, and the old note named only one of them — so a caller whose
+          // constraints were correct and whose `search` was simply the wrong shape was told to
+          // go on supplying constraints. That cost one tester ~67 calls.
           ...(options.length === 0
             ? {
                 note:
-                  'No options. If this parameter has constraints, supply them — an unconstrained ' +
-                  'dependent list is empty rather than complete.',
+                  args.search !== undefined && args.search !== ''
+                    ? `No options start with '${args.search}'. This matches the beginning of the ` +
+                      'option label, not a substring and not the value — drop `search` and read ' +
+                      'the whole list rather than trying another term.'
+                    : 'No options. If this parameter is constrained by another answer, supply ' +
+                      'that answer — a dependent list is empty rather than complete until its ' +
+                      'parent is given.',
+                ...(args.constraints === undefined || args.constraints.length === 0
+                  ? {}
+                  : { constraintsUsed: args.constraints }),
               }
             : {}),
           options,
