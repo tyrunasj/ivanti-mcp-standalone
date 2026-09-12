@@ -27,6 +27,8 @@ function fakeTransport(documents: Record<string, string | Error>): {
     routes: createIvantiRoutes('https://t', '/HEAT'),
     request: () => Promise.resolve(undefined),
     requestRequired: () => Promise.reject(new Error('unused')),
+    requestMultipart: () => Promise.reject(new Error('unused')),
+    requestBinary: () => Promise.reject(new Error('unused')),
     requestText: (url: string) => {
       calls.push(url);
       const match = Object.entries(documents).find(([fragment]) => url.includes(fragment));

@@ -1,6 +1,7 @@
 import type { IvantiConnection } from '../../ivanti/connect.js';
 import type { Logger } from '../../logger.js';
 import type { ObjectGate } from './object-gate.js';
+import type { ActionGate } from './action-gate.js';
 
 /**
  * What every Ivanti tool needs and nothing more: the connection built at startup, the gate that
@@ -19,4 +20,6 @@ export interface IvantiToolDeps {
    * and handing handlers the configuration would invite them to decide it again, differently.
    */
   ownRecordsOnly: boolean;
+  /** Which of the tenant's own procedures this audience may run. Open in `full`. */
+  actions: ActionGate;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture } from '../../ivanti/connection.fixture.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import type { Logger } from '../../logger.js';
 import { createActAsTool } from './act-as.js';
 import { createSessionPin } from '../../auth/identity-pin.js';
@@ -21,7 +22,7 @@ const HAROLD = {
 
 function setup(responses: Record<string, unknown>, ownRecordsOnly = true) {
   const { connection } = connectionFixture({ entities: { employee: {} }, responses });
-  return createActAsTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly });
+  return createActAsTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly, actions: OPEN_ACTIONS });
 }
 
 const ctx = (identity = ANONYMOUS): CallContext => ({

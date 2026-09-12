@@ -9,6 +9,10 @@ import { createFormContext, type FormContext } from './session/form-context.js';
 import { createWorkspaceCatalog, type WorkspaceCatalog } from './session/workspaces.js';
 import { createPersonDirectory, type PersonDirectory } from './people/directory.js';
 import { createCustomerLinks, type CustomerLinks } from './people/customer-link.js';
+import {
+  createTenantOffsetReader,
+  type TenantOffsetReader,
+} from './service-request/tenant-offset.js';
 
 export interface ConnectOptions {
   baseUrl: string;
@@ -49,6 +53,13 @@ export interface IvantiConnection {
   readonly people: {
     readonly directory: PersonDirectory;
     readonly customerLinks: CustomerLinks;
+  };
+  readonly serviceRequests: {
+    /**
+     * The tenant's UTC offset, which a submitted datetime is converted from and which no
+     * endpoint states. Read lazily: without a date parameter it changes nothing.
+     */
+    readonly tenantOffset: TenantOffsetReader;
   };
   /**
    * What this credential turned out to be able to do. Decided at startup because tools are
@@ -126,6 +137,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     workspaces,
     admin,
     forms: createFormContext(session, workspaces, logger),
+    serviceRequests: { tenantOffset: createTenantOffsetReader(transport, logger) },
     people: {
       directory,
       customerLinks: createCustomerLinks({

@@ -1,0 +1,240 @@
+import { z } from 'zod';
+import { stageAttachment, type StagedAttachment } from '../../ivanti/service-request/stage-attachment.js';
+import {
+  buildSubmitPayload,
+  submitWithAttachments,
+  isChosenOption,
+  ISO_DATETIME,
+  readSubmitReply,
+  verifyStoredAnswers,
+  type ParameterAnswer,
+} from '../../ivanti/service-request/submit.js';
+import type { IvantiToolDeps } from '../shared/deps.js';
+import { errorResult, jsonResult } from '../shared/result.js';
+import { runTool } from '../shared/run-tool.js';
+import { defineTool, type ToolDefinition } from '../tool-definition.js';
+
+/** An answer is either a plain value or a chosen option carrying its identifier. */
+const ANSWER = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.object({
+    value: z.string().describe("The option's value, from get_service_request_parameter_options."),
+    recId: z.string().describe("That option's `recId`. A combo is refused without it."),
+  }),
+]);
+
+/** The same ceiling the attachment tools use, and for the same reason: base64 crosses twice. */
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefinition {
+  return defineTool({
+    name: 'submit_service_request',
+    title: 'Submit service request',
+    description:
+      'Files a service request from the catalog, on behalf of a person.\n\n' +
+      'ORDER: list_request_offerings for the ids, get_service_request_parameters for what the ' +
+      'offering asks, get_service_request_parameter_options for any `combo`, then this. ' +
+      '`subscriptionId` and `templateId` must come from the SAME offering.\n\n' +
+      'ANSWERS ARE KEYED BY PARAMETER RecId. A `combo` parameter must be answered as ' +
+      '`{value, recId}` — a bare value is refused with "validation list\'s value was submitted ' +
+      'without it\'s identifier". A checkbox takes a real boolean; Ivanti stores only the exact ' +
+      'string `true` and silently ignores every other encoding while echoing it back.\n\n' +
+      'IVANTI ANSWERS 200 WHEN IT REFUSES. A refusal names one missing parameter at a time, so ' +
+      'expect another after fixing the first. Nothing is created by a refusal.\n\n' +
+      'ATTACHMENTS GO IN THIS CALL. A service request collects its files on the form, before the ' +
+      'request exists, so they cannot be added afterwards with upload_attachment — pass them as ' +
+      '`attachments` here.\n\n' +
+      'The request is READ BACK and the answers compared with what was sent. A date that landed ' +
+      'on the wrong day or an answer Ivanti dropped is reported — neither is visible in what ' +
+      'Ivanti says about its own submit.',
+    annotations: {
+      title: 'Submit service request',
+      readOnlyHint: false,
+      destructiveHint: false,
+      // Each call files another request; a retry after an unclear failure duplicates it.
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      subscriptionId: z
+        .string()
+        .describe("The offering's `subscriptionId` — NOT its `templateId`."),
+      answers: z
+        .record(z.string(), ANSWER)
+        .describe(
+          "Keyed by the parameter's RecId from get_service_request_parameters. A combo is " +
+            '`{value, recId}`; everything else is a plain value.',
+        ),
+      subject: z.string().optional().describe("Overrides the request's subject."),
+      person: z
+        .string()
+        .optional()
+        .describe(
+          'Who the request is for, as their RecId. Defaults to whoever this conversation is ' +
+            'acting for.',
+        ),
+      attachments: z
+        .array(
+          z.object({
+            filename: z.string().min(1).describe('The name to store the file under, with its extension.'),
+            contentBase64: z.string().min(1).describe('The file, base64-encoded.'),
+            contentType: z.string().optional().describe('MIME type. Defaults to application/octet-stream.'),
+          }),
+        )
+        .optional()
+        .describe(
+          'Files to attach. They are staged and bound as part of this submit — a service ' +
+            'request collects its files on the form, before the request exists, so they cannot ' +
+            'be added afterwards by the ordinary attachment tools. Each is capped at 2 MB, and ' +
+            'base64 costs context twice over.',
+        ),
+      localOffsetMinutes: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          'Only if a date lands wrong. Ivanti wants the tenant UTC offset NEGATED (UTC+2 → ' +
+            '-120); it is discovered automatically, and the sign matters — the positive value ' +
+            'stores year 0001 while reporting success.',
+        ),
+    },
+    handler: (args, context) =>
+      runTool('submit_service_request', deps.logger, async () => {
+        const pinned = context.pin?.person();
+        const personRecId = args.person ?? pinned?.recId;
+
+        if (personRecId === undefined) {
+          return errorResult(
+            'Who is this request for? A service request is filed against a person, so this ' +
+              'needs one: call `act_as` with the name of the person you are helping, or pass ' +
+              '`person` with their RecId.',
+          );
+        }
+
+        // An end user files for themselves. Naming someone else would let anyone order
+        // equipment, access or a laptop in a colleague's name.
+        if (deps.ownRecordsOnly && pinned !== undefined && personRecId !== pinned.recId) {
+          return errorResult(
+            `This server files requests for ${pinned.displayName} only. Ask them to file their ` +
+              'own, rather than filing it in their name.',
+          );
+        }
+
+        const answers = args.answers as Record<string, ParameterAnswer>;
+        const sendsDate = Object.values(answers).some((answer) => {
+          const raw = isChosenOption(answer) ? answer.value : answer;
+          return typeof raw === 'string' && ISO_DATETIME.test(raw);
+        });
+
+        // Only looked up when it can matter: without a datetime the offset changes nothing.
+        let localOffset = args.localOffsetMinutes ?? 0;
+        let offsetNote: string | undefined;
+        if (args.localOffsetMinutes === undefined && sendsDate) {
+          const tenant = await deps.connection.serviceRequests.tenantOffset.get();
+          if (tenant === undefined) {
+            offsetNote =
+              'The tenant UTC offset could not be read, so dates were sent unadjusted and may ' +
+              'have landed a day out. Check the stored values below.';
+          } else {
+            localOffset = -tenant.minutes;
+          }
+        }
+
+        const submitRequest = {
+          transport: deps.connection.transport,
+          subscriptionId: args.subscriptionId,
+          personRecId,
+          answers,
+          localOffset,
+          ...(args.subject === undefined ? {} : { subject: args.subject }),
+        };
+
+        // Staged here rather than by a separate tool, so the staging id never leaves this server.
+        // Ivanti keeps ONE attachment record behind a staging id, so a second submit carrying it
+        // would MOVE the file off the first request — a token nothing can reuse cannot do that.
+        const files = args.attachments ?? [];
+        const staged: StagedAttachment[] = [];
+        for (const file of files) {
+          const bytes = Buffer.from(file.contentBase64, 'base64');
+          if (bytes.byteLength === 0) {
+            return errorResult(
+              `'${file.filename}' decoded to nothing — either it is empty or the value is not ` +
+                'base64. Nothing was submitted.',
+            );
+          }
+          if (bytes.byteLength > MAX_FILE_BYTES) {
+            return errorResult(
+              `'${file.filename}' is ${String(Math.round(bytes.byteLength / 1024))} KB, over the ` +
+                `${String(MAX_FILE_BYTES / 1024 / 1024)} MB limit for a file sent through a tool ` +
+                'call. Nothing was submitted.',
+            );
+          }
+          staged.push(
+            await stageAttachment({
+              session: deps.connection.session,
+              subscriptionId: args.subscriptionId,
+              customerLocation: '',
+              filename: file.filename,
+              bytes,
+              contentType: file.contentType ?? 'application/octet-stream',
+            }),
+          );
+        }
+
+        // Files force the ASMX path: REST takes an `attachments` field and drops it silently.
+        const reply =
+          staged.length > 0
+            ? await submitWithAttachments(deps.connection.session, submitRequest, staged)
+            : await deps.connection.transport.requestRequired<unknown>(
+                deps.connection.transport.routes.rest('ServiceRequest/new'),
+                { method: 'POST', body: buildSubmitPayload(submitRequest) },
+              );
+
+        // Throws on a refusal, which Ivanti delivers inside a 200.
+        const submitted = readSubmitReply(reply, Object.keys(answers).length);
+
+        deps.logger.info('ivanti service request submitted', {
+          requestNumber: submitted.requestNumber,
+        });
+
+        // Ivanti reports a submit as successful without checking that the answers stored.
+        const check = await verifyStoredAnswers(
+          deps.connection.transport,
+          submitted.recId,
+          answers,
+        ).catch(() => undefined);
+
+        return jsonResult({
+          requestNumber: submitted.requestNumber,
+          name: submitted.name ?? null,
+          recId: submitted.recId,
+          filedFor: pinned?.displayName ?? personRecId,
+          answersSent: submitted.parametersSent,
+          answersOnRequest: submitted.parametersOnRequest,
+          ...(staged.length === 0 ? {} : { attached: staged.map((file) => file.filename) }),
+          ...(submitted.parametersOnRequest !== submitted.parametersSent
+            ? {
+                answerNote:
+                  `Ivanti put ${String(submitted.parametersOnRequest)} answers on the request ` +
+                  `while ${String(submitted.parametersSent)} were sent. That count is Ivanti's ` +
+                  'own and includes the template\'s defaults, so it does not confirm yours ' +
+                  'individually — the comparison below does.',
+              }
+            : {}),
+          ...(offsetNote === undefined ? {} : { offsetWarning: offsetNote }),
+          ...(check === undefined || (check.mismatches.length === 0 && check.missing.length === 0)
+            ? { answersVerified: true }
+            : {
+                answersVerified: false,
+                ...(check.mismatches.length > 0 ? { storedDifferently: check.mismatches } : {}),
+                ...(check.missing.length > 0 ? { notStored: check.missing } : {}),
+                warning:
+                  'The request exists, but what Ivanti stored is not what was sent. This was ' +
+                  'found by reading the request back — Ivanti reported the submit as clean.',
+              }),
+        });
+      }),
+  });
+}

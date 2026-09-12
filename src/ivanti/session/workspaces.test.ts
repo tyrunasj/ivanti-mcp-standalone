@@ -25,6 +25,7 @@ const session = (): { session: IvantiSession; calls: string[] } => {
       identity: () => Promise.resolve({ role: 'Admin' }),
       identityIfKnown: () => ({ role: 'Admin' }),
       callHandler: () => Promise.reject(new Error('unused')),
+      uploadToHandler: () => Promise.reject(new Error('no handler in this fixture')),
       call: (servicePath: string, method: string) => {
         calls.push(method);
         if (method === 'GetRoleWorkspaces') return Promise.resolve(WORKSPACES) as Promise<never>;

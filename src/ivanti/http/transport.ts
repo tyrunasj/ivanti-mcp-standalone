@@ -9,13 +9,17 @@ export type FetchLike = (
   init: {
     method: string;
     headers: Record<string, string>;
-    body?: string;
+    /** A string for every JSON call; `FormData` only for a multipart upload. */
+    body?: string | FormData;
     signal?: AbortSignal;
   },
 ) => Promise<{
   ok: boolean;
   status: number;
   text: () => Promise<string>;
+  /** Only a binary read needs these; a fixture that serves no files may omit them. */
+  arrayBuffer?: () => Promise<ArrayBuffer>;
+  headers?: { get: (name: string) => string | null };
 }>;
 
 export interface TransportOptions {
@@ -41,6 +45,23 @@ export interface IvantiTransport {
   /** Same, but the caller requires a body — a 204 is an error. */
   requestRequired: <T>(url: string, init?: RequestInit) => Promise<T>;
   requestText: (url: string, init?: RequestInit) => Promise<string>;
+  /**
+   * A multipart upload on the same credential.
+   *
+   * Separate from `request` because the body must survive untouched — `request` JSON-stringifies
+   * whatever it is given — and because the `Content-Type` header must **not** be set: only fetch
+   * knows the boundary it generated, and supplying the header without it makes Ivanti read the
+   * body as empty.
+   */
+  requestMultipart: <T>(url: string, form: FormData) => Promise<T | undefined>;
+  /**
+   * A file, as bytes rather than as text.
+   *
+   * `requestText` would decode whatever came back as UTF-8, which silently corrupts anything that
+   * is not — a PNG read that way is not a PNG any more. So this reads the body as bytes and hands
+   * back what Ivanti said it was.
+   */
+  requestBinary: (url: string) => Promise<{ bytes: Uint8Array; contentType: string }>;
 }
 
 /**
@@ -70,7 +91,12 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     timeoutMs = DEFAULT_TIMEOUT_MS,
   } = options;
 
-  const send = async (url: string, init: RequestInit): Promise<{ status: number; text: string }> => {
+  const send = async (
+    url: string,
+    init: RequestInit,
+    // A FormData body is passed through as-is and carries its own content type.
+    raw = false,
+  ): Promise<{ status: number; text: string }> => {
     const method = init.method ?? 'GET';
     const started = Date.now();
 
@@ -82,10 +108,14 @@ export function createTransport(options: TransportOptions): IvantiTransport {
           // The header Ivanti wants: `rest_api_key=<key>`, with an equals sign.
           Authorization: `rest_api_key=${apiKey}`,
           Accept: 'application/json',
-          ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...(init.body === undefined || raw ? {} : { 'Content-Type': 'application/json' }),
           ...init.headers,
         },
-        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+        // `raw` means the body is already a wire form fetch understands (FormData); everything
+        // else is a plain object this layer serialises.
+        ...(init.body === undefined
+          ? {}
+          : { body: raw ? (init.body as FormData) : JSON.stringify(init.body) }),
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (cause) {
@@ -154,6 +184,48 @@ export function createTransport(options: TransportOptions): IvantiTransport {
         );
       }
       return parse<T>(text, url, init.method ?? 'GET');
+    },
+
+    async requestMultipart<T>(url: string, form: FormData): Promise<T | undefined> {
+      const { status, text } = await send(
+        url,
+        { method: 'POST', body: form },
+        true,
+      );
+      if (status === 204 || text.trim() === '') return undefined;
+      return parse<T>(text, url, 'POST');
+    },
+
+    async requestBinary(url: string): Promise<{ bytes: Uint8Array; contentType: string }> {
+      const response = await fetchImpl(url, {
+        method: 'GET',
+        headers: { Authorization: `rest_api_key=${apiKey}`, Accept: '*/*' },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+      if (!response.ok) {
+        throw new IvantiApiError({
+          status: response.status,
+          method: 'GET',
+          url,
+          body: scrubErrorBody(await response.text(), apiKey),
+        });
+      }
+
+      if (response.arrayBuffer === undefined) {
+        throw new IvantiApiError(
+          { status: 200, method: 'GET', url },
+          'This transport cannot read a file body',
+        );
+      }
+
+      logger.debug('ivanti file read', { path: pathOf(url), status: response.status });
+
+      return {
+        bytes: new Uint8Array(await response.arrayBuffer()),
+        // What Ivanti says it is. Sniffing would be guessing about somebody's file.
+        contentType: response.headers?.get('content-type') ?? 'application/octet-stream',
+      };
     },
 
     async requestText(url: string, init: RequestInit = {}): Promise<string> {

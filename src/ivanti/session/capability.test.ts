@@ -14,6 +14,7 @@ const session = (identity: IvantiSession['identity']): IvantiSession => ({
   identity,
   identityIfKnown: () => undefined,
       callHandler: () => Promise.reject(new Error('unused')),
+      uploadToHandler: () => Promise.reject(new Error('no handler in this fixture')),
   call: () => Promise.reject(new Error('unused')),
 });
 

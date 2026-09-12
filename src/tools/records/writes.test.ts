@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, entityFixture, field } from '../../ivanti/connection.fixture.js';
 import type { Logger } from '../../logger.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
+import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import { createCreateRecordTool } from './create-record.js';
 import { createDeleteRecordTool } from './delete-record.js';
 import { createUpdateRecordTool } from './update-record.js';
@@ -49,7 +50,7 @@ const deps = (responses: Record<string, unknown>) => {
     sessionCalls: FORM_CHAIN,
     responses,
   });
-  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false } };
+  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS } };
 };
 
 describe('create_record', () => {
@@ -149,6 +150,47 @@ describe('update_record', () => {
 
     // The form is the authority on what is validated, so it is consulted — but only once.
     expect(urls.filter((url) => url.includes('FindFormViewData'))).toHaveLength(1);
+  });
+});
+
+describe('a closed record', () => {
+  it('is refused, because Ivanti marks it read-only and then writes to it anyway', async () => {
+    // Measured: a PATCH against a closed incident answered 200 and stored the change. `ReadOnly`
+    // is true for Closed and false for Resolved, which is the lifecycle rule — a resolved ticket
+    // can still be reopened.
+    const { deps: d } = deps({
+      "incidents('abc')": { RecId: 'abc', Status: 'Closed', ReadOnly: true },
+    });
+
+    const update = await createUpdateRecordTool(d).handler({
+      object: 'Incidents',
+      recordId: 'abc',
+      fields: { Subject: 'edited after closing' },
+    });
+    const remove = await createDeleteRecordTool(d).handler({
+      object: 'Incidents',
+      recordId: 'abc',
+    });
+
+    for (const result of [update, remove]) {
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain('closed');
+    }
+  });
+
+  it('is still writable while merely resolved', async () => {
+    const { deps: d } = deps({
+      "incidents('abc')": { RecId: 'abc', Status: 'Resolved', ReadOnly: false },
+      'PATCH incidents': { RecId: 'abc', Subject: 'reopened work' },
+    });
+
+    const result = await createUpdateRecordTool(d).handler({
+      object: 'Incidents',
+      recordId: 'abc',
+      fields: { Subject: 'reopened work' },
+    });
+
+    expect(result.isError).toBeUndefined();
   });
 });
 

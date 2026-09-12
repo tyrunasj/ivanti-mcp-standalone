@@ -15,6 +15,7 @@ const session = (answer: unknown): { session: IvantiSession; calls: { method: st
       identity: () => Promise.resolve({ role: 'Admin' }),
       identityIfKnown: () => ({ role: 'Admin' }),
       callHandler: () => Promise.reject(new Error('unused')),
+      uploadToHandler: () => Promise.reject(new Error('no handler in this fixture')),
       call: (_service: string, method: string, args: Record<string, unknown> = {}) => {
         calls.push({ method, args });
         return Promise.resolve(answer) as Promise<never>;

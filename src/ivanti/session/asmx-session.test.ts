@@ -22,12 +22,15 @@ const USER = { d: { UserRole: 'ServiceDeskAnalyst', DisplayName: 'Jon Smith' } }
 /** Answers the handshake, then whatever `after` says, recording every call. */
 function tenant(after: (url: string, body: string) => Awaited<ReturnType<FetchLike>>) {
   const calls: { url: string; body: string; headers: Record<string, string> }[] = [];
+  // The session surface never sends FormData, so a non-string body here is a test bug.
+  const bodyOf = (body: string | FormData | undefined): string =>
+    typeof body === 'string' ? body : '';
   const fetchImpl: FetchLike = (url, init) => {
-    calls.push({ url, body: String(init.body ?? ''), headers: init.headers });
+    calls.push({ url, body: bodyOf(init.body), headers: init.headers });
     if (url.includes('AuthenticateTenantAPIKey')) return Promise.resolve(reply(200, { d: SID }));
     if (url.includes('InitializeSession')) return Promise.resolve(reply(200, STATUS));
     if (url.includes('GetUserData')) return Promise.resolve(reply(200, USER));
-    return Promise.resolve(after(url, String(init.body ?? '')));
+    return Promise.resolve(after(url, bodyOf(init.body)));
   };
   return { calls, fetchImpl };
 }

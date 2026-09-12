@@ -38,7 +38,11 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
         const { entity } = await resolveObject(deps, args.object);
         const objectId = toActionObjectId(toObjectId(entity.name));
 
-        const actions = await listQuickActions(deps.connection.session, objectId);
+        // Only what this audience may actually run: offering an end user an action the gate
+        // would refuse is an invitation to a refusal, not a capability.
+        const actions = (await listQuickActions(deps.connection.session, objectId)).filter(
+          (action) => deps.actions.allows(action.name),
+        );
         const search = args.search?.toLowerCase();
         const matching = actions.filter(
           (action) => search === undefined || action.name.toLowerCase().includes(search),

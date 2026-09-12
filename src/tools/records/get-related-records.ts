@@ -64,6 +64,22 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
           );
         }
 
+        // The gate applies to what a relationship REACHES, not only to what the caller named.
+        // Without this, an allowlisted incident is a doorway into every object related to it —
+        // `IncidentOwnerEmployee` handed back the owning analyst's login and email on a tenant
+        // whose allowlist refuses `Employees` outright. Measured 2026-09-12.
+        const target = entity.relationships.find((r) => r.name === match)?.target;
+        if (target !== undefined && !deps.gate.allows(target)) {
+          return errorResult(
+            `${match} leads to ${target} records, which this server does not expose. It serves ` +
+              `${deps.gate.allowed.join(', ')}.` +
+              (/^journal/i.test(target)
+                ? ' Use list_notes for the notes on this record — it returns what was written ' +
+                  'for you, without the internal commentary or Ivanti\'s own email traffic.'
+                : ''),
+          );
+        }
+
         // Related rows cannot be filtered, so the gate is the parent: someone else's incident
         // must not become a way to read its tasks and journals.
         await assertOwnRecordById(deps, context, resolved, args.recordId);

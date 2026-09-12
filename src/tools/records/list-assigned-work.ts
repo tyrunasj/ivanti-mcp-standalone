@@ -3,7 +3,7 @@ import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { buildQuery, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { jsonResult } from '../shared/result.js';
+import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -95,7 +95,11 @@ export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition
     inputSchema: {
       person: z
         .string()
-        .describe('Login id (best), email address, or display name of the assignee.'),
+        .optional()
+        .describe(
+          'Login id (best), email address, or display name of the assignee. Defaults to whoever ' +
+            'this conversation is acting for, if `act_as` has been called.',
+        ),
       includeClosed: z
         .boolean()
         .optional()
@@ -109,14 +113,27 @@ export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition
         .describe('Rows per object, default 5. Totals are reported regardless.'),
       fields: z.string().optional().describe('Comma-separated fields to return per row.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('list_assigned_work', deps.logger, async () => {
-        const person = await findPerson(args.person);
+        const pinned = context.pin?.person();
+        // Whoever the conversation is acting for, unless the caller named someone. A named
+        // person is legitimate here — an analyst looking at a colleague's queue is the job — so
+        // this defaults rather than restricts. `enduser` does not register this tool at all.
+        const asked = args.person ?? pinned?.loginId ?? pinned?.displayName;
+
+        if (asked === undefined) {
+          return errorResult(
+            'Whose work? Name the person — their login id is the reliable one — or call ' +
+              '`act_as` first and I will use them.',
+          );
+        }
+
+        const person = await findPerson(asked);
         if (person === undefined) {
           return jsonResult({
             person: null,
             message:
-              `No employee matches '${args.person}' by login id, email address or display name. ` +
+              `No employee matches '${asked}' by login id, email address or display name. ` +
               'Ivanti stores assignees as login ids; ask the user for theirs rather than guessing.',
           });
         }

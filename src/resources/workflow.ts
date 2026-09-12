@@ -53,7 +53,8 @@ An attachment's relationship to its ticket **is** \`ParentLink_RecID\` + \`Paren
 the attachment row — \`IncidentContainsAttachment\` is a view over those two fields. So
 \`unlink_records\` on an attachment does not detach it, it **orphans** it: measured live, both
 halves go null, the row survives, and the file is left on no ticket, matched by no ownership check
-and reachable by nobody. Removing a file means deleting the attachment record, not unlinking it.
+and reachable by nobody. Removing a file means \`delete_attachment\`, not unlinking it; adding one
+is \`upload_attachment\`, which sets the pair itself.
 
 ## Previewing a delete
 

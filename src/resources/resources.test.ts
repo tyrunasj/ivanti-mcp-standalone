@@ -70,16 +70,9 @@ describe('the reference documents', () => {
   });
 
   it('does not promise tools that are not built yet', () => {
-    // The reference material was ported from a server that has B6. When B6 lands here, delete
-    // the name from this list and say so in the documents — not the other way round.
-    const notBuilt = [
-      'submit_service_request',
-      'list_request_offerings',
-      'upload_attachment',
-      'request_attachment_upload',
-      'check_attachment_upload',
-      'delete_attachment',
-    ];
+    // B6 landed, so most of this list went with it. What remains is the staged-upload pair,
+    // which needs an upload page this server does not host — see docs/initial-design.md.
+    const notBuilt = ['request_attachment_upload', 'check_attachment_upload'];
 
     for (const [mode, tier] of DEPLOYMENTS) {
       for (const resource of deployment(mode, tier).resources) {

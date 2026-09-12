@@ -22,7 +22,11 @@ const MUST_REFUSE: Record<string, Record<string, unknown>> = {
   get_record: { object: 'Incidents', recordId: 'i1' },
   list_records: { object: 'Incidents' },
   count_records: { object: 'Incidents' },
-  get_related_records: { object: 'Incidents', recordId: 'i1', relationship: 'IncidentContainsTask' },
+  get_related_records: {
+    object: 'Incidents',
+    recordId: 'i1',
+    relationship: 'IncidentAssociatedServiceReq',
+  },
   fulltext_search_object: { object: 'Incidents', query: 'printer' },
   get_attachment_details: { attachmentId: 'a1' },
   search: { query: 'printer' },
@@ -31,12 +35,37 @@ const MUST_REFUSE: Record<string, Record<string, unknown>> = {
   create_record: { object: 'Incidents', fields: { Subject: 'stub' } },
   update_record: { object: 'Incidents', recordId: 'i1', fields: { Subject: 'stub' } },
   delete_record: { object: 'Incidents', recordId: 'i1' },
+  // A note is reached through its ticket, so it is refused exactly as the ticket is.
+  list_notes: { object: 'Incidents', recordId: 'i1' },
+  add_note: { object: 'Incidents', recordId: 'i1', note: 'hello' },
+  upload_attachment: {
+    object: 'Incidents',
+    recordId: 'i1',
+    filename: 'x.txt',
+    contentBase64: 'aGVsbG8=',
+  },
+  delete_attachment: { attachmentId: 'a1' },
+  download_attachment: { attachmentId: 'a1' },
+  // Per person: an approval queue belongs to its approver, and a vote is cast on one's own row.
+  list_approvals: {},
+  vote_on_approval: { approvalId: 'v1', decision: 'approve' },
+  // Both of these are per person — the catalog a person sees depends on their entitlements, and
+  // a request is filed against somebody.
+  list_request_offerings: {},
+  submit_service_request: { subscriptionId: 's1', answers: {} },
 };
 
-/** Tools that answer about the *schema*, which is tenant configuration and carries no record. */
+/**
+ * Tools that answer about the *schema*, which is tenant configuration and carries no record.
+ *
+ * `search_knowledge` is here on a judgement rather than a technicality: an article belongs to
+ * nobody, and someone should be able to look for an answer before they say who they are. It
+ * returns published articles only in this mode, which is what the self-service portal shows.
+ */
 const CARRIES_NO_RECORD = new Set([
   'get_version',
   'act_as',
+  'search_knowledge',
   'list_business_objects',
   'get_object_metadata',
   'get_pick_list_values',
@@ -61,7 +90,9 @@ function enduserTools() {
           field('ProfileLink_RecID'),
           field('ProfileLink_Category'),
         ],
-        relationships: [{ name: 'IncidentContainsTask', target: 'task' }],
+        // A relationship to an ALLOWED object, so what is under test here is the identity
+        // check rather than the gate — the gate on relationship targets has its own test.
+        relationships: [{ name: 'IncidentAssociatedServiceReq', target: 'servicereq' }],
       },
       change: {},
       servicereq: {},
@@ -119,6 +150,31 @@ describe('enduser mode never answers with records before it knows who is asking'
 
       expect(result.isError, `${name} answered without an identity`).toBe(true);
       expect(text(result), `${name} did not explain itself`).toContain('act_as');
+    }
+  });
+
+  it('leaves no tool answering for a named person when nobody has identified themselves', () => {
+    // The blind spot the other tests cannot see: a tool that takes a `person` argument "works"
+    // without a pin, so it never trips the no-identity path above. None of these may be
+    // registered in enduser mode unless it also refuses a person who is not the pinned one —
+    // the rule submit_service_request already follows.
+    const { tools } = enduserTools();
+    const takesAPerson = [
+      'list_assigned_work',
+      'list_request_offerings',
+      'submit_service_request',
+      'list_approvals',
+      'vote_on_approval',
+    ];
+    const registered = new Set(tools.map((tool) => tool.name));
+
+    for (const name of takesAPerson) {
+      if (!registered.has(name)) continue;
+      expect(
+        MUST_REFUSE[name] !== undefined,
+        `${name} takes a person and is registered in enduser mode, so it must be in ` +
+          'MUST_REFUSE — and its handler must refuse a person other than the pinned one.',
+      ).toBe(true);
     }
   });
 

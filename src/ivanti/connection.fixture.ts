@@ -10,6 +10,7 @@ import { createFormContext } from './session/form-context.js';
 import { createWorkspaceCatalog } from './session/workspaces.js';
 import { createPersonDirectory } from './people/directory.js';
 import { createCustomerLinks } from './people/customer-link.js';
+import { createTenantOffsetReader } from './service-request/tenant-offset.js';
 import type { EntityField, EntityMetadata } from './metadata/csdl.js';
 import { createLogger } from '../logger.js';
 import { createIvantiRoutes } from './odata/url.js';
@@ -105,6 +106,17 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
       }
       return Promise.resolve(payload) as Promise<never>;
     },
+    // Multipart uploads answer from the same map, keyed `POST <fragment>` like any other write.
+    requestMultipart: (url: string) => Promise.resolve(answer(url, 'POST')) as Promise<never>,
+    // Files answer from the same map: the value is the text to hand back as bytes.
+    requestBinary: (url: string) => {
+      const payload = answer(url, 'GET');
+      const text = typeof payload === 'string' ? payload : '';
+      return Promise.resolve({
+        bytes: new TextEncoder().encode(text),
+        contentType: 'text/plain',
+      });
+    },
     requestText: (url: string) => {
       const payload = answer(url);
       return Promise.resolve(typeof payload === 'string' ? payload : '');
@@ -137,6 +149,7 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
       return Promise.resolve(match[1]) as Promise<never>;
     },
     callHandler: () => Promise.reject(new Error('no handler in this fixture')),
+    uploadToHandler: () => Promise.reject(new Error('no handler in this fixture')),
     identity: () => Promise.resolve(identity),
     identityIfKnown: () => identity,
   };
@@ -159,6 +172,7 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
       workspaces,
       admin: createAdminCatalog(session, fixtureLogger),
       forms: createFormContext(session, workspaces, fixtureLogger),
+      serviceRequests: { tenantOffset: createTenantOffsetReader(transport, fixtureLogger) },
       people: {
         directory,
         customerLinks: createCustomerLinks({

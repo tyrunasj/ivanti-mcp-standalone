@@ -20,7 +20,46 @@ const RESPONSES: Record<string, unknown> = {
   servicereqs: { value: [] },
   changes: { value: [] },
   employees: { value: [{ RecId: 'e1', LoginID: 'JSmith', DisplayName: 'Jon Smith' }] },
-  attachments: { value: [{ RecId: 'a1', ATTACHNAME: 'work-order.png' }] },
+  attachments: { value: [{ RecId: 'a1', ATTACHNAME: 'work-order.log' }] },
+  // The fixture serves a file body as text, which is what download_attachment reads.
+  'rest/Attachment': 'log line one',
+  'POST journal__notess': { RecId: 'n1', NotesBody: 'hello', PublishToWeb: false },
+  frs_approvalvotetrackings: {
+    value: [
+      {
+        RecId: 'v1',
+        // The guard runs without an identity, so the vote is refused before Ivanti is reached.
+        Owner: 'somebody-else',
+        Status: 'Pending',
+        PrimaryParentObject: 'ServiceReq',
+        PrimaryParentID: '10002',
+      },
+    ],
+  },
+  frs_knowledges: {
+    value: [{ KnowledgeNumber: 10052, Title: 'VPN error 413', Status: 'Published', Details: '<p>Reconnect.</p>' }],
+  },
+  journal__notess: { value: [{ RecId: 'n1', NotesBody: 'hello', PublishToWeb: false }] },
+  // The multipart upload answers with the new attachment's RecId in `Message`, and leaves the
+  // parent link unset — the tool patches it afterwards.
+  'POST Attachment': [{ FileName: 'x.txt', IsUploaded: true, Message: 'A'.repeat(32) }],
+  'PATCH attachments': { code: 'ISM_2000' },
+  'DELETE attachments': { code: 'ISM_2000' },
+  'Template/': [
+    { strSubscriptionId: 'sub-1', strRecId: 'tpl-1', strName: 'New Laptop', strDescription: 'A laptop' },
+  ],
+  'POST ServiceRequest/new': {
+    IsSuccess: true,
+    ErrorText: '',
+    ServiceRequests: [
+      {
+        strRequestRecId: 'sr1',
+        strRequestNum: '10219',
+        strName: 'New Laptop',
+        parameterTemplateParameterIds: {},
+      },
+    ],
+  },
   servicereqtemplateparams: { value: [{ RecId: 'p1', Name: 'StartDate' }] },
   ValidationList: [['r1', 'Accounting']],
   // The writes: a create answers with the stored record, a patch and a delete with nothing.
@@ -58,6 +97,23 @@ const ARGUMENTS: Record<string, Record<string, unknown>> = {
   create_record: { object: 'Incidents', fields: { Subject: 'stub' } },
   update_record: { object: 'Incidents', recordId: 'abc', fields: { Subject: 'stub' } },
   delete_record: { object: 'Incidents', recordId: 'abc' },
+  close_ticket: { object: 'Incidents', recordId: 'abc' },
+  reopen_ticket: { object: 'Incidents', recordId: 'abc' },
+  search_knowledge: { query: 'vpn' },
+  list_approvals: { person: 'JSmith' },
+  vote_on_approval: { approvalId: 'v1', decision: 'approve' },
+  list_notes: { object: 'Incidents', recordId: 'abc' },
+  add_note: { object: 'Incidents', recordId: 'abc', note: 'hello' },
+  upload_attachment: {
+    object: 'Incidents',
+    recordId: 'abc',
+    filename: 'x.txt',
+    contentBase64: 'aGVsbG8=',
+  },
+  delete_attachment: { attachmentId: 'a1' },
+  download_attachment: { attachmentId: 'a1' },
+  list_request_offerings: { person: 'e1' },
+  submit_service_request: { subscriptionId: 'sub-1', answers: {}, person: 'e1' },
   link_records: {
     object: 'Incidents',
     recordId: 'abc',
@@ -80,6 +136,7 @@ describe('every tool, over a stubbed tenant', () => {
       entities: {
         incident: { relationships: [{ name: 'IncidentContainsTask', target: 'task' }] },
         employee: {},
+        journal__notes: {},
       },
       responses: RESPONSES,
       capability: { tier: 'session', identity: { role: 'ServiceDeskAnalyst' } },
@@ -107,7 +164,11 @@ describe('every tool, over a stubbed tenant', () => {
         },
         GetFormDefaultData: { Data: { Objects: { t1: { Values: { Status: '' } } } } },
         GetFormValidationListData: { Status: { FieldMap: { Status: 0 }, Data: [['Active']] } },
-        GetObjectQuickActions: [['act-1', 'Escalate', 'UpdateObject']],
+        GetObjectQuickActions: [
+          ['act-1', 'Escalate', 'UpdateObject'],
+          ['act-2', 'Close From Self Service', 'UpdateObject'],
+          ['act-3', 'Reopen Incident (Self Service)', 'UpdateObject'],
+        ],
         SaveDataExecuteAction: { saved: true },
         PreDeleteObject: { errors: { warningMessages: ['contains Journal records'] } },
         GetBriefBusinessObjects: new Error('404 — not an administrator'),
@@ -121,10 +182,19 @@ describe('every tool, over a stubbed tenant', () => {
       ivanti: connection,
     });
 
+    /**
+     * Tools that refuse before reaching Ivanti at all, for a reason that has nothing to do with
+     * the admin console: they cast or scope a decision for a person, and no person is pinned
+     * here. The assertion that matters for them is the one below — that no AdminUI URL was
+     * requested — which holds precisely because they refused.
+     */
+    const refusesWithoutAnIdentity = new Set(['vote_on_approval']);
+
     for (const tool of tools) {
       const args = ARGUMENTS[tool.name];
       expect(args, `no arguments defined for ${tool.name}`).toBeDefined();
       const result = await tool.handler(args ?? {});
+      if (refusesWithoutAnIdentity.has(tool.name)) continue;
       expect(result.isError, `${tool.name} failed without the admin console`).not.toBe(true);
     }
 
@@ -134,7 +204,7 @@ describe('every tool, over a stubbed tenant', () => {
 
   it('reaches Ivanti only through the two documented surfaces', async () => {
     const { connection, urls } = connectionFixture({
-      entities: { incident: {}, employee: {} },
+      entities: { incident: {}, employee: {}, journal__notes: {} },
       responses: RESPONSES,
     });
 

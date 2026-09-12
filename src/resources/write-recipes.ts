@@ -39,6 +39,16 @@ a pair, and a value written without the identifier can be accepted and stored as
 that is not allowed under the parents being written is refused **before** anything is written, with
 the list of what is allowed. See \`ivanti://reference/picklists\`.
 
+## Attaching a file
+
+\`upload_attachment\` takes the file as base64 and does the two halves Ivanti splits: it stores the
+bytes, then sets the \`ParentLink\` pair that makes the file belong to the record. The upload alone
+leaves it belonging to nothing.
+
+The parent is checked **before** the bytes are sent, because Ivanti accepts an upload against a
+record that does not exist and the resulting file is reachable from nothing. Removing a file is
+\`delete_attachment\` — there is no detach that keeps it.
+
 ## Every write is read back
 
 A write is not reported as done until the record has been re-read and the values checked. Ivanti's
