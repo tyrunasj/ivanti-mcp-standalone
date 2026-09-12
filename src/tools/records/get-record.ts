@@ -4,7 +4,11 @@ import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { assertOwnRecord } from '../shared/own-records.js';
+import {
+  assertOwnRecord,
+  hideMissingRecord,
+  missingRecordMessage,
+} from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { ALL_FIELDS } from '../../ivanti/odata/compact-fields.js';
@@ -22,7 +26,8 @@ export function createGetRecordTool(deps: IvantiToolDeps): ToolDefinition {
       '(measured across this tenant), so it cannot tell you whether a ticket is still open. ' +
       '`Status` and `ReadOnly` can.\n\n' +
       'Pass `fields` on every call you can. A bare incident is ~180 fields and ~10 KB of JSON, ' +
-      'and you almost never need all of it. Names the object does not have are ignored, because ' +
+      'and you almost never need all of it. Names the object does not have come back in ' +
+      '`ignoredFields` with a warning — never silently dropped — because ' +
       'the narrowing happens here rather than in Ivanti — Ivanti answers a projected ' +
       'single-record read with an empty body.',
     annotations: {
@@ -55,11 +60,16 @@ export function createGetRecordTool(deps: IvantiToolDeps): ToolDefinition {
         const { entitySet } = resolved;
         const url = deps.connection.transport.routes.record(entitySet, args.recordId);
 
-        const record = await deps.connection.transport.request<OdataRecord>(url);
+        // A scoped caller must not be able to tell "gone" from "not yours" — the read fails
+        // before any ownership check can run, so the two are collapsed here instead.
+        const record = await deps.connection.transport
+          .request<OdataRecord>(url)
+          .catch((error: unknown) => hideMissingRecord(deps, error));
         if (record === undefined) {
           return errorResult(
-            `No ${entitySet} record with RecId ${args.recordId}. Ivanti returned an empty body, ` +
-              'which for a read by key means the record is not there.',
+            missingRecordMessage(deps) ??
+              `No ${entitySet} record with RecId ${args.recordId}. Ivanti returned an empty body, ` +
+                'which for a read by key means the record is not there.',
           );
         }
 

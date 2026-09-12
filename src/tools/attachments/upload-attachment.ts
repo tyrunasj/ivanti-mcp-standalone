@@ -34,7 +34,14 @@ export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition
       'leaves the file attached to NOTHING. This tool performs the second half and verifies it, ' +
       'so a file that ends up on no record is reported as a failure rather than as success.\n\n' +
       'The parent is checked BEFORE the bytes are sent. An upload against a record that does not ' +
-      'exist still succeeds in Ivanti and leaves a file nobody can find.',
+      'exist still succeeds in Ivanti and leaves a file nobody can find.' +
+      '\n\nTHE EXTENSION IS PART OF THE GATE, and it is checked only by Ivanti — after the ' +
+      'bytes arrive, so a refusal costs the whole payload. The tenant allowlists by NAME, never ' +
+      'by contents: measured on one tenant, `.txt`, `.csv`, `.xml`, `.png`, `.pdf`, `.docx` and ' +
+      '`.zip` were accepted while `.log`, `.json`, `.md`, `.yaml`, `.conf` and `.sh` were ' +
+      'refused — so the plain-text formats a log or a config arrives as are exactly the ones ' +
+      'most likely to be rejected. Each tenant sets its own list. WHEN ATTACHING PASTED TEXT, ' +
+      'NAME IT `.txt`.',
     annotations: {
       title: 'Upload attachment',
       readOnlyHint: false,
@@ -113,7 +120,12 @@ export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition
           filename: uploaded.filename,
           sizeBytes: uploaded.sizeBytes,
           attached: true,
-          attributedTo: context.pin?.person()?.loginId ?? 'this server’s service account',
+          // Both halves, because Ivanti stores both and they differ. `CreatedBy` is the person
+          // this was filed for and is overridable; `LastModBy` is not, and always records the
+          // account that performed the write. Reporting only the first answered "who added it"
+          // with half the truth, and a caller asking exactly that had to spend another call.
+          createdBy: context.pin?.person()?.loginId ?? 'this server’s service account',
+          lastModBy: 'this server’s service account (Ivanti will not let that be overridden)',
         });
       }),
   });

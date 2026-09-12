@@ -23,27 +23,30 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
     description:
       "Runs one of the tenant's own actions against a record: escalate it, send the email, " +
       'close it with a template.\n\n' +
-      'SOME ACTIONS CANNOT BE UNDONE, and the NAME does not tell you which — actions are defined ' +
-      'per tenant. Preview first, and read `actionType`. An action that moves a record to a final ' +
-      'state leaves it refusing every write: no edits, notes or attachments, no reopening even ' +
-      'where a Reopen action exists, and no DELETE either — so delete before closing if it should ' +
-      'not survive. A reversible state may exist but often needs fields only an agent can set, so ' +
-      'treat a closing action as irreversible: confirm, naming the record, before running it. A ' +
-      '`SendEmail` action reaches real people and cannot be recalled.\n\n' +
+      'SOME ACTIONS CANNOT BE UNDONE, and the NAME does not tell you which — actions are ' +
+      'tenant-defined. Preview first and read `actionType`. An action that moves a record to a ' +
+      'final state leaves it refusing every write: no edits, notes, attachments, DELETE, or ' +
+      'reopening even where a Reopen action exists. Treat a closing action as irreversible — ' +
+      'confirm, naming the record, first — and delete before closing anything that should not ' +
+      'survive. A `SendEmail` action reaches real people and cannot be recalled.\n\n' +
       '`saved: true` MEANS IVANTI ACCEPTED THE COMMIT, NOT THAT THE RECORD CHANGED. An action ' +
       'whose preconditions the record does not meet commits cleanly and does nothing — a reopen ' +
       'run against an already-resolved record reported `saved: true` and moved nothing. Read the ' +
       'record back before telling anyone it worked.\n\n' +
-      'A `Composite` ACTION REWRITES MORE THAN ITS NAME SUGGESTS. Measured: a "Reassign Owner ' +
-      'Team" action also cleared the Owner and reset the Status, silently undoing a change made ' +
-      'moments earlier. Compare the record against what you read BEFORE running.\n\n' +
+      'A `Composite` ACTION REWRITES MORE THAN ITS NAME SUGGESTS: measured, a "Reassign Owner ' +
+      'Team" action also cleared the Owner and reset the Status. Compare the record against what ' +
+      'you read BEFORE running.\n\n' +
       'THIS REPEATS ITS SIDE EFFECTS ON RETRY: an action that sends an email sends another, one ' +
       'that creates a child record creates a second. After an ambiguous failure, check the ' +
       'record before running it again.\n\n' +
-      'Preview with preview_quick_action to learn what it asks for, then pass those answers as ' +
-      '`answers`. This tool previews again itself — Ivanti mints a token per probe and the commit ' +
-      'must echo that probe\'s own — so an action that suddenly demands an unsupplied answer is ' +
-      'refused rather than run half-configured.',
+      'A QUICK ACTION IS RECORDED AS THE SERVICE ACCOUNT, not as the person you are acting ' +
+      'for. `ClosedBy` and `ResolvedBy` name this server\'s account — as does a service ' +
+      'request\'s `CreatedBy` — unlike create_record, add_note and upload_attachment, which ' +
+      'stamp the person. Do not tell someone the record shows them as having done it.\n\n' +
+      'Preview with preview_quick_action for what it asks, then pass those as `answers`. This ' +
+      'previews again itself — Ivanti mints a token per probe and the commit must echo that ' +
+      "probe's own — so an action that suddenly demands an unsupplied answer is refused rather " +
+      'than run half-configured.',
     annotations: {
       title: 'Run a quick action',
       readOnlyHint: false,

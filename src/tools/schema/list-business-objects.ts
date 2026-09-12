@@ -79,8 +79,11 @@ export function createListBusinessObjectsTool(deps: IvantiToolDeps): ToolDefinit
       'across the whole catalog, which on a real tenant is over a thousand objects.\n\n' +
       'Validation lists (`IncidentStatus#`, `Categorys` — the objects that exist to hold picklist ' +
       'values) and audit shadow tables are left out unless you ask for them.\n\n' +
-      'THIS IS NOT AN ACCESS BOUNDARY: it is what the credential can see in the schema, and ' +
-      'permissions are enforced per request. The `source` field says how complete the list is.',
+      'The `source` field says how complete this list is AND whether it is a boundary. Where ' +
+      'it reports the catalog "narrowed to the objects this deployment allows", that narrowing ' +
+      'IS enforced — every other tool refuses an object outside it. Where it does not, this is ' +
+      'only what the credential can see in the schema, and permissions are still applied per ' +
+      'request.',
     annotations: {
       title: 'List Business Objects',
       readOnlyHint: true,
@@ -167,6 +170,32 @@ export function createListBusinessObjectsTool(deps: IvantiToolDeps): ToolDefinit
                 note:
                   'These are the objects in daily use. Pass `search` to look through all ' +
                   `${String(entries.length)}.`,
+              }
+            : {}),
+          /**
+           * This tool's own note, NOT the shared one.
+           *
+           * The shared `zeroNote` explains Ivanti's keyword index and tells the reader to re-ask
+           * with an `eq` filter. Neither applies here: `search` is a local substring match over
+           * names this server already holds, and there is no filter to re-ask with. Ninety words
+           * of correct-sounding advice about the wrong mechanism, with the one load-bearing
+           * sentence last, where truncation eats it first.
+           */
+          ...(shown.length === 0
+            ? {
+                note:
+                  (deps.gate.allowed.length === 0
+                    ? ''
+                    : `THIS DEPLOYMENT LISTS ONLY ${deps.gate.allowed.join(', ')}. An object ` +
+                      'that exists on the tenant but is outside that list does not appear here ' +
+                      'at all, so an empty answer can mean "exists but not exposed" — say that ' +
+                      'rather than that the object does not exist. ') +
+                  (args.search === undefined
+                    ? 'No objects to list.'
+                    : `No object name or display name contains '${args.search}'. This is a ` +
+                      'plain substring match over names, not a search of record content — so ' +
+                      'this is about what the catalog is called, and says nothing about whether ' +
+                      'any records exist. Try a shorter fragment.'),
               }
             : {}),
           objects: shown,

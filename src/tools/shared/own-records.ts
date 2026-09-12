@@ -4,6 +4,7 @@ import type { PinnedPerson } from '../../auth/identity-pin.js';
 import type { CallContext } from '../tool-definition.js';
 import type { IvantiToolDeps } from './deps.js';
 import type { ResolvedObject } from './resolve-object.js';
+import { isIvantiNotFound } from '../../ivanti/http/errors.js';
 
 /**
  * "Own records", which is the whole of what `enduser` mode means.
@@ -183,6 +184,42 @@ export function authorFields(loginId: string | undefined): Record<string, string
 }
 
 /**
+ * Collapses "not there" into "not yours", for a scoped caller.
+ *
+ * `assertOwnRecordById` and `assertRecordWritable` already do this, because they read the record
+ * themselves. A tool that reads FIRST and checks ownership afterwards — `get_record`, `fetch`,
+ * `get_attachment_details` — cannot: the read throws Ivanti's `400 Invalid key` before any
+ * ownership code runs, so a missing record and someone else's record came back in two different
+ * shapes. Measured in `enduser`:
+ *
+ * ```
+ * someone else's incident → "No such record is available to you."
+ * a RecId that is nobody's → "Ivanti refused the request (400). The record or field does not exist"
+ * ```
+ *
+ * That is an existence oracle: a RecId leaked through a URL, an email or a pasted ticket body can
+ * be confirmed live, and asking under two object names attributes it to one of them. There is no
+ * enumeration path — RecIds are 128-bit — but the design says these must be indistinguishable, and
+ * they were not.
+ *
+ * In `full` mode the distinction is kept: an analyst debugging a typo is not an adversary, and
+ * "the record does not exist" is the useful answer there.
+ */
+export function hideMissingRecord(deps: IvantiToolDeps, error: unknown): never {
+  if (deps.ownRecordsOnly && isIvantiNotFound(error)) throw new NotYourRecordError();
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
+/**
+ * The same, for a tool that got an empty body rather than a rejection — Ivanti's other way of
+ * saying a record is not there. Returns the message the tool should use, or undefined when the
+ * caller is not scoped and the tool's own wording is better.
+ */
+export function missingRecordMessage(deps: IvantiToolDeps): string | undefined {
+  return deps.ownRecordsOnly ? new NotYourRecordError().message : undefined;
+}
+
+/**
  * The same check, for a tool that has a RecId rather than a record.
  *
  * Reads the record first. That costs a request, and it is the only way: a navigation property or
@@ -226,8 +263,8 @@ export async function assertOwnRecordById(
 export class RecordClosedError extends Error {
   constructor(what: string) {
     super(
-      `That ${what} is closed, and closed is final — it cannot be edited, acted on, or ` +
-        'reopened. If there is more to do, raise a new one that references it. (A resolved ' +
+      `That ${what} is closed, and closed is final — it cannot be edited, acted on, reopened ` +
+        'OR DELETED. If there is more to do, raise a new one that references it. (A resolved ' +
         'record is different: that one can still be reopened. Ivanti will accept a write to a ' +
         'closed record without complaining, which is why this is refused here.)',
     );

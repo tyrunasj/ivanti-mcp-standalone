@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ALL_FIELDS,
   COMPACT_ROW_FIELDS,
+  compactFieldsFor,
   compactMissedObject,
   resolveRowFields,
 } from './compact-fields.js';
@@ -30,7 +31,9 @@ describe('resolveRowFields', () => {
 describe('compactMissedObject', () => {
   it('says nothing when the compact set identifies the object', () => {
     expect(
-      compactMissedObject(['RecId', 'IncidentNumber', 'Subject', 'CreatedDateTime']),
+      compactMissedObject([
+        { RecId: 'r1', IncidentNumber: 10244, Subject: 'Printer', CreatedDateTime: 'x' },
+      ]),
     ).toBeUndefined();
   });
 
@@ -38,14 +41,47 @@ describe('compactMissedObject', () => {
     // Measured: `attachment` shares none of the ticket field names, so the rows came back as a
     // RecId and two timestamps and one row was indistinguishable from the next.
     const missed = compactMissedObject([
-      'RecId',
-      'CreatedDateTime',
-      'CreatedBy',
-      'LastModDateTime',
-      'ATTACHNAME',
-      'AttachmentSize',
+      {
+        RecId: 'r1',
+        CreatedDateTime: 'x',
+        CreatedBy: 'y',
+        LastModDateTime: 'z',
+        ATTACHNAME: 'plan.doc',
+        AttachmentSize: 489,
+      },
     ]);
 
     expect(missed).toEqual(['ATTACHNAME', 'AttachmentSize']);
+  });
+
+  it('treats a present-but-null ticket column as no match at all', () => {
+    // The audit case, measured: `audit_incident` HAS Subject/Status/Owner as columns and every
+    // one is null, so eight real rows came back looking blank while their actual content was
+    // never requested.
+    const auditRow = {
+      RecId: 'a1',
+      Subject: null,
+      Status: null,
+      Owner: null,
+      OwnerTeam: null,
+      AuditHistoryDescription: '[Status] changed from [Active] to [Closed]',
+      AuditHistoryUser: 'JSmith',
+    };
+
+    expect(compactMissedObject([auditRow])).toContain('AuditHistoryDescription');
+
+    const { fields, fellBack } = compactFieldsFor([auditRow]);
+    expect(fellBack).toBe(true);
+    expect(fields).toContain('AuditHistoryDescription');
+    expect(fields).toContain('AuditHistoryUser');
+  });
+
+  it('keeps the preference list when the values are real', () => {
+    const { fields, fellBack } = compactFieldsFor([
+      { RecId: 'r1', IncidentNumber: 10244, Subject: 'Printer', Status: 'Active' },
+    ]);
+
+    expect(fellBack).toBe(false);
+    expect(fields).toEqual(expect.arrayContaining(['IncidentNumber', 'Subject', 'Status']));
   });
 });

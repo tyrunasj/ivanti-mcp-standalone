@@ -100,7 +100,7 @@ describe('uploadAttachment', () => {
     });
 
     await expect(upload()).rejects.toThrow(AttachmentTypeRefusedError);
-    await expect(upload()).rejects.toThrow(/decides from the NAME/);
+    await expect(upload()).rejects.toThrow(/judges by the NAME/);
   });
 
   it('re-throws any other upload failure untouched', async () => {

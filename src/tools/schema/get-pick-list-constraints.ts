@@ -71,12 +71,32 @@ export function createGetPickListConstraintsTool(deps: IvantiToolDeps): ToolDefi
           .filter((entry) => entry.constrainedBy.length > 0)
           .sort((a, b) => a.field.localeCompare(b.field));
 
+        /**
+         * A field-scoped answer must never make an object-scoped claim.
+         *
+         * Asked about one field, this replied `constrained: []` with `validatedFields: 21` and
+         * "No cascades HERE: every list on THIS OBJECT stands on its own" — while incident has
+         * four cascades. The note contradicted the tool's own description, and a fresh response
+         * beats static text, so it set up exactly the error `get_pick_list_values` exists to
+         * prevent: reporting 5 categories as "the categories" where the tenant holds 69.
+         */
+        const scoped = args.field !== undefined;
+
         return jsonResult({
           object: entity.name,
-          validatedFields: Object.keys(form.validatedFields).length,
+          ...(scoped
+            ? { field: args.field, answersFor: 'this field only' }
+            : { validatedFields: Object.keys(form.validatedFields).length }),
           constrained,
           ...(constrained.length === 0
-            ? { note: 'No cascades here: every list on this object stands on its own.' }
+            ? {
+                note: scoped
+                  ? `${args.field ?? 'That field'} is not constrained by any other field. THIS ` +
+                    `SAYS NOTHING ABOUT ${entity.name.toUpperCase()} AS A WHOLE — call again ` +
+                    "without `field` for the object's full cascade map, because other fields on " +
+                    'it may well cascade.'
+                  : 'No cascades on this object: every list stands on its own.',
+              }
             : {}),
         });
       }),

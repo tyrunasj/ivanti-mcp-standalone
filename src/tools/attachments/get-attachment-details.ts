@@ -7,6 +7,7 @@ import { assertOwnRecordById } from '../shared/own-records.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { missingRecordMessage } from '../shared/own-records.js';
 
 /** Ivanti's own names, kept as they are so a caller can filter on them elsewhere. */
 const DETAIL_FIELDS = [
@@ -34,9 +35,16 @@ export function createGetAttachmentDetailsTool(deps: IvantiToolDeps): ToolDefini
       'when, and which record it hangs off.\n\n' +
       'This does not return the file. Reading the bytes is a separate concern — most attachments ' +
       'are screenshots and documents that would be useless as tokens.\n\n' +
-      'To find attachment ids for a record, use get_related_records with the record\'s ' +
-      'attachment relationship, or list_records on the attachment object filtered by ' +
-      '`ParentLink_RecID`.',
+      'TO FIND IDS: get_related_records with the record\'s attachment relationship, or ' +
+      'list_records on the attachment object filtered by `ParentLink_RecID`. Both need the ' +
+      'attachment object to be exposed; where it is not, neither works and there is no way to ' +
+      'LIST what is already on a record — say that rather than reporting the record has no ' +
+      'files. An id itself never expires: one from an earlier upload_attachment, or one the ' +
+      'person pasted, stays valid indefinitely.' +
+      '\n\nTHERE IS NO FILE-TYPE FIELD on the attachment object. A file\'s kind lives only ' +
+      'in the extension inside its name, so counting or filtering by type means reading the ' +
+      'names and tallying them yourself — `$filter` has no `endswith`, and keyword search ' +
+      'does not reach attachment names at all.',
     annotations: {
       title: 'Get attachment details',
       readOnlyHint: true,
@@ -60,7 +68,11 @@ export function createGetAttachmentDetailsTool(deps: IvantiToolDeps): ToolDefini
         const [row] = readCollection<OdataRecord>(payload, url);
 
         if (row === undefined) {
-          return errorResult(`No attachment with RecId ${args.attachmentId}.`);
+          // Same rule as get_record: to a scoped caller, an attachment that is not there and one
+          // that is someone else's must read identically.
+          return errorResult(
+            missingRecordMessage(deps) ?? `No attachment with RecId ${args.attachmentId}.`,
+          );
         }
 
         // An attachment is only as reachable as the record it hangs off: `ParentLink_Category`

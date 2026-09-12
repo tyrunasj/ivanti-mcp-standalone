@@ -30,13 +30,27 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
       'Ivanti recalculates dependent fields; read the result rather than assuming.\n\n' +
       'To change a link — the customer, the requestor, the owner — set BOTH halves of its pair: ' +
       '`<Link>_RecID` and `<Link>_Category`. Which link carries which meaning differs per object, ' +
-      'so get_link_fields for this object rather than assuming the name another object used.',
+      'so get_link_fields for this object rather than assuming the name another object used.\n\n' +
+      'A FIELD CHANGE IS NOT A PRIVATE EDIT. Ivanti runs the tenant\'s own workflow on a write, ' +
+      'and that workflow mails real people. Measured: patching `Priority` on one incident logged ' +
+      'a "Priority Changed" outgoing email and three escalation notifications within ten seconds, ' +
+      'and patching it BACK fired another. There is no preview and no undo. Before changing a ' +
+      'priority, owner, team or status, say what you are about to change and get an answer — and ' +
+      'never set a value back "just to check", because reverting sends more mail, not less.\n\n' +
+      'A TERMINAL STATUS IS A ONE-WAY DOOR. Writing a closing value to `Status` makes the record ' +
+      'permanently read-only — no further edits, notes, attachments, quick actions, reopening, ' +
+      'OR DELETION, and this server will refuse all of them afterwards. Measured: a service ' +
+      'request closed this way could not then be cleaned up. Say so and get an answer before ' +
+      'writing a closing status, and delete anything that should not survive BEFORE closing it.',
     annotations: {
       title: 'Update a record',
       readOnlyHint: false,
       // It overwrites what was there; MCP calls that destructive, and it is.
       destructiveHint: true,
-      idempotentHint: true,
+      // NOT idempotent, though the FIELDS are. Ivanti runs the tenant's workflow on every write:
+      // measured, patching Priority twice sent two separate rounds of escalation email. A client
+      // that reads this hint as "safe to retry" retries a mailshot.
+      idempotentHint: false,
       openWorldHint: true,
     },
     inputSchema: {

@@ -11,6 +11,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { compactMissedObject } from '../../ivanti/odata/compact-fields.js';
 import { compactFieldsFor } from '../../ivanti/odata/compact-fields.js';
+import { ignoredFieldNames, ignoredFieldsNote } from '../shared/ignored-fields.js';
 
 export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -97,14 +98,37 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
         // shares none of the field names the preference list is built from.
         const compact =
           projection.defaulted && rows.length > 0
-            ? compactFieldsFor(Object.keys(rows[0] ?? {}))
+            ? compactFieldsFor(rows)
             : undefined;
 
         return jsonResult({
           object: entitySet,
           relationship: match,
-          target: entity.relationships.find((r) => r.name === match)?.target,
+          target,
           returned: rows.length,
+          /**
+           * What zero means, said here rather than left to be inferred.
+           *
+           * `list_notes` says it and is believed instantly; this said nothing, and three
+           * independent testers each spent extra calls proving a zero by a second route — one of
+           * them four calls, including running the same relationship against another record to
+           * check it worked at all. Two zeros in that run were never verified and went into an
+           * answer as assertions.
+           */
+          ...(rows.length === 0
+            ? {
+                note:
+                  `The relationship resolved and this ${entity.name} has no ` +
+                  `${target ?? 'related'} rows. THAT IS A REAL ZERO, not a failed lookup: the ` +
+                  'relationship name was checked against the object before the request, and a ' +
+                  'wrong one is refused by name. It is not the silent-empty failure a dropped ' +
+                  '`$filter` function produces. IT IS ALSO ONLY ABOUT THIS RECORD: whether ' +
+                  `${target ?? 'the target object'} holds any rows at all on this tenant is a ` +
+                  'separate question — answer it with count_records before reporting that ' +
+                  'nothing was ever logged, or you may describe a configuration gap as a fact ' +
+                  'about the record.',
+              }
+            : {}),
           ...(projection.defaulted && rows.length > 0
             ? ((): Record<string, unknown> => {
                 // Judged on the TARGET's rows, not the parent's: a journal or an attachment
@@ -112,7 +136,7 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
                 // Only what is NOT already in the row below: repeating the shown fields under
                 // "available" reads as though nothing was shown.
                 const shown = new Set((compact?.fields ?? []).map((name) => name.toLowerCase()));
-                const missed = compactMissedObject(Object.keys(rows[0] ?? {}))?.filter(
+                const missed = compactMissedObject(rows)?.filter(
                   (name) => !shown.has(name.toLowerCase()),
                 );
                 return missed === undefined
@@ -127,6 +151,14 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
                     };
               })()
             : {}),
+          ...(ignoredFieldNames(rows, parseFieldList(args.fields)).length === 0
+            ? {}
+            : {
+                ignoredFields: ignoredFieldNames(rows, parseFieldList(args.fields)),
+                fieldsNote: ignoredFieldsNote(
+                  ignoredFieldNames(rows, parseFieldList(args.fields)),
+                ),
+              }),
           rows: projectRows(rows, compact?.fields ?? projection.fields),
         });
       }),

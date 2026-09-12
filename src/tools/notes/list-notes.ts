@@ -21,9 +21,14 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
       'THIS IS NOT THE WHOLE HISTORY. It returns human-written notes only. Ivanti also files its ' +
       'own email traffic, escalations and assignment notices as journal entries on the same ' +
       'record, and on a stock tenant those outnumber the notes entirely — a record with a long ' +
-      'history can answer zero here. The answer says how many other journal entries exist; read ' +
-      'them with get_related_records on the journal relationship when someone asks what has ' +
-      'happened rather than what was said.\n\n' +
+      'history can answer zero here. The answer says how many other journal entries exist.\n\n' +
+      (enduser
+        ? 'THIS DEPLOYMENT DOES NOT EXPOSE THOSE OTHER ENTRIES — the count is all there is, so ' +
+          'say the ticket has system activity on it rather than implying nothing happened, and ' +
+          'do not promise to fetch the history.\n\n'
+        : 'Read them with get_related_records on the journal relationship the answer names — ' +
+          'but that returns SUBJECT LINES ONLY, because the `journal` group object has no body ' +
+          'field. The text of an email entry lives on the `journal__emails` subtype.\n\n') +
       (enduser
         ? 'Only notes published to the self-service portal are returned. A note an agent wrote ' +
           'for internal use is not shown, because it was not written to be read by the customer.'

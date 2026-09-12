@@ -15,6 +15,9 @@ import { assertOrderBy } from '../shared/order-by.js';
 import { compactMissedObject } from '../../ivanti/odata/compact-fields.js';
 import { compactFieldsFor } from '../../ivanti/odata/compact-fields.js';
 import { visibleFields } from '../../ivanti/metadata/csdl.js';
+import { assertNullFilterTypes } from '../shared/null-filter.js';
+import { ignoredFieldNames, ignoredFieldsNote } from '../shared/ignored-fields.js';
+import { zeroNote } from '../shared/zero-note.js';
 
 export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -26,14 +29,17 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
       'parentheses. It has NO functions: `contains()`, `startswith()` and `year()` are ' +
       'SILENTLY IGNORED and the full unfiltered set comes back, so this tool refuses them ' +
       'before sending. Use `search` for substrings.\n' +
-      '- empty field: `Owner eq \'$NULL\'` — the only way to match one\n' +
+      '- empty field: `Owner eq \'$NULL\'` — the only way to match one, and TEXT FIELDS ONLY ' +
+      '(a date or number is refused here, because Ivanti answers it as though the field name ' +
+      "were wrong). `ne '$NULL'` counts the empty string as PRESENT: add `and Owner ne ''`.\n" +
       '- dates are bare and unquoted: `CreatedDateTime gt 2026-01-01`\n' +
       '- there is no default order; "the latest" needs `orderBy`\n\n' +
-      'ZERO ROWS MEANS NO SUCH RECORD IS VISIBLE TO THE PERSON YOU ARE ACTING FOR. Where the ' +
-      'answer carries `scopedTo`, this server returns their own records only — a record that ' +
-      'belongs to somebody else answers zero here **including one they have been asked to ' +
-      'approve**. Do not go hunting through neighbouring numbers, and do not tell them it does ' +
-      'not exist; say you cannot see it.\n\n' +
+      'ZERO ROWS IS A REAL ANSWER: the filter and sort fields are both checked against the ' +
+      'object before the request, so an empty result is a fact about the data and not a typo. ' +
+      'IF AND ONLY IF the answer carries `scopedTo`, it means something weaker — this server is ' +
+      'returning one person\'s own records, and a record belonging to someone else answers zero ' +
+      'too, **including one they have been asked to approve**. In that case do not hunt through ' +
+      'neighbouring numbers and do not say it does not exist; say you cannot see it.\n\n' +
       'Field names are not guessable — an incident\'s description is `Symptom` — so call ' +
       'get_object_metadata first when composing a filter.',
     annotations: {
@@ -58,7 +64,11 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
       search: z
         .string()
         .optional()
-        .describe('Keyword search across the record\'s text fields — the only substring match.'),
+        .describe(
+          'Keyword search across the record\'s text fields — the only substring match. Same ' +
+            'grammar as fulltext_search_object: A SPACE MEANS AND, `or` widens, words ' +
+            'match from their START, and quoting a phrase matches nothing.',
+        ),
       orderBy: z
         .string()
         .optional()
@@ -94,6 +104,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         // Before the request: an unknown sort field answers 204, which is indistinguishable from
         // "there are no such records".
         assertOrderBy(args.orderBy, entity);
+        assertNullFilterTypes(args.filter, entity);
 
         // In `enduser` mode this narrows the filter to the caller's own records, and refuses
         // when nobody has said who that is.
@@ -137,7 +148,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         const compact =
           projection.defaulted && rows.length > 0
             ? compactFieldsFor(
-                Object.keys(rows[0] ?? {}),
+                rows,
                 // A better-than-a-name-list candidate source, where the schema offers one.
                 visibleFields(entity)
                   .filter((f) => f.validated || !f.nullable)
@@ -151,7 +162,16 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           returned: rows.length,
           // `scopedTo` alone reads as a label rather than a caveat, and a bare zero under it was
           // the one place a tester could have told someone a record does not exist when it does.
-          ...(scoped.scopedTo !== undefined && rows.length === 0
+          ...(rows.length === 0 && (args.search !== undefined || scoped.scopedTo === undefined)
+            ? {
+                note: zeroNote({
+                  looked: entitySet,
+                  ...(args.search === undefined ? {} : { keyword: args.search }),
+                  ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
+                }),
+              }
+            : {}),
+          ...(rows.length === 0 && args.search === undefined && scoped.scopedTo !== undefined
             ? {
                 note:
                   `No ${entitySet} record matching this is visible to ${scoped.scopedTo}. That ` +
@@ -159,8 +179,11 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
                   'zero here too.',
               }
             : {}),
+          // Emitted on an empty answer too. The zero case used to drop `total`, `totalIsExact`
+          // and `hasMore` — exactly where an exactness signal settles whether "none" is a fact
+          // or a visibility limit, and the one place a reader most needs it.
           ...(total === undefined
-            ? {}
+            ? { total: rows.length, totalIsExact: true, hasMore: false }
             : {
                 total: total.total,
                 totalIsExact: total.exact,
@@ -175,7 +198,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
                 // Only what is NOT already in the row below: repeating the shown fields under
                 // "available" reads as though nothing was shown.
                 const shown = new Set((compact?.fields ?? []).map((name) => name.toLowerCase()));
-                const missed = compactMissedObject(Object.keys(rows[0] ?? {}))?.filter(
+                const missed = compactMissedObject(rows)?.filter(
                   (name) => !shown.has(name.toLowerCase()),
                 );
                 return missed === undefined
@@ -193,6 +216,14 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
                     };
               })()
             : {}),
+          ...(ignoredFieldNames(rows, parseFieldList(args.fields)).length === 0
+            ? {}
+            : {
+                ignoredFields: ignoredFieldNames(rows, parseFieldList(args.fields)),
+                fieldsNote: ignoredFieldsNote(
+                  ignoredFieldNames(rows, parseFieldList(args.fields)),
+                ),
+              }),
           rows: projectRows(rows, compact?.fields ?? projection.fields),
         });
       }),

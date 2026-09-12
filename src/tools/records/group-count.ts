@@ -34,6 +34,7 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
       'name them. That makes it **honest but not cheap** — it is capped at ' +
       `${String(MAX_BUCKETS)} buckets, and a field with hundreds of values is the wrong ` +
       'question for this tool.\n\n' +
+      'WHERE THE ANSWER CARRIES `scopedTo` IT COUNTS ONE PERSON\'S RECORDS, not the tenant\'s.\n\n' +
       'Every bucket carries its own `exact` flag, the same contract as count_records. The ' +
       'buckets themselves come from the field\'s validation list, and records holding a value ' +
       'that list no longer offers fall into NO bucket — so the answer also reports `total` and ' +
@@ -57,7 +58,13 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
       values: z
         .array(z.string())
         .optional()
-        .describe('Count only these values. Required when the field is not a validated list.'),
+        .describe(
+          'Count only these values. Required when the field is not a validated list — and ' +
+            'also when this object has no form the role can reach, which some system objects ' +
+            '(the approval tables among them) never do. That second case is not visible from ' +
+            'get_object_metadata and is only discoverable by calling; the refusal says so and ' +
+            'names what to do.',
+        ),
       filter: z
         .string()
         .optional()
@@ -91,8 +98,13 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
           const list = lists[args.groupBy];
           if (list === undefined || !list.validated || list.values.length === 0) {
             return errorResult(
-              `'${args.groupBy}' is not a validated field on ${entity.name}, or its list is ` +
-                'empty, so there is nothing to group over. Pass `values` with the ones to count.',
+              `'${args.groupBy}' has no list to group over on ${entity.name} — either it is ` +
+                'not validated, or its list is empty, or this object has no form the role can ' +
+                'reach (some system objects never do, and that is not visible from ' +
+                'get_object_metadata). THIS TOOL CANNOT DISCOVER THE VALUES FROM THE DATA, so ' +
+                `that is a separate step: list_records({ object: "${entity.name}", fields: ` +
+                `"${args.groupBy}", top: 100 }), tally the distinct values, then pass them as ` +
+                '`values`.',
             );
           }
 
@@ -154,10 +166,14 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
           groupBy: args.groupBy,
           valuesFrom,
           ...(whole === undefined ? {} : { total: whole.total }),
+          // Always emitted, zero included: the description trains a reader to check this key
+          // before trusting the breakdown, and a missing key cannot be told from "not computed".
+          // One tester summed seven buckets by hand to prove it; on a 25-bucket field they said
+          // they would have skipped that and reported a partial as a total.
+          ...(unaccounted === undefined ? {} : { unaccounted: Math.max(0, unaccounted) }),
           ...(unaccounted === undefined || unaccounted <= 0
             ? {}
             : {
-                unaccounted,
                 // The wording has to follow where the values came from. Said the old way to a
                 // caller who had named two of seventeen departments himself, it read as "your
                 // tenant's data is dirty" when it meant "you asked about two buckets" — there
@@ -169,9 +185,14 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
                       'no bucket below. This counts the values you asked about, not the whole ' +
                       'field — omit `values` to group by the field’s own list instead.'
                     : `${String(unaccounted)} of ${String(whole?.total ?? 0)} records hold a ` +
-                      `'${args.groupBy}' value that is not on the field's list, or none at all, ` +
-                      'so they are in no bucket below. This is a partial picture — do not ' +
-                      'present it as a breakdown of the whole.',
+                      `'${args.groupBy}' value the field's list does not offer, or none at all, ` +
+                      'so they are in no bucket below. THIS IS A PARTIAL PICTURE — do not ' +
+                      'present it as a breakdown of the whole, and note that a per-bucket ' +
+                      '`exact: true` describes that bucket, not this answer. The usual cause is ' +
+                      'a field constrained by its own value (a workflow state machine), where ' +
+                      'the list holds only the states reachable from a NEW record. TO FIX: read ' +
+                      `the values actually in use with list_records({ fields: "${args.groupBy}", ` +
+                      'top: 100 }), tally them, and pass them back as `values`.',
               }),
           ...(values.length > counted.length ? { truncated: values.length } : {}),
           // Biggest bucket first: that is the shape of the answer, and a bucket that failed

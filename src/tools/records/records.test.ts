@@ -232,11 +232,13 @@ describe('count_records', () => {
   it('reads Ivanti\'s empty body as an exact zero', async () => {
     const { deps } = fixture({});
 
-    expect(body(await createCountRecordsTool(deps).handler({ object: 'Incidents' }))).toEqual({
-      object: 'incidents',
-      count: 0,
-      exact: true,
-    });
+    const result = body(await createCountRecordsTool(deps).handler({ object: 'Incidents' }));
+
+    expect(result).toMatchObject({ object: 'incidents', count: 0, exact: true });
+    // And it says what the zero means, because this is the path a real zero takes — Ivanti
+    // answers an empty body rather than a count, and a bare `{count: 0}` reads exactly as
+    // authoritative as one that was filtered against validated field names.
+    expect(String(result['note'])).toContain('THIS IS A REAL ZERO');
   });
 });
 

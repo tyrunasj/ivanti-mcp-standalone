@@ -5,6 +5,19 @@ import { resolveSubject } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+
+/** A RecId's display name, so an opaque id can be echoed back as a person. Best effort. */
+async function findEmployeeName(
+  deps: IvantiToolDeps,
+  recId: string,
+): Promise<string | undefined> {
+  const record = await deps.connection.transport
+    .request<OdataRecord>(deps.connection.transport.routes.record('employees', recId))
+    .catch(() => undefined);
+  const name = record?.['DisplayName'];
+  return typeof name === 'string' && name !== '' ? name : undefined;
+}
 
 export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -43,8 +56,12 @@ export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefini
         .string()
         .optional()
         .describe(
-          "Whose catalog to read, as their RecId. Defaults to whoever this conversation is " +
-            'acting for. The catalog is per person: entitlements differ.',
+          'Whose catalog to read, as their RecId. REQUIRES AN IDENTITY: with nobody pinned by ' +
+            '`act_as` and no `person`, the call is REFUSED rather than answered for a default — ' +
+            'this schema cannot say so structurally. NOTE this deployment returns the whole ' +
+            'catalog either way: entitlement narrowing is not applied, so a RecId here changes ' +
+            'nothing you can observe. Do not use it as a pre-flight entitlement check. ' +
+            '(submit_service_request DOES honour its own `person`; the two arguments differ.)',
         ),
     },
     handler: (args, context) =>
@@ -74,7 +91,17 @@ export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefini
         return jsonResult({
           returned: result.offerings.length,
           servedBy: result.servedBy === 'catalog' ? "the catalog's top level" : 'the whole catalog',
-          ...(pinned === undefined ? {} : { forPerson: pinned.displayName }),
+          /**
+           * The person this answer is FOR, resolved whichever way it was given.
+           *
+           * This reported the pin and vanished entirely when `person` supplied the RecId — so a
+           * caller handing over an opaque 32-hex id got no confirmation it resolved to the human
+           * they meant, on a tool whose whole premise is that entitlements differ per person.
+           */
+          forPerson:
+            pinned !== undefined && pinned.recId === personRecId
+              ? pinned.displayName
+              : ((await findEmployeeName(deps, personRecId)) ?? personRecId),
           ...(result.note === undefined ? {} : { note: result.note }),
           offerings: result.offerings,
         });

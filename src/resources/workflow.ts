@@ -56,6 +56,33 @@ halves go null, the row survives, and the file is left on no ticket, matched by 
 and reachable by nobody. Removing a file means \`delete_attachment\`, not unlinking it; adding one
 is \`upload_attachment\`, which sets the pair itself.
 
+## Finding who has an approval waiting
+
+\`list_approvals\` answers forwards, from a login you already have. To go the other way, read the
+vote rows directly:
+
+    list_records({ object: "frs_approvalvotetracking",
+                   filter: "Status ne 'Approved'",
+                   fields: "Owner,OwnerFullName,OwnerEmail,Owner_Valid,DueDateTime" })
+
+**Do not group those rows by \`Owner\` alone.** It holds a login on most rows and a display name on
+others — measured, one tenant carried both \`BSmith\` and \`Becky   Smith\` (three spaces) for the
+same person, so grouping by \`Owner\` reported ten approvers where there were nine and undercounted
+one queue by a quarter. \`Owner_Valid\` is the employee RecId and is the only identifier that never
+varies; \`OwnerEmail\` is the next best. Better still, feed each candidate login back through
+\`list_approvals\`, which reconciles all three itself.
+
+Two further traps:
+
+- **Filter on \`Status ne 'Approved'\` rather than \`eq 'Pending'\`.** The vote vocabulary is the
+  tenant's own; a tenant that spells the undecided state differently answers zero to \`'Pending'\`
+  and the zero looks like an empty queue.
+- **An approval BLOCK (\`frs_approval\`) can be Pending with no vote rows on it at all** — nobody
+  was asked. Such a block is invisible to every per-person query. Find them with
+  \`list_records({ object: "frs_approval", filter: "Status eq 'Pending'" })\`, whose \`Owner\` is the
+  block's owner and **not** an approver. Note the two objects' RecIds look identical (32 hex) and
+  \`vote_on_approval\` takes the VOTE ROW's id, never the block's.
+
 ## Previewing a delete
 
 \`preview_delete\` reports what would go with a record. Read \`errorMessages\` for blockers:

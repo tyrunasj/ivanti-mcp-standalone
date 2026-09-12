@@ -118,10 +118,12 @@ export class ParentNotFoundError extends Error {
 export class AttachmentTypeRefusedError extends Error {
   constructor(filename: string, because: string) {
     super(
-      `Ivanti refused '${filename}': ${because}. This tenant allows only certain file ` +
-        'extensions and decides from the NAME, not the contents — the same file is commonly ' +
-        'accepted as .txt and refused as .log. Rename it to a permitted extension and upload ' +
-        'again; retrying under the same name will fail identically.',
+      `Ivanti refused '${filename}': ${because}. This tenant allowlists file extensions and ` +
+        'judges by the NAME, never the contents. RENAME IT `.txt` AND UPLOAD AGAIN — that is ' +
+        'accepted on every tenant measured, and the identical bytes go through. Retrying under ' +
+        'the same name will fail identically. The allowlist is per tenant and is not readable ' +
+        'through the API, so there is no way to list what it permits; `.log`, `.json`, `.md` ' +
+        'and `.yaml` are commonly refused even though they are plain text.',
     );
     this.name = 'AttachmentTypeRefusedError';
   }

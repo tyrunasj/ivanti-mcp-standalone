@@ -22,7 +22,7 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
       'one returns the full unfiltered set.\n\n' +
       'ZERO HITS DOES NOT MEAN ZERO RECORDS. It searches only the fields Ivanti INDEXES — the ' +
       'subject, description and notes of a ticket — not every text field, and on some objects ' +
-      'not much at all. Measured: `png` finds none of this tenant\'s 344 PNG attachments, and ' +
+      'not much at all. Measured: `png` finds none of this tenant\'s ~350 PNG attachments, and ' +
       '`laptop` finds neither computer whose `ChassisType` is literally "Laptop". Before ' +
       'reporting that nothing matches, retry with `list_records` and an `eq` filter on the ' +
       'field you actually mean.\n\n' +

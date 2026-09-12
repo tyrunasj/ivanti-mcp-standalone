@@ -6,6 +6,7 @@ import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { zeroNote } from '../shared/zero-note.js';
 
 /** Answers OK and changes nothing: a behaviour of Ivanti's own web client. */
 export const NO_OP_ACTION_TYPE = 'UIAction';
@@ -18,7 +19,9 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
       "The buttons Ivanti itself offers on a record — escalate, send this email, close with a " +
       'template, clone. They are the tenant\'s encoded procedures, so running one is usually ' +
       'more correct than reproducing its field updates by hand.\n\n' +
-      'EVERY ACTION DEFINED ON THE OBJECT, not the ones valid for one record. Whether an action ' +
+      'EVERY ACTION DEFINED ON THE OBJECT — ~104 on a stock incident, so PASS `actionType` OR ' +
+      '`search` ON THE FIRST CALL; `UpdateObject` and `Composite` are the ~34 that change ' +
+      'anything. These are not the ones valid for one record either: whether an action ' +
       'applies depends on that record\'s state and the list does not say — a Reopen action sits ' +
       'beside a Close action even where the record can only go one way.\n\n' +
       'READ `actionType` BEFORE CHOOSING BY NAME. `SendEmail` notifies real people and changes ' +
@@ -77,6 +80,23 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
         return jsonResult({
           object: entity.name,
           count: matching.length,
+          ...(matching.length === 0
+            ? {
+                note: zeroNote({
+                  looked: `quick actions on ${entity.name}`,
+                  ...(args.search === undefined ? {} : { keyword: args.search }),
+                  because:
+                    actions.length === 0
+                      ? 'THIS DEPLOYMENT NARROWS THE LIST: where an allowlist of action names is ' +
+                        'configured, an action the tenant defines but the allowlist omits is not ' +
+                        'shown here at all. Zero can therefore mean the tenant defined none, the ' +
+                        'role sees none, OR this deployment allows none — and on this object it ' +
+                        'means you cannot run one either way.'
+                      : `${String(actions.length)} actions exist on this object; none matches ` +
+                        'the filters you passed.',
+                }),
+              }
+            : {}),
           ...(matching.length < actions.length ? { of: actions.length } : {}),
           actions: matching.map((action) => ({
             name: action.name,

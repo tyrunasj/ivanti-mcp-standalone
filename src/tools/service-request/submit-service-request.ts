@@ -14,6 +14,7 @@ import { resolveSubject } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
 
 /** An answer is either a plain value or a chosen option carrying its identifier. */
 const ANSWER = z.union([
@@ -40,15 +41,16 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
       '`subscriptionId` and `templateId` must come from the SAME offering.\n\n' +
       'ANSWERS ARE KEYED BY PARAMETER RecId. A `combo` parameter must be answered as ' +
       '`{value, recId}` — a bare value is refused with "validation list\'s value was submitted ' +
-      'without it\'s identifier". A checkbox takes a real boolean; Ivanti stores only the exact ' +
-      'string `true` and silently ignores every other encoding while echoing it back.\n\n' +
+      'without it\'s identifier". A checkbox takes a real boolean and BOTH `true` and `false` ' +
+      'store — the encoding is what is fussy: `True`, `1` and `yes` are silently ignored and ' +
+      'echoed back unchanged, so pass a real boolean and let this tool encode it.\n\n' +
       'IVANTI ANSWERS 200 WHEN IT REFUSES. A refusal names one missing parameter at a time, so ' +
       'expect another after fixing the first. Nothing is created by a refusal.\n\n' +
       'PREFER PASSING FILES HERE: they are staged with the form and are on the request the moment ' +
       'it exists. They can also be added afterwards with `upload_attachment` — `object: ' +
       '"ServiceReq"` and the request\'s RecId — which is what to use when the person produces a ' +
       'document after filing. Do not tell them a file cannot be added later; it can.\n\n' +
-      'DATES TAKE `YYYY-MM-DD`. Ivanti reads anything else as US month/day/year, so `01/10/2026` ' +
+      'A `datetime` PARAMETER TAKES `YYYY-MM-DDTHH:MM` in the tenant\'s local time; plain DATES TAKE `YYYY-MM-DD`. Ivanti reads anything else as US month/day/year, so `01/10/2026` ' +
       'is stored as 9 January. A date that lands wrong is reported by the read-back — but the ' +
       'request has already been created by then, so getting it right first time matters.\n\n' +
       'The request is READ BACK and the answers compared with what was sent. A date that landed ' +
@@ -91,16 +93,24 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
       attachments: z
         .array(
           z.object({
-            filename: z.string().min(1).describe('The name to store the file under, with its extension.'),
+            filename: z
+              .string()
+              .min(1)
+              .describe(
+                'The name to store the file under. THE EXTENSION DECIDES whether Ivanti accepts ' +
+                  'it at all — this tenant allowlists extensions by NAME, not by contents, so ' +
+                  '`.log` is refused where the identical bytes are accepted as `.txt`.',
+              ),
             contentBase64: z.string().min(1).describe('The file, base64-encoded.'),
             contentType: z.string().optional().describe('MIME type. Defaults to application/octet-stream.'),
           }),
         )
         .optional()
         .describe(
-          'Files to attach. They are staged and bound as part of this submit — a service ' +
-            'request collects its files on the form, before the request exists, so they cannot ' +
-            'be added afterwards by the ordinary attachment tools. Each is capped at 2 MB, and ' +
+          'Files to attach. Staged and bound as part of this submit, so they are on the ' +
+            'request the moment it exists — which is why files collected on the form belong ' +
+            'here. A file the person produces LATER can still be added with upload_attachment ' +
+            "(`object: \"ServiceReq\"` and the request's RecId). Each is capped at 2 MB, and " +
             'base64 costs context twice over.',
         ),
       localOffsetMinutes: z
@@ -115,7 +125,6 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
     },
     handler: (args, context) =>
       runTool('submit_service_request', deps.logger, async () => {
-        const pinned = context.pin?.person();
         const personRecId = resolveSubject(deps, context, args.person, (person) => person.recId);
 
         if (personRecId === undefined) {
@@ -203,6 +212,21 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
           requestNumber: submitted.requestNumber,
         });
 
+        /**
+         * Whose request this actually is, read off the record rather than assumed from the pin.
+         *
+         * `filedFor` used to echo whoever `act_as` pinned, so a request correctly filed for
+         * someone else was reported under the pinned account's name — the write right, the
+         * narration wrong, and nothing downstream to contradict it.
+         */
+        const filed = await deps.connection.transport
+          .request<OdataRecord>(
+            deps.connection.transport.routes.record('servicereqs', submitted.recId),
+          )
+          .catch(() => undefined);
+        const filedForName =
+          typeof filed?.['ProfileFullName'] === 'string' ? filed['ProfileFullName'] : undefined;
+
         // Ivanti reports a submit as successful without checking that the answers stored.
         const check = await verifyStoredAnswers(
           deps.connection.transport,
@@ -215,7 +239,18 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
           requestNumber: submitted.requestNumber,
           name: submitted.name ?? null,
           recId: submitted.recId,
-          filedFor: pinned?.displayName ?? personRecId,
+          // Whose request this IS, read back from the record rather than from the pin. This
+          // reported the pinned account even when `person` filed it for someone else — so a
+          // model narrated "I've filed this for you, <pinned name>" and named the wrong
+          // employee on a request heading for approval.
+          filedFor: filedForName ?? personRecId,
+          // From the RECORD, not from the pin. An earlier `filedBy: <pinned name>` sat beside
+          // `filedFor`, which is a verified record fact, so the pair read as though both came
+          // from Ivanti — and Ivanti had stamped the service account. Narrating it named the
+          // right beneficiary and the wrong filer.
+          ...(typeof filed?.['CreatedBy'] === 'string'
+            ? { createdBy: filed['CreatedBy'], createdByNote: 'who Ivanti recorded as filing it' }
+            : {}),
           answersSent: submitted.parametersSent,
           answersOnRequest: submitted.parametersOnRequest,
           ...(staged.length === 0 ? {} : { attached: staged.map((file) => file.filename) }),
