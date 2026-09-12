@@ -34,8 +34,10 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
       'name them. That makes it **honest but not cheap** — it is capped at ' +
       `${String(MAX_BUCKETS)} buckets, and a field with hundreds of values is the wrong ` +
       'question for this tool.\n\n' +
-      'Every bucket carries its own `exact` flag, the same contract as count_records: a count ' +
-      'Ivanti contradicted is reported as a floor rather than a total.',
+      'Every bucket carries its own `exact` flag, the same contract as count_records. The ' +
+      'buckets themselves come from the field\'s validation list, and records holding a value ' +
+      'that list no longer offers fall into NO bucket — so the answer also reports `total` and ' +
+      '`unaccounted`. A non-zero `unaccounted` means this is a partial picture, not a breakdown.',
     annotations: {
       title: 'Count records by value',
       readOnlyHint: true,
@@ -123,11 +125,38 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
           }),
         );
 
+        // The buckets come from a create form's validation list, and records can hold values that
+        // list no longer offers — measured, four of a change's seven statuses were missing and the
+        // buckets summed to 12 of 51. Every bucket said `exact: true`, because each count was
+        // right; it was the set of buckets that was short. So the whole is compared against the
+        // real total and the shortfall reported, rather than left to be noticed.
+        const bucketTotal = groups.reduce((sum, group) => sum + countOf(group), 0);
+        const wholeUrl = withQuery(
+          deps.connection.transport.routes.entitySet(entitySet),
+          buildQuery({ filter: scoped.filter, top: 1, count: true }),
+        );
+        const whole = await deps.connection.transport
+          .request<OdataRecord>(wholeUrl)
+          .then((payload) => readTotal(payload, 0))
+          .catch(() => undefined);
+        const unaccounted = whole === undefined ? undefined : whole.total - bucketTotal;
+
         return jsonResult({
           object: entity.name,
           ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
           groupBy: args.groupBy,
           valuesFrom,
+          ...(whole === undefined ? {} : { total: whole.total }),
+          ...(unaccounted === undefined || unaccounted <= 0
+            ? {}
+            : {
+                unaccounted,
+                warning:
+                  `${String(unaccounted)} of ${String(whole?.total ?? 0)} records hold a ` +
+                  `'${args.groupBy}' value that is not on the field's list, so they are in no ` +
+                  'bucket below. This is a partial picture — do not present it as a breakdown ' +
+                  'of the whole.',
+              }),
           ...(values.length > counted.length ? { truncated: values.length } : {}),
           // Biggest bucket first: that is the shape of the answer, and a bucket that failed
           // sorts last rather than pretending to be a zero.

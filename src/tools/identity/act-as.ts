@@ -26,6 +26,11 @@ function statusProblem(candidate: PersonCandidate): 'refuse' | 'flag' | undefine
 function present(candidate: PersonCandidate): Record<string, unknown> {
   return {
     name: candidate.displayName,
+    // `list_request_offerings` and `submit_service_request` both take a person "as their RecId",
+    // and this was the only tool that could supply one — while not returning it. An end user
+    // whose own department drives a cascading service-request answer had no way to learn either.
+    recId: candidate.recId,
+    ...(candidate.department === undefined ? {} : { department: candidate.department }),
     ...(candidate.loginId === undefined ? {} : { login: candidate.loginId }),
     ...(candidate.primaryEmail === undefined ? {} : { email: candidate.primaryEmail }),
     ...(candidate.status === undefined ? {} : { status: candidate.status }),

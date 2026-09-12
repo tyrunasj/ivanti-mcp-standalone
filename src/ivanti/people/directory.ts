@@ -43,6 +43,14 @@ export interface PersonCandidate {
   primaryEmail?: string;
   /** `employee` has one; `externalcontact` has no such field at all. */
   status?: string;
+  /**
+   * Their department, when the record carries one.
+   *
+   * Worth returning because a service request routinely constrains a cascading answer on it —
+   * a person asked to pick "the employee in your department" otherwise has no way to learn
+   * which department that is, and the objects holding it are outside an end user's gate.
+   */
+  department?: string;
   /** Which key matched — shown when confirming, so a wrong-person match is visible. */
   matchedOn: PersonMatchKey;
 }
@@ -124,6 +132,7 @@ function toCandidate(row: OdataRecord, object: string, claim: string): PersonCan
       ? {}
       : { primaryEmail: text(row, 'PrimaryEmail') }),
     ...(text(row, 'Status') === undefined ? {} : { status: text(row, 'Status') }),
+    ...(text(row, 'Department') === undefined ? {} : { department: text(row, 'Department') }),
     matchedOn: matchKey(claim, row),
   };
 }

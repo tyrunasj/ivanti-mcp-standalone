@@ -6,7 +6,7 @@ import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-import { readNotes, toNote } from './notes.js';
+import { countJournalEntries, readNotes, toNote } from './notes.js';
 
 const DEFAULT_TOP = 20;
 
@@ -18,10 +18,12 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
     title: 'List notes',
     description:
       "The notes people have written on a record, newest first.\n\n" +
-      'USE THIS RATHER THAN get_related_records for a ticket\'s history. The journal relationship ' +
-      "returns Ivanti's own email traffic as well — escalation and assignment notices, which on a " +
-      'stock tenant outnumber the human notes entirely — while this reads the notes object ' +
-      'directly and returns nothing else.\n\n' +
+      'THIS IS NOT THE WHOLE HISTORY. It returns human-written notes only. Ivanti also files its ' +
+      'own email traffic, escalations and assignment notices as journal entries on the same ' +
+      'record, and on a stock tenant those outnumber the notes entirely — a record with a long ' +
+      'history can answer zero here. The answer says how many other journal entries exist; read ' +
+      'them with get_related_records on the journal relationship when someone asks what has ' +
+      'happened rather than what was said.\n\n' +
       (enduser
         ? 'Only notes published to the self-service portal are returned. A note an agent wrote ' +
           'for internal use is not shown, because it was not written to be read by the customer.'
@@ -61,10 +63,24 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
           return note === undefined ? [] : [note];
         });
 
+        // What was NOT returned, because a bare `returned: 0` on a record with eight escalation
+        // entries reads as "nothing has happened here" — which is the opposite of true.
+        const allEntries = await countJournalEntries(deps, args.recordId).catch(() => 0);
+        const otherEntries = Math.max(0, allEntries - notes.length);
+
         return jsonResult({
           object: parent.entitySet,
           recordId: args.recordId,
           returned: notes.length,
+          ...(otherEntries === 0
+            ? {}
+            : {
+                otherJournalEntries: otherEntries,
+                alsoOnThisRecord:
+                  `${String(otherEntries)} journal entries that are not notes — Ivanti's own ` +
+                  'emails, escalations and assignment notices. Read them with ' +
+                  'get_related_records on the journal relationship.',
+              }),
           ...(enduser
             ? { showing: 'notes published to the customer; internal ones are not listed' }
             : {}),

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { listOfferings } from '../../ivanti/service-request/offerings.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
+import { resolveSubject } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -49,7 +50,9 @@ export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefini
     handler: (args, context) =>
       runTool('list_request_offerings', deps.logger, async () => {
         const pinned = context.pin?.person();
-        const personRecId = args.person ?? pinned?.recId;
+        // A catalogue is per person — entitlements differ — so naming someone else would be a
+        // way to read what a colleague is entitled to.
+        const personRecId = resolveSubject(deps, context, args.person, (person) => person.recId);
 
         if (personRecId === undefined) {
           return errorResult(

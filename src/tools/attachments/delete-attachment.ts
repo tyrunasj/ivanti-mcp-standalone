@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { assertOwnRecordById } from '../shared/own-records.js';
+import { assertRecordWritable } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
@@ -69,23 +69,16 @@ export function createDeleteAttachmentTool(deps: IvantiToolDeps): ToolDefinition
           );
         }
 
-        if (deps.ownRecordsOnly) {
-          if (
-            typeof parent !== 'string' ||
-            parent === '' ||
-            typeof parentRecId !== 'string' ||
-            parentRecId === ''
-          ) {
-            return errorResult(
-              'That attachment is on no record, so I cannot tell whether it is yours. Refusing ' +
-                'rather than guessing.',
-            );
-          }
-          await assertOwnRecordById(
-            deps,
-            context,
-            await resolveObject(deps, parent),
-            parentRecId,
+        // The parent decides, in both modes. Deleting a file is the one irreversible thing that
+        // can be done to a record, and it was the one operation that skipped the closed-record
+        // check — so a closed ticket refused notes, attachments, edits and its own deletion, and
+        // then let its evidence be destroyed. Found by driving the tools, not by reading them.
+        if (typeof parent === 'string' && parent !== '' && typeof parentRecId === 'string' && parentRecId !== '') {
+          await assertRecordWritable(deps, context, await resolveObject(deps, parent), parentRecId);
+        } else if (deps.ownRecordsOnly) {
+          return errorResult(
+            'That attachment is on no record, so I cannot tell whether it is yours. Refusing ' +
+              'rather than guessing.',
           );
         }
 

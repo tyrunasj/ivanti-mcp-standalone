@@ -1,6 +1,10 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Logger } from '../../logger.js';
-import { IvantiApiError, isIvantiNotFound } from '../../ivanti/http/errors.js';
+import {
+  IvantiApiError,
+  isIvantiNotFound,
+  isIvantiPromptRefusal,
+} from '../../ivanti/http/errors.js';
 import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
 import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
 import {
@@ -13,13 +17,18 @@ import { ObjectNotAllowedError } from './object-gate.js';
 import { ActionNotAllowedError } from './action-gate.js';
 import {
   IdentityRequiredError,
+  NotYourQueueError,
   NotYourRecordError,
   RecordClosedError,
   UnscopableObjectError,
 } from './own-records.js';
 import { IdentityConflictError, VerifiedSessionError } from '../../auth/identity-pin.js';
 import { SubmitRefusedError } from '../../ivanti/service-request/submit.js';
-import { OrphanedAttachmentError, ParentNotFoundError } from '../../ivanti/attachments/upload.js';
+import {
+  AttachmentTypeRefusedError,
+  OrphanedAttachmentError,
+  ParentNotFoundError,
+} from '../../ivanti/attachments/upload.js';
 import { errorResult } from './result.js';
 
 /**
@@ -76,6 +85,11 @@ export async function runTool(
       return errorResult(error.message);
     }
 
+    if (error instanceof NotYourQueueError) {
+      logger.info('tool refused a question about someone else', { tool });
+      return errorResult(error.message);
+    }
+
     if (error instanceof NotYourRecordError) {
       logger.info('tool refused a record that is not the caller\'s', { tool });
       return errorResult(error.message);
@@ -103,6 +117,12 @@ export async function runTool(
     // the message, so it is a rejection rather than a failure.
     if (error instanceof SubmitRefusedError) {
       logger.debug('service request refused', { tool });
+      return errorResult(error.message);
+    }
+
+    // The tenant refused the extension, which is a rename rather than a retry.
+    if (error instanceof AttachmentTypeRefusedError) {
+      logger.debug('upload refused, file type', { tool });
       return errorResult(error.message);
     }
 
@@ -139,6 +159,18 @@ export async function runTool(
 
     if (error instanceof IvantiApiError) {
       logger.warn('ivanti call failed', { tool, status: error.status });
+
+      // The transition, not the request. Saying "does not exist" here — which the bare ISM_4000
+      // match used to do — sends a caller hunting for a field name that was never wrong.
+      if (isIvantiPromptRefusal(error)) {
+        return errorResult(
+          'Ivanti refused this transition rather than the request: the record exists and the ' +
+            'field and value are valid, but the change is gated behind a prompt the API cannot ' +
+            'answer. It is driven by one of the tenant\'s quick actions, not by a field write — ' +
+            `call list_quick_actions for this object and run the one that makes it.\n${error.body}`,
+        );
+      }
+
       const missing = isIvantiNotFound(error)
         ? ' The record or field does not exist — Ivanti reports both as 400 "Invalid key".'
         : '';

@@ -15,7 +15,7 @@ export function createGetPickListConstraintsTool(deps: IvantiToolDeps): ToolDefi
       'Which validated fields depend on which others — the cascades. On a stock incident, ' +
       '`Category` is filtered by `Service`, `Subcategory` by both, and `Owner` by `OwnerTeam`.\n\n' +
       'This is what get_pick_list_values needs as `filters`, and what makes a write succeed: ' +
-      'asking for the categories without naming a service returns the unfiltered list, whose ' +
+      'asking for the categories without naming a service returns a default subset, whose ' +
       'values may be rejected for the record you have in mind. OData exposes none of this — ' +
       '`$metadata` says only that a field is validated.',
     annotations: {

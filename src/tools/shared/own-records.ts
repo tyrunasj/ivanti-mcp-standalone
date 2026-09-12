@@ -1,5 +1,6 @@
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { quoteOdataString } from '../../ivanti/odata/query.js';
+import type { PinnedPerson } from '../../auth/identity-pin.js';
 import type { CallContext } from '../tool-definition.js';
 import type { IvantiToolDeps } from './deps.js';
 import type { ResolvedObject } from './resolve-object.js';
@@ -266,4 +267,48 @@ export async function assertRecordWritable(
 
   if (deps.ownRecordsOnly) await assertOwnRecord(deps, context, resolved, record);
   return record;
+}
+
+/**
+ * Someone else's name is not a way to ask about them.
+ *
+ * Three tools take a `person`, and all three had the same hole: the check was written as "if a
+ * person is pinned **and** the name differs, refuse", so pinning nobody skipped it entirely. In
+ * `enduser` that made the boundary depend on call *order* — open a fresh session, pass `person`,
+ * and read a colleague's approval queue or service catalogue. Found by driving the tools rather
+ * than by reading them, which is the only way this kind of hole shows up.
+ *
+ * So: `enduser` requires a pinned person **and** requires the named one to be them. `full` keeps
+ * taking any name, because an analyst looking at a colleague's queue is the job.
+ */
+export class NotYourQueueError extends Error {
+  constructor(who: string) {
+    super(
+      `This server answers for ${who} only. Asking about someone else would let anyone read ` +
+        'a colleague\'s queue by naming them.',
+    );
+    this.name = 'NotYourQueueError';
+  }
+}
+
+export function resolveSubject(
+  deps: IvantiToolDeps,
+  context: CallContext,
+  named: string | undefined,
+  /** Which of the pinned person's identifiers this tool matches on — login, or RecId. */
+  pick: (person: PinnedPerson) => string | undefined,
+): string | undefined {
+  const pinned = context.pin?.person();
+
+  if (!deps.ownRecordsOnly) {
+    return named ?? (pinned === undefined ? undefined : pick(pinned));
+  }
+
+  if (pinned === undefined) throw new IdentityRequiredError();
+
+  const self = pick(pinned);
+  if (named !== undefined && named !== '' && named.toLowerCase() !== self?.toLowerCase()) {
+    throw new NotYourQueueError(pinned.displayName);
+  }
+  return self;
 }

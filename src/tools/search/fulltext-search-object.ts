@@ -15,10 +15,16 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
     name: 'fulltext_search_object',
     title: 'Search within a Business Object',
     description:
-      'Keyword search across the text fields of one Business Object — "incidents mentioning ' +
-      'printer". This is the ONLY substring mechanism Ivanti honours: `$filter` has no ' +
-      '`contains()`, and asking for one returns the full unfiltered set.\n\n' +
-      'Matching is case-insensitive and whole-field-agnostic; `printer` finds "Printer is not ' +
+      'Keyword search across one Business Object — "incidents mentioning printer". This is the ' +
+      'ONLY substring mechanism Ivanti honours: `$filter` has no `contains()`, and asking for ' +
+      'one returns the full unfiltered set.\n\n' +
+      'ZERO HITS DOES NOT MEAN ZERO RECORDS. It searches only the fields Ivanti INDEXES — the ' +
+      'subject, description and notes of a ticket — not every text field, and on some objects ' +
+      'not much at all. Measured: `png` finds none of this tenant\'s 344 PNG attachments, and ' +
+      '`laptop` finds neither computer whose `ChassisType` is literally "Laptop". Before ' +
+      'reporting that nothing matches, retry with `list_records` and an `eq` filter on the ' +
+      'field you actually mean.\n\n' +
+      'Matching is case-insensitive within the indexed fields; `printer` finds "Printer is not ' +
       'working". It composes with `filter`, so "open incidents mentioning printer" is one call.\n\n' +
       'Returns a compact set of fields by default. Ask for `fields` when you need more, and use ' +
       'list_records instead when you know the exact value to match.',

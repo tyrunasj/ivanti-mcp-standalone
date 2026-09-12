@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { buildQuery, MAX_TOP, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { jsonResult } from '../shared/result.js';
+import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -42,6 +42,54 @@ function toText(html: unknown): string | undefined {
     .trim();
 }
 
+/**
+ * Reading one article whole, which the record tools cannot do.
+ *
+ * `FRS_Knowledge` is a **base type**: it carries the title, status and summary, and the actual
+ * answer lives on a subtype — an IssueResolution's fix is in `Resolution`, which is invisible from
+ * the base. `FRS_KnowledgeType` on the base row names which (`IssueResolution` →
+ * `frs_knowledge__issueresolution`). And in `enduser` the knowledge object is outside the gate
+ * entirely, so there is no record-tool path to an article at all.
+ *
+ * The body is found by difference rather than by a per-subtype list of field names: whatever
+ * fields the subtype has that the base type does not **are** what the subtype adds, which is the
+ * article's content. That holds for all six subtypes without naming any of them.
+ */
+async function readWholeArticle(
+  deps: IvantiToolDeps,
+  base: OdataRecord,
+): Promise<Record<string, string>> {
+  const type = base['FRS_KnowledgeType'];
+  const recId = base['RecId'];
+  if (typeof type !== 'string' || type === '' || typeof recId !== 'string') return {};
+
+  const subtypeName = `frs_knowledge__${type.toLowerCase()}`;
+  const [subtype, baseType] = await Promise.all([
+    deps.connection.metadata.entity(subtypeName).catch(() => undefined),
+    deps.connection.metadata.entity('frs_knowledge').catch(() => undefined),
+  ]);
+  if (subtype === undefined) return {};
+
+  const inherited = new Set((baseType?.fields ?? []).map((field) => field.name));
+  const added = subtype.fields
+    .map((field) => field.name)
+    .filter((name) => !inherited.has(name) && !name.endsWith('_Valid'));
+
+  const record = await deps.connection.transport
+    .request<OdataRecord>(
+      deps.connection.transport.routes.record(`${subtypeName}s`, recId),
+    )
+    .catch(() => undefined);
+  if (record === undefined) return {};
+
+  const body: Record<string, string> = {};
+  for (const name of added) {
+    const text = toText(record[name]);
+    if (text !== undefined && text !== '') body[name] = text;
+  }
+  return body;
+}
+
 export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition {
   const enduser = deps.ownRecordsOnly;
 
@@ -59,8 +107,10 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
         : 'All states are searched, and each result says which. A Draft or Rejected article is ' +
           'internal — do not pass its content to the person who raised the ticket as though it ' +
           'were guidance.') +
-      '\n\nArticle bodies are HTML; they come back as text, shortened. Ask for one article by ' +
-      'number with get_record on FRS_Knowledge when you need the whole thing.',
+      '\n\nBodies are HTML and come back as text, shortened — each result says whether it was ' +
+      'cut. For the whole article pass `articleNumber` instead of `query`: the full text lives ' +
+      'on a subtype that the record tools cannot reach from `FRS_Knowledge`, so this is the only ' +
+      'way to read one end to end.',
     annotations: {
       title: 'Search the knowledge base',
       readOnlyHint: true,
@@ -69,7 +119,18 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
       openWorldHint: true,
     },
     inputSchema: {
-      query: z.string().min(1).describe('Keywords — "vpn error 413", "reset password".'),
+      query: z
+        .string()
+        .optional()
+        .describe('Keywords — "vpn error 413", "reset password". Omit when passing `articleNumber`.'),
+      articleNumber: z
+        .number()
+        .int()
+        .optional()
+        .describe(
+          "One article's number, from a search result, returned in full instead of as an " +
+            'excerpt. Ignores `query`.',
+        ),
       category: z.string().optional().describe('Narrow to one category, e.g. `Network Software`.'),
       top: z
         .number()
@@ -88,6 +149,51 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
     },
     handler: (args) =>
       runTool('search_knowledge', deps.logger, async () => {
+        if (args.articleNumber !== undefined) {
+          const oneUrl = withQuery(
+            deps.connection.transport.routes.entitySet('frs_knowledges'),
+            buildQuery({
+              filter:
+                `KnowledgeNumber eq ${String(args.articleNumber)}` +
+                // The audience rule holds here too: an end user cannot read a draft by number.
+                (enduser ? ` and Status eq '${PUBLISHED}'` : ''),
+              top: 1,
+            }),
+          );
+          const base = readCollection<OdataRecord>(
+            await deps.connection.transport.request<OdataRecord>(oneUrl),
+            oneUrl,
+          )[0];
+
+          if (base === undefined) {
+            return errorResult(
+              `No article numbered ${String(args.articleNumber)}` +
+                (enduser ? ' is published.' : '.') +
+                ' Search for it by keyword rather than guessing another number.',
+            );
+          }
+
+          const body = await readWholeArticle(deps, base);
+          return jsonResult({
+            number: base['KnowledgeNumber'] ?? null,
+            title: base['Title'] ?? null,
+            ...(enduser ? {} : { status: base['Status'] ?? null }),
+            category: base['Category'] ?? null,
+            summary: toText(base['Details']) ?? null,
+            ...(Object.keys(body).length === 0
+              ? {
+                  note:
+                    'This article type carries nothing beyond the summary above, or its body ' +
+                    'could not be read.',
+                }
+              : { article: body }),
+          });
+        }
+
+        if (args.query === undefined || args.query === '') {
+          return errorResult('Give me keywords to search for, or an `articleNumber` to read.');
+        }
+
         const conditions: string[] = [];
         // The audience rule, applied here because the object gate cannot express "these rows".
         if (enduser) conditions.push(`Status eq '${PUBLISHED}'`);
@@ -122,8 +228,12 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
               ? {}
               : {
                   excerpt,
+                  // Always stated, never inferred from absence: a reader who cannot tell a short
+                  // article from a cut one asks again with a bigger excerpt and gets the same
+                  // bytes back.
+                  truncated: body !== undefined && body.length > limit,
                   ...(body !== undefined && body.length > limit
-                    ? { truncated: `${String(body.length - limit)} more characters` }
+                    ? { moreChars: body.length - limit }
                     : {}),
                 }),
           };

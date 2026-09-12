@@ -207,6 +207,43 @@ function comparable(value: unknown): string {
 }
 
 /**
+ * Whether a stored datetime is the one that was sent, once the tenant's offset is undone.
+ *
+ * Ivanti stores a date as the **UTC instant of local midnight**, so `2026-10-01` comes back from a
+ * UTC+2 tenant as `2026-09-30T22:00:00Z`. That is correct, and a string comparison calls it a
+ * mismatch — which reported a clean submit as `answersVerified: false` and sent a tester into a
+ * second, non-idempotent submit to "fix" a date that was already right. Duplicating a service
+ * request is a worse outcome than the warning was ever worth.
+ *
+ * `localOffset` is the tenant offset **negated**, so adding its inverse converts the stored
+ * instant back to the local wall time the caller meant.
+ */
+function sameMoment(sent: string, stored: string, localOffset: number): boolean {
+  const storedAt = Date.parse(stored);
+  if (Number.isNaN(storedAt)) return false;
+
+  const tenantOffset = -localOffset;
+
+  // A bare date is a DATE: it asks for a day, not an instant, and Ivanti stores the day's local
+  // midnight. Compare the day it lands on rather than the instant — and allow the clocks to have
+  // changed between the record the offset was read from and the date being stored. Measured:
+  // `2026-11-01` submitted in September stored as `2026-10-31T23:00Z`, which is local midnight on
+  // 1 November at the winter offset and entirely correct; comparing instants called it a
+  // mismatch, and a mismatch on a correct write is what sends a caller into a duplicate submit.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(sent)) {
+    for (const drift of [0, 60, -60]) {
+      const local = new Date(storedAt + (tenantOffset + drift) * 60_000);
+      if (local.toISOString().slice(0, 10) === sent) return true;
+    }
+    return false;
+  }
+
+  // An explicit instant is compared as one, exactly.
+  const sentAt = Date.parse(sent);
+  return !Number.isNaN(sentAt) && storedAt - localOffset * 60_000 === sentAt;
+}
+
+/**
  * Reads the request back and says which answers did not land.
  *
  * Ivanti reports a submit as successful without checking that the answers stored, and three of
@@ -217,6 +254,8 @@ export async function verifyStoredAnswers(
   transport: IvantiTransport,
   requestRecId: string,
   answers: Record<string, ParameterAnswer>,
+  /** The offset the submit used, so a date stored as local midnight is not read as a mismatch. */
+  localOffset = 0,
 ): Promise<{ mismatches: StoredAnswer[]; missing: string[] }> {
   const wanted = new Map<string, unknown>();
   for (const [id, answer] of Object.entries(answers)) {
@@ -249,7 +288,14 @@ export async function verifyStoredAnswers(
     }
     const want = comparable(encodeAnswer(value));
     const got = comparable(row['ParameterValue']);
-    if (want !== '' && want !== got) {
+    const storedText = typeof row['ParameterValue'] === 'string' ? row['ParameterValue'] : '';
+    const sentText = typeof value === 'string' ? value : '';
+
+    // A datetime is compared as an instant, never as text.
+    const datesAgree =
+      ISO_DATETIME.test(sentText) && sameMoment(sentText, storedText, localOffset);
+
+    if (want !== '' && want !== got && !datesAgree) {
       mismatches.push({
         parameter: typeof row['ParameterName'] === 'string' ? row['ParameterName'] : id,
         sent: String(encodeAnswer(value)),

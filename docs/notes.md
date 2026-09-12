@@ -633,6 +633,59 @@ JavaScript object literal, not JSON: `{ attachmentIds:[ { filename:"x" ,attachme
 lands with `ParentLink_Category: 'ServiceReq'` pointing at the new request.
 *(Measured 2026-09-12.)*
 
+**Keyword search reaches only what Ivanti INDEXES, and an empty result reads exactly like "none
+exist".** Measured: `png` finds none of the tenant's **344 PNG attachments**, and `laptop` finds
+neither computer whose `ChassisType` is literally "Laptop". It covers a ticket's subject,
+description and notes — not structured fields, and on some objects almost nothing. This was the
+single most dangerous sentence in the tool manifest, because it told a model an empty result
+"genuinely means no match". *(Found 2026-09-12 by six agents driving the tools blind.)*
+
+**A grouped count can omit most of the table while every bucket says `exact: true`.** The buckets
+come from a create form's validation list; records holding a value that list no longer offers fall
+into no bucket. Measured: a change's statuses summed to **12 of 51**, an incident's categories to
+**81 of 547**. The per-bucket flag guards the wrong thing — the counts were right, the set of
+buckets was short. `group_count` now reports `total` and `unaccounted`. *(Measured 2026-09-12.)*
+
+**An unfiltered picklist is a SUBSET, not the union.** An incident's `Category` answers **5**
+values unfiltered, **13** under one Service, and its backing object holds **69**. The unfiltered
+answer is the list for the form's default parent, so presenting it as "the categories" understates
+by an order of magnitude. *(Measured 2026-09-12.)*
+
+**`ISM_4000` is not only "not found".** It is Ivanti's code for a refused payload generally: a
+missing record answers it with `"Invalid key"`, and a **prompt-gated status transition** answers
+the same code with `DataLayer.PromptException`. Matching the bare code made every gated transition
+report "the record or field does not exist", which sent two independent testers hunting a field
+name that was never wrong. *(Found 2026-09-12.)*
+
+**An unhandled Ivanti exception volunteers session internals.** A 500 from `PreDeleteObject` came
+back carrying `SessionId`, `TenantId`, `LoginId`, `Hostname` and `ServiceName`. `scrubErrorBody`
+redacted the API key because that was the only thing anyone had thought to look for; these now go
+too. *(Found 2026-09-12.)*
+
+**Ivanti refuses an upload by file EXTENSION, per tenant, and answers 200 while doing it.** The
+same bytes upload as `.txt` and are refused as `.log`, with `IsUploaded: false` and
+`"Invalid attachment type"` inside a success status. *(Measured 2026-09-12.)*
+
+**A service-request date is stored at the offset in force ON THAT DATE, not today's.**
+`2026-11-01` submitted in September stores as `2026-10-31T23:00:00Z` — local midnight at the
+winter offset, after the clocks change. Comparing instants against the offset discovered from a
+recent record calls a correct write a mismatch, and a mismatch reported on a correct write is what
+sends a caller into a second, non-idempotent submit. A bare date is compared by the day it lands
+on, with an hour of tolerance. *(Measured 2026-09-12.)*
+
+**`FRS_Knowledge` is a base type and the article body is not on it.** The base carries title,
+status and a summary; an IssueResolution's actual fix lives in `Resolution` on
+`frs_knowledge__issueresolution`. `FRS_KnowledgeType` on the base row names the subtype
+(`IssueResolution` → `frs_knowledge__issueresolution`). Whatever fields the subtype has that the
+base lacks *are* the body, which holds for all six subtypes without naming any of them.
+*(Measured 2026-09-12.)*
+
+**A client truncates a long tool description silently, and from the END.** So whatever sits last
+is what disappears — which is where warnings go. Measured in `overlord-service` against the Claude
+Code harness: two tools cut at ~2040 and ~2044, pointing at a 2 KiB cap that the MCP spec does not
+mention. `src/tools/description-budget.test.ts` fails the build at 2000 rather than letting a
+warning vanish into a conversation.
+
 **Closed is final, and Ivanti means it everywhere except updates.** A closed record is read-only:
 a DELETE answers 400 and a reopen action answers `saved: true, status: 'error'` while changing
 nothing — both expected, and the second is another outing for the untrustworthy `saved` flag. A

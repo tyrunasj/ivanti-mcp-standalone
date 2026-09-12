@@ -59,8 +59,32 @@ describe('group_count', () => {
       { value: 'Active', count: 7, exact: true },
       { value: 'Closed', count: 7, exact: true },
     ]);
-    // One count per value: Ivanti has no aggregation endpoint.
-    expect(urls.filter((url) => url.includes('$count=true'))).toHaveLength(2);
+    // One count per value — Ivanti has no aggregation endpoint — plus one for the whole, which
+    // is what catches buckets that do not add up to it.
+    expect(urls.filter((url) => url.includes('$count=true'))).toHaveLength(3);
+  });
+
+  it('reports records whose value is not on the list, rather than leaving them out silently', async () => {
+    // Measured on a live tenant: four of a change's seven statuses were missing from the form's
+    // list, so the buckets summed to 12 of 51 while every bucket said `exact: true`.
+    const { deps: d } = deps({
+      // Declaration order matters: the filtered bucket query is matched before the bare one that
+      // counts the whole object.
+      "Status%20eq%20'Active'": { value: [], '@odata.count': 1 },
+      incidents: { value: [], '@odata.count': 3 },
+    });
+
+    const result = body(
+      await createGroupCountTool(d).handler({
+        object: 'Incidents',
+        groupBy: 'Status',
+        values: ['Active'],
+      }),
+    );
+
+    expect(result['total']).toBe(3);
+    expect(result['unaccounted']).toBe(2);
+    expect(String(result['warning'])).toContain('partial picture');
   });
 
   it('takes the values from the caller when it is given them', async () => {

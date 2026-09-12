@@ -117,6 +117,21 @@ a message that told them apart would be an enumeration oracle. `src/tools/own-re
 makes **every** registered tool declare whether it may answer without an identity, so a tool added
 later cannot quietly skip the check.
 
+**A tool description is silently truncated from the END at ~2 KiB**, so the last paragraph — where
+the warnings go — is what disappears. `src/tools/description-budget.test.ts` fails the build at
+2000 characters per description and caps the whole manifest, which is re-sent every session. When
+a description needs to grow past it, move the material into a resource; raising the number buys
+nothing, because text past the cap never reaches the model.
+
+**The manifests were tested by driving them, not by reading them.** Six agents worked realistic
+scenarios with no access to this source, so anything they got wrong was a manifest defect. That
+found two access holes (a `person` argument honoured when nobody was pinned; `delete_attachment`
+skipping the closed-record guard), a wrong error gloss two agents hit independently, a verifier
+that called a correct write a mismatch, and the most dangerous sentence in the manifest — "an
+empty result genuinely means no match", disproved by a keyword search that finds none of 344 PNGs.
+Re-run that exercise after any significant change to the tool surface: none of it was visible from
+inside the code.
+
 **Reference material lives in MCP resources, not in tool descriptions.** Six documents under
 `ivanti://reference/` — `entity-naming`, `field-names`, `queries`, `write-recipes`, `picklists`
 (session) and `workflow` (full + session). They are built once and shared by reference like the

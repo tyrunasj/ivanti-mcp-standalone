@@ -74,6 +74,25 @@ export class ParentNotFoundError extends Error {
  * The attachment exists but points at nothing, and only the caller can decide what to do about
  * it. Carries the id so it can be deleted rather than left to be found by accident.
  */
+/**
+ * The tenant does not accept this file *extension* — nothing to do with the bytes.
+ *
+ * Ivanti keeps a per-tenant allowlist and decides from the filename, so the same content uploads
+ * as `.txt` and is refused as `.log`. It answers 200 with `IsUploaded: false`, so this is not an
+ * error status at all and reads as success to anything checking the code.
+ */
+export class AttachmentTypeRefusedError extends Error {
+  constructor(filename: string, because: string) {
+    super(
+      `Ivanti refused '${filename}': ${because}. This tenant allows only certain file ` +
+        'extensions and decides from the NAME, not the contents — the same file is commonly ' +
+        'accepted as .txt and refused as .log. Rename it to a permitted extension and upload ' +
+        'again; retrying under the same name will fail identically.',
+    );
+    this.name = 'AttachmentTypeRefusedError';
+  }
+}
+
 export class OrphanedAttachmentError extends Error {
   readonly attachmentId: string;
 
@@ -116,6 +135,15 @@ export async function uploadAttachment(
     transport.routes.rest('Attachment'),
     form,
   );
+
+  // Ivanti refuses by FILE EXTENSION, per tenant, and answers 200 with `IsUploaded: false` —
+  // measured: identical bytes accepted as `.txt` and refused as `.log`. The raw reply says only
+  // "Invalid attachment type", which a caller cannot act on without knowing the cause is the name.
+  const refusal = Array.isArray(reply) ? reply[0] : undefined;
+  if (refusal?.IsUploaded === false) {
+    const because = typeof refusal.Message === 'string' ? refusal.Message : 'no reason given';
+    throw new AttachmentTypeRefusedError(filename, because);
+  }
 
   const attachmentId = readAttachmentId(reply);
   if (attachmentId === undefined) {

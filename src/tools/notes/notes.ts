@@ -1,4 +1,4 @@
-import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
+import { buildQuery, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import type { ResolvedObject } from '../shared/resolve-object.js';
@@ -94,4 +94,25 @@ export async function readNotes(
   );
 
   return readCollection<OdataRecord>(await deps.connection.transport.request<OdataRecord>(url), url);
+}
+
+/**
+ * How many journal entries of any kind sit on a record.
+ *
+ * Read off the **group** object rather than the notes extension, because that is where Ivanti's
+ * own traffic lives — emails, escalations, assignment notices. `list_notes` uses it to say what
+ * it did not return: a bare `returned: 0` on a record carrying eight escalation entries reads as
+ * "nothing has happened here", which is the opposite of true.
+ */
+export async function countJournalEntries(
+  deps: IvantiToolDeps,
+  parentRecId: string,
+): Promise<number> {
+  const url = withQuery(
+    deps.connection.transport.routes.entitySet('journals'),
+    buildQuery({ filter: `ParentLink_RecID eq ${quoteOdataString(parentRecId)}`, top: 1, count: true }),
+  );
+  const payload = await deps.connection.transport.request<OdataRecord>(url);
+  const rows = readCollection<OdataRecord>(payload, url);
+  return readTotal(payload, rows.length)?.total ?? rows.length;
 }
