@@ -1,0 +1,28 @@
+# Everything the image must never carry, and everything that would bust its cache.
+.git
+.github
+node_modules
+dist
+coverage
+
+# Secrets. `.env` is gitignored; this makes sure a stray copy cannot be baked in
+# either — configuration reaches the container through the environment.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Tests and tooling: the image runs the build output, nothing else.
+**/*.test.ts
+**/*.fixture.ts
+vitest.config.ts
+eslint.config.js
+.claude
+docs
+*.md
+!README.md
+
+.DS_Store
+.vscode
+.idea

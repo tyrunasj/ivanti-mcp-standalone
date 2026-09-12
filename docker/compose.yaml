@@ -1,0 +1,69 @@
+# Local and small-deployment runner:
+#
+#   docker compose -f docker/compose.yaml up --build
+#
+# Paths are relative to this file, so the build context is the repository root and
+# `.env` is read from there. Configuration comes from `.env` — see `.env.example`
+# for every setting. Nothing secret is written into the image or this file.
+
+name: ivanti-mcp
+
+services:
+  ivanti-mcp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ivanti-mcp:dev
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    # Anything here overrides `.env`, which is where the container-specific
+    # settings belong: inside a container, loopback is the container's own.
+    environment:
+      MCP_BIND: 0.0.0.0
+
+    ports:
+      - '${MCP_PORT:-3000}:${MCP_PORT:-3000}'
+
+    # The API key as a file rather than an environment variable: `docker inspect`
+    # and `/proc/<pid>/environ` both show the environment, a mounted secret shows
+    # a path. Uncomment both halves together.
+    #
+    # The file is mounted with the OWNERSHIP IT HAS ON THE HOST, and this image
+    # runs as uid 65532. A secret written by your own account with mode 600 is
+    # therefore unreadable inside the container, and the server exits 78 with
+    # `EACCES … /run/secrets/…` — which reads like a missing file rather than a
+    # permission. Give it to the container's user:
+    #   sudo chown 65532:65532 secrets/* && sudo chmod 600 secrets/*
+    # environment:
+    #   IVANTI_API_KEY_FILE: /run/secrets/ivanti_api_key
+    # secrets:
+    #   - ivanti_api_key
+
+    # The tenant hostname must resolve INSIDE the container, which is not the same
+    # question as whether it resolves on the host: a split-horizon DNS answer that
+    # points at a LAN address the container cannot route to fails as a connection
+    # error at startup. Pin it when that happens.
+    # extra_hosts:
+    #   - 'your-tenant.example.com:203.0.113.10'
+
+    # The image declares its own HEALTHCHECK; this only makes the timings visible.
+    healthcheck:
+      test: ['CMD', '/nodejs/bin/node', 'docker/healthcheck.mjs']
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    # Nothing is written to disk, so nothing needs to be writable.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+# secrets:
+#   ivanti_api_key:
+#     file: ../secrets/ivanti-api-key

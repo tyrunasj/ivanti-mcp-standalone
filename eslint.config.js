@@ -18,10 +18,15 @@ export default tseslint.config(
     files: ['**/*.test.ts'],
     rules: { '@typescript-eslint/explicit-function-return-type': 'off' },
   },
-  // The flat config itself is plain JS and outside the TypeScript program.
+  // The flat config and the container health check are plain JS, outside the TypeScript program:
+  // the health check has to run inside a distroless image, which carries no build step.
   {
-    files: ['**/*.js'],
+    files: ['**/*.js', '**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked],
+    // The health check runs on Node inside the image, so it has Node's globals.
+    languageOptions: {
+      globals: { process: 'readonly', fetch: 'readonly', AbortSignal: 'readonly' },
+    },
     rules: { '@typescript-eslint/explicit-function-return-type': 'off' },
   },
 );

@@ -23,7 +23,8 @@ import { createGetObjectMetadataTool } from './schema/get-object-metadata.js';
 import { createGetPickListValuesTool } from './schema/get-pick-list-values.js';
 import { createListBusinessObjectsTool } from './schema/list-business-objects.js';
 import { createObjectGate } from './shared/object-gate.js';
-import type { ToolDefinition } from './tool-definition.js';
+import { auditFields } from '../auth/identity.js';
+import type { CallContext, ToolDefinition } from './tool-definition.js';
 
 export interface ToolContext {
   serverName: string;
@@ -92,15 +93,32 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
 }
 
 /**
- * Registers already-built definitions onto one server.
+ * Registers already-built definitions onto one server, bound to one call context.
  *
- * Takes the tools rather than building them, so every session shares one set of definitions.
- * `registerTool` stores the config by reference, so the zod schemas exist once in memory no
- * matter how many sessions are open.
+ * Takes the tools rather than building them, so every session shares one set of definitions:
+ * `registerTool` stores the **config** by reference, so the zod schemas exist once however many
+ * sessions are open. Only the small closure that carries the context is per session, which is
+ * what makes identity a per-conversation fact rather than a global.
+ *
+ * Every call is audited here because this is the one place they all pass through. Arguments are
+ * never logged — they carry ticket text and personal data — so the record is what was called, by
+ * which session, on whose behalf, and how that was established.
  */
-export function registerTools(server: McpServer, tools: readonly ToolDefinition[]): string[] {
+export function registerTools(
+  server: McpServer,
+  tools: readonly ToolDefinition[],
+  context: CallContext,
+  logger: Logger,
+): string[] {
   for (const tool of tools) {
-    server.registerTool(tool.name, tool.config, tool.handler);
+    server.registerTool(tool.name, tool.config, (args: Record<string, unknown>) => {
+      logger.info('tool called', {
+        tool: tool.name,
+        ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+        ...auditFields(context.identity),
+      });
+      return tool.handler(args, context);
+    });
   }
 
   return tools.map((tool) => tool.name);

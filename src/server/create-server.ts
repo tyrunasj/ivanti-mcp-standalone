@@ -3,6 +3,7 @@ import type { Config } from '../config/env-schema.js';
 import type { IvantiConnection } from '../ivanti/connect.js';
 import type { Logger } from '../logger.js';
 import { registerTools, selectTools } from '../tools/register-tools.js';
+import type { CallContext } from '../tools/tool-definition.js';
 import { buildInstructions } from './instructions.js';
 import { readPackageMetadata } from '../version.js';
 
@@ -15,8 +16,11 @@ export { SERVER_NAME, SERVER_VERSION };
 export interface ServerFactory {
   /** Names of the tools every server produced by this factory exposes. */
   toolNames: string[];
-  /** A fresh server per connection — the SDK forbids one instance holding two transports. */
-  create: () => McpServer;
+  /**
+   * A fresh server per connection — the SDK forbids one instance holding two transports — bound
+   * to the identity that connection established.
+   */
+  create: (context: CallContext) => McpServer;
 }
 
 /**
@@ -45,13 +49,13 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
 
   return {
     toolNames: tools.map((tool) => tool.name),
-    create: (): McpServer => {
+    create: (context: CallContext): McpServer => {
       const server = new McpServer(
         { name: SERVER_NAME, version: SERVER_VERSION },
         // Said once, at connect time, rather than repeated in every tool description.
         instructions === undefined ? {} : { instructions },
       );
-      registerTools(server, tools);
+      registerTools(server, tools, context, deps.logger);
       return server;
     },
   };
