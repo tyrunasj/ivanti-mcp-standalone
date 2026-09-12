@@ -11,6 +11,10 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { assertOrderBy } from '../shared/order-by.js';
+import { compactMissedObject } from '../../ivanti/odata/compact-fields.js';
+import { compactFieldsFor } from '../../ivanti/odata/compact-fields.js';
+import { visibleFields } from '../../ivanti/metadata/csdl.js';
 
 export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -25,8 +29,11 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
       '- empty field: `Owner eq \'$NULL\'` — the only way to match one\n' +
       '- dates are bare and unquoted: `CreatedDateTime gt 2026-01-01`\n' +
       '- there is no default order; "the latest" needs `orderBy`\n\n' +
-      'ZERO ROWS MEANS THE RECORDS DO NOT EXIST. After `IncidentNumber eq 11150` returns ' +
-      'nothing, do not go hunting through neighbouring numbers.\n\n' +
+      'ZERO ROWS MEANS NO SUCH RECORD IS VISIBLE TO THE PERSON YOU ARE ACTING FOR. Where the ' +
+      'answer carries `scopedTo`, this server returns their own records only — a record that ' +
+      'belongs to somebody else answers zero here **including one they have been asked to ' +
+      'approve**. Do not go hunting through neighbouring numbers, and do not tell them it does ' +
+      'not exist; say you cannot see it.\n\n' +
       'Field names are not guessable — an incident\'s description is `Symptom` — so call ' +
       'get_object_metadata first when composing a filter.',
     annotations: {
@@ -36,7 +43,14 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
       filter: z
         .string()
         .optional()
@@ -45,7 +59,15 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         .string()
         .optional()
         .describe('Keyword search across the record\'s text fields — the only substring match.'),
-      orderBy: z.string().optional().describe('e.g. "CreatedDateTime desc".'),
+      orderBy: z
+        .string()
+        .optional()
+        .describe(
+          'Sort clause: `CreatedDateTime desc`, or several separated by commas. The field name ' +
+            'is checked before the request, because Ivanti answers an unknown sort field with an ' +
+            'EMPTY RESULT rather than an error — `CreatedDate` instead of `CreatedDateTime` ' +
+            'would otherwise turn every row into none.',
+        ),
       fields: z
         .string()
         .optional()
@@ -68,6 +90,10 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         const resolved = await resolveObject(deps, args.object);
         const { entity, entitySet } = resolved;
         const top = args.top ?? DEFAULT_TOP;
+
+        // Before the request: an unknown sort field answers 204, which is indistinguishable from
+        // "there are no such records".
+        assertOrderBy(args.orderBy, entity);
 
         // In `enduser` mode this narrows the filter to the caller's own records, and refuses
         // when nobody has said who that is.
@@ -100,10 +126,39 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         const total = readTotal(payload, rows.length);
         const skipped = args.skip ?? 0;
 
+        /**
+         * The default field set, decided against THIS object's rows rather than a fixed list.
+         *
+         * A tenant defines its own Business Objects and renames fields on the ones Ivanti ships,
+         * so the preference list is a starting point and not an answer. `compactFieldsFor` falls
+         * back to the row's own leading fields when the list matches nothing — otherwise every
+         * row of an unrecognised object came back as a RecId and two timestamps.
+         */
+        const compact =
+          projection.defaulted && rows.length > 0
+            ? compactFieldsFor(
+                Object.keys(rows[0] ?? {}),
+                // A better-than-a-name-list candidate source, where the schema offers one.
+                visibleFields(entity)
+                  .filter((f) => f.validated || !f.nullable)
+                  .map((f) => f.name),
+              )
+            : undefined;
+
         return jsonResult({
           object: entitySet,
           ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
           returned: rows.length,
+          // `scopedTo` alone reads as a label rather than a caveat, and a bare zero under it was
+          // the one place a tester could have told someone a record does not exist when it does.
+          ...(scoped.scopedTo !== undefined && rows.length === 0
+            ? {
+                note:
+                  `No ${entitySet} record matching this is visible to ${scoped.scopedTo}. That ` +
+                  'is not the same as none existing — a record belonging to someone else answers ' +
+                  'zero here too.',
+              }
+            : {}),
           ...(total === undefined
             ? {}
             : {
@@ -112,12 +167,33 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
                 hasMore: total.total > skipped + rows.length,
               }),
           ...(projection.defaulted && rows.length > 0
-            ? {
-                fields:
-                  'a compact default set — pass `fields` for others, or "*" for whole records',
-              }
+            ? ((): Record<string, unknown> => {
+                // The compact default is tuned for the ticket objects. On some others it
+                // intersects nothing but RecId and timestamps, and the rows come back
+                // indistinguishable from one another — so say so, with the names to pick from,
+                // rather than presenting a useless row as a normal answer.
+                // Only what is NOT already in the row below: repeating the shown fields under
+                // "available" reads as though nothing was shown.
+                const shown = new Set((compact?.fields ?? []).map((name) => name.toLowerCase()));
+                const missed = compactMissedObject(Object.keys(rows[0] ?? {}))?.filter(
+                  (name) => !shown.has(name.toLowerCase()),
+                );
+                return missed === undefined
+                  ? {
+                      fields:
+                        'a compact default set — pass `fields` for others, or "*" for whole records',
+                    }
+                  : {
+                      fields:
+                        'THIS OBJECT IS NOT ONE OF THE ONES THE DEFAULT KNOWS, so the rows below ' +
+                        'show its own first few fields instead. That choice is arbitrary, not a ' +
+                        'judgement about which fields matter — name the ones you want in ' +
+                        '`fields`, or pass "*".',
+                      otherFields: missed,
+                    };
+              })()
             : {}),
-          rows: projectRows(rows, projection.fields),
+          rows: projectRows(rows, compact?.fields ?? projection.fields),
         });
       }),
   });

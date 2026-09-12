@@ -68,19 +68,46 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
         const allEntries = await countJournalEntries(deps, args.recordId).catch(() => 0);
         const otherEntries = Math.max(0, allEntries - notes.length);
 
+        /**
+         * This object's own journal relationship, read from its metadata rather than assumed.
+         *
+         * The name was hard-coded as `IncidentContainsJournal`, which is right for exactly one
+         * object — and the prose said "naming this object's own journal relationship" as though
+         * the reader could work the rest out. They cannot: incident has ~35 relationships, and
+         * `get_object_metadata`'s `search` filters fields but not relationships, so finding it
+         * meant dumping the whole list and grepping.
+         */
+        const journalRelationship = parent.entity.relationships.find((relationship) =>
+          relationship.target.startsWith('journal'),
+        )?.name;
+
         return jsonResult({
           object: parent.entitySet,
           recordId: args.recordId,
           returned: notes.length,
-          ...(otherEntries === 0
-            ? {}
-            : {
-                otherJournalEntries: otherEntries,
-                alsoOnThisRecord:
-                  `${String(otherEntries)} journal entries that are not notes — Ivanti's own ` +
+          // Always, including zero. Omitting it when there was nothing to report made "0 notes
+          // and 0 journals" and "0 notes, this feature is not present" render identically — and
+          // the empty answer is exactly where a reader most needs to know the count is real.
+          otherJournalEntries: otherEntries,
+          // Where to go next depends on whether the caller can go there. In `enduser` the journal
+          // object is outside the gate, so naming `get_related_records` sends them into a
+          // refusal that points straight back here — a circular dead end that cost a tester two
+          // calls to discover.
+          ...(deps.gate.allows('journal') && journalRelationship !== undefined
+            ? { journalRelationship }
+            : {}),
+          alsoOnThisRecord:
+            otherEntries === 0
+              ? 'No journal entries beyond the notes above — this record genuinely has no other ' +
+                'activity logged, rather than the count being unavailable.'
+              : deps.gate.allows('journal')
+                ? `${String(otherEntries)} journal entries that are not notes — Ivanti's own ` +
                   'emails, escalations and assignment notices. Read them with ' +
-                  'get_related_records on the journal relationship.',
-              }),
+                  `get_related_records({ relationship: '${journalRelationship ?? 'the journal relationship'}' }).`
+                : `${String(otherEntries)} journal entries that are not notes — Ivanti's own ` +
+                  'emails, escalations and assignment notices. This server does not expose ' +
+                  'them, so the count is all there is: say that the ticket has system activity ' +
+                  'on it rather than implying nothing has happened.',
           ...(enduser
             ? { showing: 'notes published to the customer; internal ones are not listed' }
             : {}),

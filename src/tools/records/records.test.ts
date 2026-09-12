@@ -12,7 +12,7 @@ import { createListRecordsTool } from './list-records.js';
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
 const INCIDENT = {
-  fields: [field('RecId'), field('Subject'), field('Status')],
+  fields: [field('RecId'), field('Subject'), field('Status'), field('CreatedDateTime')],
   relationships: [
     { name: 'IncidentContainsTask', target: 'task' },
     { name: 'IncidentContainsJournal', target: 'journal' },
@@ -73,6 +73,39 @@ describe('get_record', () => {
 
     expect(result.isError).toBe(true);
     expect(urls).toHaveLength(0);
+  });
+});
+
+describe('get_record field echo', () => {
+  it('says which requested names the record does not have, rather than dropping them', async () => {
+    // Measured: a tester asked employee for `Manager` — which is `ManagerLink_RecID` here — and
+    // the key simply vanished, which reads as "this record has no manager".
+    const { deps } = fixture({ "incidents('abc')": ROW });
+
+    const result = body(
+      await createGetRecordTool(deps).handler({
+        object: 'Incidents',
+        recordId: 'abc',
+        fields: 'Subject,NotAField',
+      }),
+    );
+
+    expect(result['ignoredFields']).toEqual(['NotAField']);
+    expect(String(result['note'])).toContain('do not report the value as absent');
+  });
+
+  it('stays quiet when every requested field is real', async () => {
+    const { deps } = fixture({ "incidents('abc')": ROW });
+
+    const result = body(
+      await createGetRecordTool(deps).handler({
+        object: 'Incidents',
+        recordId: 'abc',
+        fields: 'Subject,Status',
+      }),
+    );
+
+    expect(result).not.toHaveProperty('ignoredFields');
   });
 });
 
@@ -157,6 +190,23 @@ describe('list_records', () => {
     expect(urls[0]).toContain('$search=printer');
     expect(urls[0]).toContain('$orderby=CreatedDateTime%20desc');
     expect(urls[0]).toContain('$skip=10');
+  });
+
+  it('refuses an unknown orderBy field rather than letting Ivanti answer 204', async () => {
+    // Measured live: `$orderby=CreatedDate asc` answers 204 on a set of 548 incidents, which
+    // readCollection correctly reads as no rows. Nothing downstream can tell that apart from
+    // "there are none", so it has to be caught here.
+    const { deps, urls } = fixture({ incidents: { value: [] } });
+
+    const result = await createListRecordsTool(deps).handler({
+      object: 'Incidents',
+      orderBy: 'CreatedDate asc',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('CreatedDateTime');
+    // Nothing was sent: the point is to refuse before the request, not to explain afterwards.
+    expect(urls).toHaveLength(0);
   });
 });
 

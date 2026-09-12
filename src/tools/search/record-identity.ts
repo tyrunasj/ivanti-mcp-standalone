@@ -1,6 +1,14 @@
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 
-/** The first of these a record has is its human-facing number. */
+/**
+ * Names worth TRYING first, from the Business Objects Ivanti ships.
+ *
+ * None of these is guaranteed: a tenant defines its own Business Objects and renames fields on
+ * the shipped ones, so a record whose number is `WorkOrderRef` and whose subject is `Summary`
+ * matches nothing here. Every list below is therefore a preference, and each function falls back
+ * to reading the row itself rather than reporting "Untitled record" about a record that is
+ * perfectly well named.
+ */
 const IDENTIFIERS = [
   'IncidentNumber',
   'ServiceReqNumber',
@@ -16,6 +24,35 @@ const TITLES = ['Subject', 'Name', 'DisplayName', 'Title'];
 
 /** Fields worth showing as context under a search hit, in order. */
 const SUMMARY_FIELDS = ['Status', 'Priority', 'Owner', 'OwnerTeam', 'CreatedDateTime'];
+
+/** Columns every object carries, which say nothing about which record this is. */
+const AUDIT = new Set(
+  ['recid', 'createddatetime', 'createdby', 'lastmoddatetime', 'lastmodby', 'readonly'].map((n) =>
+    n.toLowerCase(),
+  ),
+);
+
+/** How much of an unrecognised field's value is worth putting in a one-line title. */
+const TITLE_MAX = 80;
+
+/**
+ * The row's own first meaningful text, for an object none of the lists above knows.
+ *
+ * Short values only: a description or an HTML body is not a title, and a GUID identifies nothing
+ * a person would recognise.
+ */
+function firstOwnText(row: OdataRecord, skip: readonly string[] = []): string | undefined {
+  const skipped = new Set([...skip.map((name) => name.toLowerCase())]);
+  for (const [field, value] of Object.entries(row)) {
+    if (AUDIT.has(field.toLowerCase()) || skipped.has(field.toLowerCase())) continue;
+    if (field.endsWith('_RecID') || field.endsWith('_Valid') || field.endsWith('_Category')) continue;
+    if (typeof value === 'number') return `${field}: ${String(value)}`;
+    if (typeof value === 'string' && value.trim() !== '' && value.length <= TITLE_MAX) {
+      return `${field}: ${value}`;
+    }
+  }
+  return undefined;
+}
 
 function firstString(row: OdataRecord, candidates: readonly string[]): string | undefined {
   for (const field of candidates) {
@@ -56,7 +93,11 @@ export function recordTitle(row: OdataRecord): string {
   if (identifier !== undefined && title !== undefined && identifier !== title) {
     return `#${identifier} ${title}`;
   }
-  return title ?? (identifier === undefined ? 'Untitled record' : `#${identifier}`);
+  if (title !== undefined) return title;
+  if (identifier !== undefined) return `#${identifier}`;
+  // Nothing on the preference lists — which on a tenant's own Business Object is the normal
+  // case, not an error. Read the row rather than calling a well-named record untitled.
+  return firstOwnText(row) ?? 'Untitled record';
 }
 
 /** The context line under a hit: enough to choose between two similar records. */
@@ -67,5 +108,9 @@ export function recordSummary(row: OdataRecord): string {
     if (typeof value === 'string' && value.trim() !== '') parts.push(`${field}: ${value}`);
     else if (typeof value === 'number') parts.push(`${field}: ${String(value)}`);
   }
-  return parts.join(' · ');
+  if (parts.length > 0) return parts.join(' · ');
+
+  // An object with none of the shipped status/owner fields still has fields of its own, and an
+  // empty context line makes two hits impossible to tell apart.
+  return firstOwnText(row, [...IDENTIFIERS, ...TITLES]) ?? '';
 }

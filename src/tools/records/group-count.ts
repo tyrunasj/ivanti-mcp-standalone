@@ -45,7 +45,14 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
       groupBy: z.string().describe('The field to count by, e.g. "Status".'),
       values: z
         .array(z.string())
@@ -151,11 +158,20 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
             ? {}
             : {
                 unaccounted,
+                // The wording has to follow where the values came from. Said the old way to a
+                // caller who had named two of seventeen departments himself, it read as "your
+                // tenant's data is dirty" when it meant "you asked about two buckets" — there
+                // was no field's list involved at all.
                 warning:
-                  `${String(unaccounted)} of ${String(whole?.total ?? 0)} records hold a ` +
-                  `'${args.groupBy}' value that is not on the field's list, so they are in no ` +
-                  'bucket below. This is a partial picture — do not present it as a breakdown ' +
-                  'of the whole.',
+                  valuesFrom === 'caller'
+                    ? `${String(unaccounted)} of ${String(whole?.total ?? 0)} records hold a ` +
+                      `'${args.groupBy}' value you did NOT name, or none at all, so they are in ` +
+                      'no bucket below. This counts the values you asked about, not the whole ' +
+                      'field — omit `values` to group by the field’s own list instead.'
+                    : `${String(unaccounted)} of ${String(whole?.total ?? 0)} records hold a ` +
+                      `'${args.groupBy}' value that is not on the field's list, or none at all, ` +
+                      'so they are in no bucket below. This is a partial picture — do not ' +
+                      'present it as a breakdown of the whole.',
               }),
           ...(values.length > counted.length ? { truncated: values.length } : {}),
           // Biggest bucket first: that is the shape of the answer, and a bucket that failed

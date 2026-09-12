@@ -30,7 +30,14 @@ export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
       recordId: z.string().describe('The 32-character RecId of the record to delete.'),
     },
     handler: (args, context) =>

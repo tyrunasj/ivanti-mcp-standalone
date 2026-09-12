@@ -21,24 +21,29 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
     name: 'run_quick_action',
     title: 'Run a quick action',
     description:
-      'Runs one of Ivanti\'s own actions against a record: escalate it, send the email, close it ' +
-      'with a template.\n\n' +
-      'SOME ACTIONS CANNOT BE UNDONE. One whose name contains Close or Cancel usually moves the ' +
-      'record to a final state, after which it refuses every write — no edits, no notes, no ' +
-      'attachments, and no reopening, even where the object also has a Reopen action. Prefer ' +
-      'Resolved over Closed where the tenant offers both, and confirm with the person before ' +
-      'running anything final. A `SendEmail` action reaches real people and cannot be recalled.\n\n' +
+      "Runs one of the tenant's own actions against a record: escalate it, send the email, " +
+      'close it with a template.\n\n' +
+      'SOME ACTIONS CANNOT BE UNDONE, and the NAME does not tell you which — actions are defined ' +
+      'per tenant. Preview first, and read `actionType`. An action that moves a record to a final ' +
+      'state leaves it refusing every write: no edits, notes or attachments, no reopening even ' +
+      'where a Reopen action exists, and no DELETE either — so delete before closing if it should ' +
+      'not survive. A reversible state may exist but often needs fields only an agent can set, so ' +
+      'treat a closing action as irreversible: confirm, naming the record, before running it. A ' +
+      '`SendEmail` action reaches real people and cannot be recalled.\n\n' +
       '`saved: true` MEANS IVANTI ACCEPTED THE COMMIT, NOT THAT THE RECORD CHANGED. An action ' +
       'whose preconditions the record does not meet commits cleanly and does nothing — a reopen ' +
       'run against an already-resolved record reported `saved: true` and moved nothing. Read the ' +
       'record back before telling anyone it worked.\n\n' +
-      'THIS REPEATS ITS SIDE EFFECTS ON RETRY. An action that sends an email sends another one; ' +
-      'one that creates a child record creates a second. If a call fails ambiguously, check the ' +
+      'A `Composite` ACTION REWRITES MORE THAN ITS NAME SUGGESTS. Measured: a "Reassign Owner ' +
+      'Team" action also cleared the Owner and reset the Status, silently undoing a change made ' +
+      'moments earlier. Compare the record against what you read BEFORE running.\n\n' +
+      'THIS REPEATS ITS SIDE EFFECTS ON RETRY: an action that sends an email sends another, one ' +
+      'that creates a child record creates a second. After an ambiguous failure, check the ' +
       'record before running it again.\n\n' +
-      'Preview first with preview_quick_action to learn what it asks for, then pass those ' +
-      'answers as `answers`. This tool previews again itself — Ivanti mints a token per probe ' +
-      'and the commit must echo the one from its own — so an action that suddenly demands an ' +
-      'answer you did not supply is refused rather than run half-configured.',
+      'Preview with preview_quick_action to learn what it asks for, then pass those answers as ' +
+      '`answers`. This tool previews again itself — Ivanti mints a token per probe and the commit ' +
+      'must echo that probe\'s own — so an action that suddenly demands an unsupplied answer is ' +
+      'refused rather than run half-configured.',
     annotations: {
       title: 'Run a quick action',
       readOnlyHint: false,
@@ -154,9 +159,18 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
           action: action.name,
           ran: true,
           ...(result.saved === undefined ? {} : { saved: result.saved }),
+          // Ivanti hands back a bare `{ <RecId>: <RecId> }` map with no object names in it, so
+          // on its own it says only "something was created" — a tester could not tell whether
+          // the action had made a task, a journal entry or a child ticket.
           ...(result.newObjectIds === undefined || result.newObjectIds === null
             ? {}
-            : { created: result.newObjectIds }),
+            : {
+                created: result.newObjectIds,
+                createdNote:
+                  'Ivanti reports new records as a RecId-to-RecId map and does not say what ' +
+                  'object each one is. To find out, call get_related_records on this record and ' +
+                  'match the RecIds — do not describe them to anyone until you have.',
+              }),
           ...(result.errors?.warningMessages?.length
             ? { warnings: result.errors.warningMessages.map(String) }
             : {}),

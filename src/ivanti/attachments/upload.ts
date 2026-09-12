@@ -44,6 +44,39 @@ export interface AttachmentUploadRequest {
   filename: string;
   bytes: Uint8Array;
   contentType: string;
+  /**
+   * The login of the person this file is being attached FOR, when one is known.
+   *
+   * Without it every attachment is stamped with this server's service account, so a file an end
+   * user sent in reads as having been added by the service desk. `CreatedBy` is one of the audit
+   * fields Ivanti lets a caller override, and it is honoured here: measured on the live tenant,
+   * a PATCH setting it alongside the parent link answered 200 and the value stuck.
+   *
+   * `LastModBy` is deliberately not attempted — Ivanti accepts it and stores the session account
+   * regardless, which would report an attribution that did not happen.
+   */
+  author?: string | undefined;
+}
+
+/**
+ * The upload reply, recovered from a rejection.
+ *
+ * A refused extension comes back as **300 Multiple Choices**, so `fetch` reports `ok: false` and
+ * the transport throws before anything reads the body — which meant the whole
+ * `AttachmentTypeRefusedError` path below was unreachable, and a caller who uploaded a `.log` got
+ * a bare `Ivanti POST 300` with no explanation. Measured live: `.log` → 300 with
+ * `IsUploaded: false`, the same bytes as `.txt` → 200.
+ *
+ * Narrow on purpose: only 300, only a JSON array. Any other failure is re-thrown untouched.
+ */
+function refusedUpload(error: unknown): UploadReply[] | undefined {
+  if (!(error instanceof IvantiApiError) || error.status !== 300) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(error.body);
+    return Array.isArray(parsed) ? (parsed as UploadReply[]) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readAttachmentId(reply: unknown): string | undefined {
@@ -78,8 +111,9 @@ export class ParentNotFoundError extends Error {
  * The tenant does not accept this file *extension* — nothing to do with the bytes.
  *
  * Ivanti keeps a per-tenant allowlist and decides from the filename, so the same content uploads
- * as `.txt` and is refused as `.log`. It answers 200 with `IsUploaded: false`, so this is not an
- * error status at all and reads as success to anything checking the code.
+ * as `.txt` and is refused as `.log`. It answers **300 Multiple Choices** — not a 2xx, not a 4xx —
+ * with the per-file outcome in the body, which is why `refusedUpload` below has to dig the reply
+ * back out of a rejection instead of reading it from a success.
  */
 export class AttachmentTypeRefusedError extends Error {
   constructor(filename: string, because: string) {
@@ -131,14 +165,17 @@ export async function uploadAttachment(
   form.append('objectType', request.parentObjectType);
   form.append('file', new Blob([bytes], { type: request.contentType }), filename);
 
-  const reply = await transport.requestMultipart<UploadReply[]>(
-    transport.routes.rest('Attachment'),
-    form,
-  );
+  const reply = await transport
+    .requestMultipart<UploadReply[]>(transport.routes.rest('Attachment'), form)
+    .catch((error: unknown) => {
+      const refused = refusedUpload(error);
+      if (refused === undefined) throw error;
+      return refused;
+    });
 
-  // Ivanti refuses by FILE EXTENSION, per tenant, and answers 200 with `IsUploaded: false` —
-  // measured: identical bytes accepted as `.txt` and refused as `.log`. The raw reply says only
-  // "Invalid attachment type", which a caller cannot act on without knowing the cause is the name.
+  // Ivanti refuses by FILE EXTENSION, per tenant — measured: identical bytes accepted as `.txt`
+  // and refused as `.log`. The raw reply says only "Invalid attachment type", which a caller
+  // cannot act on without knowing the cause is the name.
   const refusal = Array.isArray(reply) ? reply[0] : undefined;
   if (refusal?.IsUploaded === false) {
     const because = typeof refusal.Message === 'string' ? refusal.Message : 'no reason given';
@@ -160,7 +197,15 @@ export async function uploadAttachment(
   try {
     await transport.request(transport.routes.record('attachments', attachmentId), {
       method: 'PATCH',
-      body: { ParentLink_RecID: parentRecId, ParentLink_Category: category },
+      body: {
+        ParentLink_RecID: parentRecId,
+        ParentLink_Category: category,
+        // Same PATCH, because a second one would be a second chance to fail and leave the file
+        // linked but misattributed.
+        ...(request.author === undefined || request.author === ''
+          ? {}
+          : { CreatedBy: request.author }),
+      },
     });
   } catch (error: unknown) {
     // try/catch rather than `.catch`: this has to hold whether the transport rejects or throws

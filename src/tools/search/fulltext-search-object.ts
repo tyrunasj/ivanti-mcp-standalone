@@ -9,6 +9,8 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { assertOrderBy } from '../shared/order-by.js';
+import { QUERY_WORDS, noHitsNote } from './query-words.js';
 
 export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -35,13 +37,26 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
-      query: z.string().describe('Words to look for. Case-insensitive.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
+      query: z.string().describe(QUERY_WORDS),
       filter: z
         .string()
         .optional()
         .describe("Narrow the search further, e.g. \"Status eq 'Active'\"."),
-      orderBy: z.string().optional().describe('e.g. "CreatedDateTime desc".'),
+      orderBy: z
+        .string()
+        .optional()
+        .describe(
+          'Sort clause: `CreatedDateTime desc`. The field name is checked before the request — ' +
+            'Ivanti answers an unknown sort field with an EMPTY RESULT, not an error.',
+        ),
       fields: z
         .string()
         .optional()
@@ -52,6 +67,7 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
       runTool('fulltext_search_object', deps.logger, async () => {
         const resolved = await resolveObject(deps, args.object);
         const { entitySet } = resolved;
+        assertOrderBy(args.orderBy, resolved.entity);
         const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
 
         const url = withQuery(
@@ -75,6 +91,9 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
           query: args.query,
           returned: rows.length,
           ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),
+          // In the payload, not only in the description: across a long session the manifest
+          // scrolls out of attention and an empty `rows` reads as a clean negative.
+          ...(rows.length === 0 ? { note: noHitsNote(args.query) } : {}),
           rows: projectRows(rows, parseFieldList(args.fields) ?? COMPACT_ROW_FIELDS),
         });
       }),

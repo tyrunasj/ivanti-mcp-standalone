@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { visibleFields } from '../../ivanti/metadata/csdl.js';
+import { constrainedBy } from '../../ivanti/session/form-context.js';
 import { toObjectId } from '../../ivanti/write/validated-write.js';
 import { readPickLists } from '../../ivanti/session/pick-lists.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
@@ -35,7 +36,14 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
       fields: z
         .array(z.string())
         .min(1)
@@ -43,7 +51,12 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
       filters: z
         .record(z.string(), z.string())
         .optional()
-        .describe('Values for the fields a list cascades on, e.g. { "Service": "Email" }.'),
+        .describe(
+          'Values for the fields a list cascades on, e.g. `{ "Service": "Email Service" }`. The ' +
+            'value must be one the PARENT field actually holds — a plausible-but-wrong one ' +
+            '("Email" where the tenant says "Email Service") narrows the list to nothing and ' +
+            'looks exactly like a field with no options. Get parent values from this same tool.',
+        ),
     },
     handler: (args) =>
       runTool('get_pick_list_values', deps.logger, async () => {
@@ -70,6 +83,68 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
           ...(args.filters === undefined ? {} : { values: args.filters }),
         });
 
+        /**
+         * Why a list is short or empty, said in the payload.
+         *
+         * Three different situations rendered identically as `values: []` or as a plausible short
+         * list, and a tester took each of them at face value: a five-value answer for Category was
+         * reported as "the categories an incident can have" when the tenant holds 69, and a
+         * misspelled parent value produced an empty list byte-identical to a nonexistent one.
+         * `get_service_request_parameter_options` already names its three causes; this did not.
+         */
+        const diagnosed = Object.fromEntries(
+          Object.entries(lists).map(([field, list]) => {
+            const parents = constrainedBy(form, field).filter((parent) => parent !== field);
+            const supplied = new Set(Object.keys(list.filteredBy ?? {}).map((k) => k.toLowerCase()));
+            const missing = parents.filter((parent) => !supplied.has(parent.toLowerCase()));
+
+            if (list.values.length === 0) {
+              return [
+                field,
+                {
+                  ...list,
+                  ...(parents.length > 0 ? { constrainedBy: parents } : {}),
+                  note: !list.validated
+                    ? 'Not a validated field, so no list exists — this is not an empty list, it ' +
+                      'is free text. To see the values actually in use, call list_records with ' +
+                      '`fields` set to this field, or pass candidate values to group_count.'
+                    : missing.length > 0
+                      ? `Empty because this list depends on ${missing.join(', ')} and no value ` +
+                        'was supplied for it. Supply one in `filters` — a dependent list is ' +
+                        'empty rather than complete until its parent is given.'
+                      : supplied.size > 0
+                        ? 'Empty with the filters applied. The likeliest cause is that a value ' +
+                          'in `filters` is not one the parent field actually holds — a wrong ' +
+                          'value and a nonexistent field both narrow to nothing. Check the ' +
+                          "parent's own list first."
+                        : 'Empty: this field is validated but the form offers no options for it ' +
+                          'in this role. Read the backing object directly with list_records.',
+                },
+              ];
+            }
+
+            // A non-empty answer for a constrained field with no parent supplied is the dangerous
+            // case: it looks complete and is not.
+            return [
+              field,
+              missing.length > 0
+                ? {
+                    ...list,
+                    constrainedBy: parents,
+                    subset: true,
+                    note:
+                      `THESE ARE NOT ALL THE VALUES. This list is constrained by ` +
+                      `${missing.join(', ')}, and none was supplied, so Ivanti answered with the ` +
+                      'default subset. Measured: an incident’s Category answers 5 this way, 13 ' +
+                      'under one Service, and its backing object holds 69. Pass the parent in ' +
+                      '`filters` before presenting these as the options, or read the backing ' +
+                      'object for everything the field could ever hold.',
+                  }
+                : list,
+            ];
+          }),
+        );
+
         return jsonResult({
           object: entity.name,
           ...(unknownFields.length > 0 ? { unknownFields } : {}),
@@ -81,7 +156,7 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
                   'The values below may not be valid for the record you have in mind.',
               }
             : {}),
-          fields: lists,
+          fields: diagnosed,
         });
       }),
   });

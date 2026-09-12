@@ -9,6 +9,8 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { assertOwnRecordById } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { compactMissedObject } from '../../ivanti/odata/compact-fields.js';
+import { compactFieldsFor } from '../../ivanti/odata/compact-fields.js';
 
 export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -91,6 +93,12 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
         const rows = readCollection<OdataRecord>(payload, url);
 
         const projection = resolveRowFields(parseFieldList(args.fields), args.fields);
+        // Decided against the TARGET's rows: a journal, an attachment or a tenant's own object
+        // shares none of the field names the preference list is built from.
+        const compact =
+          projection.defaulted && rows.length > 0
+            ? compactFieldsFor(Object.keys(rows[0] ?? {}))
+            : undefined;
 
         return jsonResult({
           object: entitySet,
@@ -98,9 +106,28 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
           target: entity.relationships.find((r) => r.name === match)?.target,
           returned: rows.length,
           ...(projection.defaulted && rows.length > 0
-            ? { fields: 'a compact default set — pass `fields`, or "*" for whole records' }
+            ? ((): Record<string, unknown> => {
+                // Judged on the TARGET's rows, not the parent's: a journal or an attachment
+                // shares none of the ticket field names the compact set is built from.
+                // Only what is NOT already in the row below: repeating the shown fields under
+                // "available" reads as though nothing was shown.
+                const shown = new Set((compact?.fields ?? []).map((name) => name.toLowerCase()));
+                const missed = compactMissedObject(Object.keys(rows[0] ?? {}))?.filter(
+                  (name) => !shown.has(name.toLowerCase()),
+                );
+                return missed === undefined
+                  ? { fields: 'a compact default set — pass `fields`, or "*" for whole records' }
+                  : {
+                      fields:
+                        'THIS OBJECT IS NOT ONE OF THE ONES THE DEFAULT KNOWS, so what is below ' +
+                        'is its own first few fields. That choice is arbitrary, not a judgement ' +
+                        'about which fields matter — name the ones you want in `fields`, or ' +
+                        'pass "*".',
+                      otherFields: missed,
+                    };
+              })()
             : {}),
-          rows: projectRows(rows, projection.fields),
+          rows: projectRows(rows, compact?.fields ?? projection.fields),
         });
       }),
   });

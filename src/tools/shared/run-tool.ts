@@ -164,10 +164,12 @@ export async function runTool(
       // match used to do — sends a caller hunting for a field name that was never wrong.
       if (isIvantiPromptRefusal(error)) {
         return errorResult(
-          'Ivanti refused this transition rather than the request: the record exists and the ' +
-            'field and value are valid, but the change is gated behind a prompt the API cannot ' +
-            'answer. It is driven by one of the tenant\'s quick actions, not by a field write — ' +
-            `call list_quick_actions for this object and run the one that makes it.\n${error.body}`,
+          'Ivanti refused this transition with a prompt the API cannot answer. THE GATE IS ' +
+            'USUALLY ON THIS VALUE, NOT ON THE FIELD — measured, the same field on the same ' +
+            'record accepted two neighbouring values seconds later, so try those first. A quick ' +
+            'action may perform the transition (list_quick_actions), but a tenant can gate a ' +
+            'status that has no action behind it, in which case it can only be changed in the ' +
+            `Ivanti web client — do not keep hunting for an action that may not exist.\n${error.body}`,
         );
       }
 

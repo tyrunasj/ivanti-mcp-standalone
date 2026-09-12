@@ -44,9 +44,13 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
       'string `true` and silently ignores every other encoding while echoing it back.\n\n' +
       'IVANTI ANSWERS 200 WHEN IT REFUSES. A refusal names one missing parameter at a time, so ' +
       'expect another after fixing the first. Nothing is created by a refusal.\n\n' +
-      'ATTACHMENTS GO IN THIS CALL. A service request collects its files on the form, before the ' +
-      'request exists, so they cannot be added afterwards with upload_attachment — pass them as ' +
-      '`attachments` here.\n\n' +
+      'PREFER PASSING FILES HERE: they are staged with the form and are on the request the moment ' +
+      'it exists. They can also be added afterwards with `upload_attachment` — `object: ' +
+      '"ServiceReq"` and the request\'s RecId — which is what to use when the person produces a ' +
+      'document after filing. Do not tell them a file cannot be added later; it can.\n\n' +
+      'DATES TAKE `YYYY-MM-DD`. Ivanti reads anything else as US month/day/year, so `01/10/2026` ' +
+      'is stored as 9 January. A date that lands wrong is reported by the read-back — but the ' +
+      'request has already been created by then, so getting it right first time matters.\n\n' +
       'The request is READ BACK and the answers compared with what was sent. A date that landed ' +
       'on the wrong day or an answer Ivanti dropped is reported — neither is visible in what ' +
       'Ivanti says about its own submit.',

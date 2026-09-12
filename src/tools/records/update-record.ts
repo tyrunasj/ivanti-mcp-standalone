@@ -14,6 +14,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { assertRecordWritable } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { projectWritten } from '../shared/project-written.js';
 
 export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -39,11 +40,27 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
       openWorldHint: true,
     },
     inputSchema: {
-      object: z.string().describe('Business Object: `Incident#`, `Incidents` or `incident`.'),
+      object: z
+        .string()
+        .describe(
+          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
+            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
+            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
+            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
+        ),
       recordId: z.string().describe('The 32-character RecId of the record to change.'),
       fields: z
         .record(z.string(), z.unknown())
         .describe('Only the fields to change, e.g. { "Status": "Resolved" }.'),
+      returnFields: z
+        .string()
+        .optional()
+        .describe(
+          'Comma-separated fields to return in the confirmation. Defaults to the fields you ' +
+            'wrote plus a compact identifying set — a whole Ivanti record is ~180 fields and ' +
+            'roughly 10 KB of JSON, which is a lot to spend confirming a write that has already ' +
+            'been verified. Pass "*" for the whole record.',
+        ),
     },
     handler: (args, context) =>
       runTool('update_record', deps.logger, async () => {
@@ -91,11 +108,12 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         deps.logger.info('ivanti record updated', { object: entitySet });
 
+        const changed = Object.keys(args.fields);
         return jsonResult({
           object: entitySet,
           recId: args.recordId,
-          changed: Object.keys(args.fields),
-          record: updated,
+          changed,
+          record: projectWritten(updated, args.returnFields, changed),
         });
       }),
   });

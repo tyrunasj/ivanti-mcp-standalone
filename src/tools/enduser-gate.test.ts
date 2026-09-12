@@ -155,9 +155,18 @@ describe('enduser mode gates every object-taking tool', () => {
 
     const body = JSON.parse(text(await tool('search').handler({ query: 'printer' }, context))) as {
       searched: string[];
+      skipped?: { object: string; reason: string }[];
     };
 
-    expect(body.searched).toEqual(['incidents', 'servicereqs', 'changes']);
+    // Every allowed object is attempted — the gate narrows the fan-out, it does not refuse the
+    // call. `searched` now lists only the ones that actually answered: an object that failed is
+    // reported under `skipped` alone, because saying both at once told the reader two
+    // contradictory things and the reassuring one is the one that gets believed.
+    const attempted = [...body.searched, ...(body.skipped ?? []).map((entry) => entry.object)];
+    expect(attempted.sort()).toEqual(['changes', 'incidents', 'servicereqs']);
+    expect(body.searched).not.toEqual(
+      expect.arrayContaining((body.skipped ?? []).map((entry) => entry.object)),
+    );
   });
 
   it('refuses a search aimed at a gated object', async () => {

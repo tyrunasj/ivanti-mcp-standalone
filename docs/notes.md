@@ -811,6 +811,73 @@ changes answer `RequestorLink`, and the service request's alternate contact is n
 
 ---
 
+**A bad `$orderby` answers 204, which reads as "no rows".**
+A mistyped *filter* field answers `400 ISM_4000` and can be explained. A mistyped **orderBy**
+field — or a mistyped direction — answers **204 No Content**, one of Ivanti's three encodings for
+an empty result. Measured on `incidents`: no `$orderby` and `CreatedDateTime asc` both answer 200
+with `@odata.count` 548; `CreatedDate asc`, `NotAFieldAtAll asc` and `CreatedDateTime bogus` all
+answer 204. So one missing `Time` silently turns 548 records into none, with no error anywhere.
+`assertOrderBy` refuses locally before the request, the way `assertSupportedFilter` does. Accepted
+forms, all verified: bare field, `asc`/`desc` in either case, several clauses comma-separated.
+*(Measured 2026-09-12.)*
+
+**`$search` ANDs on spaces, honours `or`, and matches from the start of a word.**
+Four behaviours, none documented by Ivanti. On `incidents`: `projector` → 3, `boardroom` → 2,
+`projector boardroom` → 2, `projector printer` → **0**, `projector or printer` → 51,
+`projector AND printer` → **0** (the word `AND` is searched for literally),
+`"projector remote"` → **0** (quoting matches nothing), `projec` → 3, `rojector` → **0**.
+So passing a user's sentence through returns zero about a record that exists, and the only way to
+widen is `or`. *(Measured 2026-09-12.)*
+
+**A refused attachment extension arrives as HTTP 300, not a 2xx or a 4xx.**
+Ivanti keeps a per-tenant allowlist and decides from the *filename*. The same bytes uploaded as
+`.txt` answer 200 with `IsUploaded: true`; as `.log` they answer **300 Multiple Choices** with
+`[{"IsUploaded":false,"Message":"Upload Failed, Invalid attachment type."}]`. Because `fetch`
+reports 300 as `ok: false`, the transport threw before anything read the body — so the whole
+"explain the refusal" path was unreachable and the caller saw a bare `Ivanti POST 300`.
+*(Measured 2026-09-12.)*
+
+**`CreatedBy` can be overridden on an attachment; `ParentLink_Category` must be the AdminUI id.**
+A PATCH linking a new attachment fails with *"Role Admin does not have rights to update following
+fields"* when `ParentLink_Category` is `Incident`, and succeeds with `Incident#`. With the right
+spelling, `CreatedBy` set in the same PATCH is accepted **and sticks** — so an uploaded file can be
+attributed to the person it came from rather than to the server's service account. `LastModBy`
+still does not stick, the same split as on record creation. *(Measured 2026-09-12.)*
+
+**`IsInFinalState` is `false` on closed records.**
+It reads like the field for "can this still be edited" and is not: measured across this tenant,
+every record carries `false` regardless of status, including `Closed`. `Status` and `ReadOnly`
+are the fields that answer. *(Measured 2026-09-12.)*
+
+**An unhandled ASMX exception volunteers session internals, escaped inside a JSON string.**
+A 500 body carries `LogEntryId` whose value is itself JSON-encoded, so `SessionId`, `TenantId`,
+`LoginId`, `ClientIpAddress`, `Hostname` and `ServiceName` arrive as `\"SessionId\":\"…\"`
+rather than `"SessionId":"…"`. A scrub regex matching only the unescaped form redacted exactly one
+of the six — the one field that happens to sit outside the nested string — and read as working.
+*(Measured 2026-09-12.)*
+
+**No fixed field list identifies a record across tenants.**
+A tenant defines its own Business Objects and renames fields on the ones Ivanti ships, so
+`COMPACT_ROW_FIELDS` is a preference and never a definition. Measured: `attachment` and
+`standarduserteam` share not one name with it and came back as a RecId plus two timestamps; their
+identifying fields are `ATTACHNAME` and `Team`. Metadata does not rescue it — CSDL reports
+`nullable: false` on almost nothing (`incident` and `change`: zero required fields) and
+under-reports validated fields. So the default falls back to the row's own leading fields and says
+that it did. *(Measured 2026-09-12.)*
+
+**The tenant's grid columns are not reachable from the ASMX surface.**
+`GetWorkspaceData` returns `GridViewData`, but it carries only `viewName`, `objectType`,
+`gridName`, `defaultPreviewForm`, `formMap` and `toolbarDef` — no column list.
+`FindGridViewData`, `GetGridViewData`, `GetListData` and `Services/Grid.asmx` all fail. So "which
+fields does this tenant show in a list" has no cheap answer, which is why the point above falls
+back to the row. *(Measured 2026-09-12.)*
+
+**A test fixture that throws synchronously does not exercise a `.catch`.**
+`connectionFixture` built its transport as `Promise.resolve(answer(url))`, and `answer` throws —
+so the throw escaped before the promise existed and any `.catch()` on the call never ran. The real
+transport is async and always rejects. One whole error path (`uploadAttachment` unpacking Ivanti's
+300) passed its tests while being unreachable in production.
+
 ## Observability
 
 **`/health` must answer without a token, so everything it returns is public.**

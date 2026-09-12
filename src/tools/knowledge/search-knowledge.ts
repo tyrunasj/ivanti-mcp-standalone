@@ -122,7 +122,11 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
       query: z
         .string()
         .optional()
-        .describe('Keywords — "vpn error 413", "reset password". Omit when passing `articleNumber`.'),
+        .describe(
+          'Keywords — "vpn error 413", "reset password". REQUIRED unless you pass ' +
+            '`articleNumber`: a call with neither is always refused, and this schema cannot say ' +
+            'so structurally. Words are ANDed, so pass two or three, not a sentence.',
+        ),
       articleNumber: z
         .number()
         .int()
@@ -132,6 +136,21 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
             'excerpt. Ignores `query`.',
         ),
       category: z.string().optional().describe('Narrow to one category, e.g. `Network Software`.'),
+      ...(enduser
+        ? {}
+        : {
+            status: z
+              .string()
+              .optional()
+              .describe(
+                'Narrow to one publication state. Pass `Published` when you want guidance to ' +
+                  'act on or to hand to someone — every other state is internal and unfinished. ' +
+                  'The form lists Draft, In Review, Pending Approval, Reviewed, Published, ' +
+                  'Expired, Archived and Rejected, but articles on this tenant also hold states ' +
+                  'the form does not offer (`Submitted`), so treat that list as the common ' +
+                  'cases and not as the complete set.',
+              ),
+          }),
       top: z
         .number()
         .int()
@@ -200,6 +219,10 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
         if (args.category !== undefined && args.category !== '') {
           conditions.push(`Category eq '${args.category.replace(/'/g, "''")}'`);
         }
+        const status = enduser ? undefined : (args as { status?: string }).status;
+        if (status !== undefined && status !== '') {
+          conditions.push(`Status eq '${status.replace(/'/g, "''")}'`);
+        }
 
         const url = withQuery(
           deps.connection.transport.routes.entitySet('frs_knowledges'),
@@ -216,7 +239,25 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
         const total = readTotal(payload, rows.length);
         const limit = args.excerptChars ?? DEFAULT_EXCERPT;
 
-        const articles = rows.map((row) => {
+        /**
+         * Published first, then the rest in Ivanti's own order.
+         *
+         * Ivanti ranks by its own relevance and has no opinion about publication state, so a
+         * Draft routinely came back above the Published article on the same subject. In `full`
+         * mode every state is searched deliberately — an analyst may want the draft — but the
+         * finished article is the one that should be read first, and a reader skimming the top
+         * result should not be skimming an unreviewed one. A stable partition, not a re-rank:
+         * relative order inside each group is untouched.
+         */
+        const ranked =
+          enduser || status !== undefined
+            ? rows
+            : [
+                ...rows.filter((row) => row['Status'] === PUBLISHED),
+                ...rows.filter((row) => row['Status'] !== PUBLISHED),
+              ];
+
+        const articles = ranked.map((row) => {
           const body = toText(row['Details']);
           const excerpt = body === undefined ? undefined : body.slice(0, limit);
           return {
@@ -244,6 +285,15 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
           returned: articles.length,
           ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),
           ...(enduser ? { searched: 'published articles only' } : {}),
+          ...(enduser || status !== undefined
+            ? {}
+            : {
+                ordering:
+                  'Published articles first, then every other state in Ivanti’s own relevance ' +
+                  'order. A result whose `status` is not Published is internal and unfinished — ' +
+                  'do not hand its content to the person who raised the ticket as guidance. Pass ' +
+                  "`status: 'Published'` to search only finished articles.",
+              }),
           articles,
         });
       }),
