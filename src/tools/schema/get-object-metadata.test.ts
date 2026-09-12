@@ -19,7 +19,7 @@ const INCIDENT = {
 
 const tool = () => {
   const { connection } = connectionFixture({ entities: { incident: INCIDENT } });
-  return createGetObjectMetadataTool({ connection, gate: OPEN_GATE, logger: logger() });
+  return createGetObjectMetadataTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false });
 };
 
 type Payload = Record<string, unknown>;

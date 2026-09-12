@@ -25,7 +25,7 @@ const tool = (responses: Record<string, unknown>) => {
     entities: { incident: { fields: [field('RecId'), field('Subject')] } },
     responses,
   });
-  return { urls, tool: createFulltextSearchObjectTool({ connection, gate: OPEN_GATE, logger: logger() }) };
+  return { urls, tool: createFulltextSearchObjectTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }) };
 };
 
 describe('fulltext_search_object', () => {

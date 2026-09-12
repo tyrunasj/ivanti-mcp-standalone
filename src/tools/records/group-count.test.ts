@@ -42,7 +42,7 @@ const deps = (
     sessionCalls,
     responses,
   });
-  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger() } };
+  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false } };
 };
 
 describe('group_count', () => {

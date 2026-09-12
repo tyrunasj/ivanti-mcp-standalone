@@ -62,6 +62,15 @@ export const envSchema = z.object({
   OAUTH_JWKS_URI: z.url().optional(),
   OAUTH_SCOPES_SUPPORTED: commaSeparated.default([]),
   OAUTH_REQUIRED_SCOPES: commaSeparated.default([]),
+  /**
+   * Which claim names the person, for matching against Ivanti.
+   *
+   * Not `sub`, which is what identifies the *token's* subject: Entra's is an opaque pairwise
+   * identifier that appears nowhere in Ivanti. Providers disagree on where the human-readable
+   * one lives — Entra sends `preferred_username` or `upn`, most others `email` — so the default
+   * is a probe order over those, and this pins it when a tenant does something else.
+   */
+  OAUTH_IDENTITY_CLAIM: z.string().min(1).optional(),
 
   /**
    * The Ivanti tenant. Optional while the Ivanti tools are still being built — without it the

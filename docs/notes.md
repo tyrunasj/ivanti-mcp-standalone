@@ -590,6 +590,48 @@ header with a form-urlencoded body and reply with a JavaScript object literal ra
 multipart uploads want `_csrfToken` as a header. Getting any of them wrong looks like an auth
 failure.
 
+**Keyword `search` over-matches, and the extra rows look exactly like real ones.**
+`search: "John"` on Employees returns John Smith, John Davis, John M Doe — **and Scott Johnson**,
+because it is a substring match across the record's text fields. Anything that asks a human to
+pick themselves from a candidate list has to re-filter the result client-side against the fields it
+actually meant, or it will offer a stranger as a plausible option.
+*(Measured 2026-09-12, while designing `act_as`.)*
+
+**`DisplayName` is assembled and includes the middle name.** "John M Doe", "Katherine M Joseph" —
+so the full name a person types for themselves routinely fails to `eq`-match it. Match on
+`FirstName` + `LastName`; display `DisplayName`. *(Measured 2026-09-12.)*
+
+**OData `eq` is case-insensitive here.** `FirstName eq 'harold' and LastName eq 'SANDERS'` matches
+Harold Sanders. Useful — no normalisation needed on either side — but worth knowing rather than
+assuming, since it is the opposite of what `eq` means in several other OData implementations.
+*(Measured 2026-09-12.)*
+
+**An attachment's "relationship" to its ticket is just the attachment's own parent fields, so
+unlinking one orphans it.** `IncidentContainsAttachment` and
+`attachments?$filter=ParentLink_RecID eq '<incident>'` return the same row, because the
+relationship is a view over `ParentLink_RecID` + `ParentLink_Category` on the attachment. Measured
+live: `unlink_records` leaves the attachment row in place with **both halves null** — a file that
+is on no ticket, that no ownership check can match, and that an end user therefore cannot reach or
+clean up ever again. `link_records` puts the pair back, but only for someone who still has the
+RecId, which after orphaning nothing will hand out. Detaching a file is `delete_attachment`;
+attaching one is the multipart upload, which sets the pair itself. Neither is `link_records`.
+*(Measured 2026-09-12 on throwaway records, all removed.)*
+
+**CSDL spells an object lowercase; records spell it mixed-case, and a write needs the record's
+spelling.** `$metadata` names the entity `employee`, while an incident's `ProfileLink_Category`
+holds `Employee`. Deriving one from the other means guessing at capitalisation for every tenant
+that renamed something, so `customer-link.ts` reads the spelling off sampled rows instead.
+*(Found while building `act_as`, 2026-09-12.)*
+
+**The field tying a record to a person is different on every object, and the familiar name is
+sometimes absent.** An incident uses `ProfileLink_RecID`; a service request has that *and*
+`AlternateContactLink_RecID`; a change has neither and uses `RequestorLink_RecID`. A name ladder
+answers wrongly for the change and ambiguously for the service request, so the field is discovered
+from data — sample rows, see which `*_Category` actually holds a person object — with the ladder
+kept only as a tie-break and for an object that has no records yet. Verified live: 51 of 51
+changes answer `RequestorLink`, and the service request's alternate contact is null on every row.
+*(Measured 2026-09-12.)*
+
 ---
 
 ## Observability

@@ -7,6 +7,8 @@ import { probeCapability, type Capability, type CapabilityTier } from './session
 import { createAdminCatalog, type AdminCatalog } from './session/admin-catalog.js';
 import { createFormContext, type FormContext } from './session/form-context.js';
 import { createWorkspaceCatalog, type WorkspaceCatalog } from './session/workspaces.js';
+import { createPersonDirectory, type PersonDirectory } from './people/directory.js';
+import { createCustomerLinks, type CustomerLinks } from './people/customer-link.js';
 
 export interface ConnectOptions {
   baseUrl: string;
@@ -38,6 +40,16 @@ export interface IvantiConnection {
   readonly admin: AdminCatalog;
   /** Create forms, which are the only session-reachable source of a field's allowed values. */
   readonly forms: FormContext;
+  /**
+   * Resolving a person, and finding the field that ties a record to one.
+   *
+   * On the `rest_api_key` surface rather than the session, so `enduser` mode works for a
+   * credential that cannot open an ASMX session at all — which is most customers' keys.
+   */
+  readonly people: {
+    readonly directory: PersonDirectory;
+    readonly customerLinks: CustomerLinks;
+  };
   /**
    * What this credential turned out to be able to do. Decided at startup because tools are
    * selected once: a tool that cannot work here should not exist rather than fail when called.
@@ -92,24 +104,36 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
   // selected once at startup.
   const capability = await probeCapability(session, admin, logger, maxTier);
 
+  const metadata = createMetadataCatalog({
+    transport,
+    seedUrl: probe.metadataUrl,
+    logger,
+    // "Did you mean" should reach as far as the credential does.
+    suggestionNames:
+      capability.tier === 'admin'
+        ? async (): Promise<string[]> => (await admin.list()).map((object) => object.object)
+        : undefined,
+  });
+
+  const directory = createPersonDirectory({ transport, metadata, logger });
+
   return {
     basePath: probe.basePath,
     metadataUrl: probe.metadataUrl,
     transport,
-    metadata: createMetadataCatalog({
-      transport,
-      seedUrl: probe.metadataUrl,
-      logger,
-      // "Did you mean" should reach as far as the credential does.
-      suggestionNames:
-        capability.tier === 'admin'
-          ? async (): Promise<string[]> => (await admin.list()).map((object) => object.object)
-          : undefined,
-    }),
+    metadata,
     session,
     workspaces,
     admin,
     forms: createFormContext(session, workspaces, logger),
+    people: {
+      directory,
+      customerLinks: createCustomerLinks({
+        transport,
+        personObjects: directory.personObjects,
+        logger,
+      }),
+    },
     capability,
   };
 }

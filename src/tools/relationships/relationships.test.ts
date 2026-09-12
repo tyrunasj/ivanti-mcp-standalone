@@ -24,7 +24,7 @@ const body = (result: CallToolResult): Record<string, never> =>
 
 const deps = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ entities: { incident: INCIDENT }, responses });
-  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger() } };
+  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false } };
 };
 
 const ARGS = {

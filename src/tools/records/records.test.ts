@@ -22,7 +22,7 @@ const ROW = { RecId: 'abc', IncidentNumber: 10244, Subject: 'Printer', Status: '
 
 const fixture = (responses: Record<string, unknown> = {}) => {
   const { connection, urls } = connectionFixture({ entities: { incident: INCIDENT }, responses });
-  return { deps: { connection, gate: OPEN_GATE, logger: logger() }, urls };
+  return { deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false }, urls };
 };
 
 const text = (result: CallToolResult): string => {

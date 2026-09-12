@@ -40,7 +40,7 @@ const deps = (sessionCalls: Record<string, unknown>) => {
     capability: { tier: 'session', identity: { role: 'Admin' } },
     sessionCalls: { GetObjectQuickActions: ACTIONS, ...FORM_CHAIN, ...sessionCalls },
   });
-  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger() } };
+  return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false } };
 };
 
 const ARGS = { object: 'Incidents', recordId: 'rec-1', actionId: 'act-update' };
@@ -123,6 +123,7 @@ describe('preview_quick_action', () => {
     const result = await createPreviewQuickActionTool({
       connection,
       gate: OPEN_GATE,
+      ownRecordsOnly: false,
       logger: logger(),
     }).handler(ARGS);
 
@@ -164,6 +165,7 @@ describe('run_quick_action', () => {
       await createRunQuickActionTool({
         connection: { ...connection, session },
         gate: OPEN_GATE,
+        ownRecordsOnly: false,
         logger: logger(),
       }).handler(ARGS),
     );

@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { ObjectNotAllowedError } from '../shared/object-gate.js';
+import { assertOwnRecord } from '../shared/own-records.js';
+import { resolveObject } from '../shared/resolve-object.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -25,7 +27,7 @@ export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
     inputSchema: {
       id: z.string().describe('An `id` from a search result, e.g. `incidents:8E71…`.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('fetch', deps.logger, async () => {
         const decoded = decodeRecordId(args.id);
         if (decoded === undefined) {
@@ -47,6 +49,10 @@ export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
         if (record === undefined) {
           return errorResult(`No ${decoded.entitySet} record with RecId ${decoded.recId}.`);
         }
+
+        // The id names the object, so ownership is checked against that object's own person
+        // link rather than assumed from where the id came from.
+        await assertOwnRecord(deps, context, await resolveObject(deps, decoded.entitySet), record);
 
         return jsonResult({
           id: args.id,

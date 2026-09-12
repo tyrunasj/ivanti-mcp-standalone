@@ -15,7 +15,7 @@ const body = (result: CallToolResult): Record<string, never> => {
 
 const tools = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ responses });
-  const deps = { connection, gate: OPEN_GATE, logger: logger() };
+  const deps = { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false };
   return {
     urls,
     parameters: createGetServiceRequestParametersTool(deps),

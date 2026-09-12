@@ -6,6 +6,7 @@ import { toObjectId } from '../../ivanti/write/validated-write.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -53,9 +54,11 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
         .optional()
         .describe('Narrow every bucket, e.g. "CreatedDateTime gt 2026-01-01".'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('group_count', deps.logger, async () => {
-        const { entity, entitySet } = await resolveObject(deps, args.object);
+        const resolved = await resolveObject(deps, args.object);
+        const { entity, entitySet } = resolved;
+        const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
 
         let values = args.values ?? [];
         let valuesFrom = 'caller';
@@ -94,7 +97,9 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
         const groups: Bucket[] = await Promise.all(
           counted.map(async (value): Promise<Bucket> => {
             const conditions = [`${args.groupBy} eq ${quoteOdataString(value)}`];
-            if (args.filter !== undefined && args.filter !== '') conditions.push(`(${args.filter})`);
+            // Already carries the own-records constraint in `enduser` mode.
+            if (scoped.filter !== undefined && scoped.filter !== '')
+              conditions.push(`(${scoped.filter})`);
 
             const url = withQuery(
               deps.connection.transport.routes.entitySet(entitySet),
@@ -120,6 +125,7 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
 
         return jsonResult({
           object: entity.name,
+          ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
           groupBy: args.groupBy,
           valuesFrom,
           ...(values.length > counted.length ? { truncated: values.length } : {}),

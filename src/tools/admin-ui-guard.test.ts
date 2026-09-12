@@ -19,7 +19,7 @@ const RESPONSES: Record<string, unknown> = {
   incidents: { value: [{ RecId: 'abc', IncidentNumber: 1, Subject: 'Printer' }] },
   servicereqs: { value: [] },
   changes: { value: [] },
-  employees: { value: [{ LoginID: 'JSmith', DisplayName: 'Jon Smith' }] },
+  employees: { value: [{ RecId: 'e1', LoginID: 'JSmith', DisplayName: 'Jon Smith' }] },
   attachments: { value: [{ RecId: 'a1', ATTACHNAME: 'work-order.png' }] },
   servicereqtemplateparams: { value: [{ RecId: 'p1', Name: 'StartDate' }] },
   ValidationList: [['r1', 'Accounting']],
@@ -31,6 +31,7 @@ const RESPONSES: Record<string, unknown> = {
 
 const ARGUMENTS: Record<string, Record<string, unknown>> = {
   get_version: {},
+  act_as: { person: 'JSmith' },
   list_business_objects: {},
   get_object_metadata: { object: 'Incidents' },
   get_record: { object: 'Incidents', recordId: 'abc' },
@@ -78,6 +79,7 @@ describe('every tool, over a stubbed tenant', () => {
     const { connection, urls } = connectionFixture({
       entities: {
         incident: { relationships: [{ name: 'IncidentContainsTask', target: 'task' }] },
+        employee: {},
       },
       responses: RESPONSES,
       capability: { tier: 'session', identity: { role: 'ServiceDeskAnalyst' } },
@@ -132,7 +134,7 @@ describe('every tool, over a stubbed tenant', () => {
 
   it('reaches Ivanti only through the two documented surfaces', async () => {
     const { connection, urls } = connectionFixture({
-      entities: { incident: {} },
+      entities: { incident: {}, employee: {} },
       responses: RESPONSES,
     });
 

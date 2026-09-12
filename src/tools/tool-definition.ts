@@ -1,6 +1,7 @@
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { z, ZodRawShape } from 'zod';
 import { ANONYMOUS, type CallerIdentity } from '../auth/identity.js';
+import { createSessionPin, type SessionPin } from '../auth/identity-pin.js';
 
 /**
  * What a handler may know about the call it is serving.
@@ -13,6 +14,14 @@ export interface CallContext {
   readonly identity: CallerIdentity;
   /** Absent under stdio, which is one process and one conversation. */
   readonly sessionId?: string;
+  /**
+   * Who this conversation acts for, and the rules about changing that.
+   *
+   * Mutable where everything else here is not, and per conversation by construction: a server is
+   * created per connection, so this object's lifetime is the session's. Created by
+   * `registerTools` rather than by whoever built the context, so no transport can forget to.
+   */
+  readonly pin?: SessionPin;
 }
 
 /** The arguments a handler receives, derived from its own input schema. */
@@ -73,7 +82,9 @@ export interface ToolSpec<Shape extends ZodRawShape> {
  * by a test calling a handler directly. Anonymous is the right default for that: it is the least
  * a handler can assume.
  */
-const NO_CONTEXT: CallContext = { identity: ANONYMOUS };
+function noContext(): CallContext {
+  return { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+}
 
 export function defineTool<Shape extends ZodRawShape>(spec: ToolSpec<Shape>): ToolDefinition {
   return {
@@ -84,7 +95,8 @@ export function defineTool<Shape extends ZodRawShape>(spec: ToolSpec<Shape>): To
       inputSchema: spec.inputSchema,
       annotations: spec.annotations,
     },
-    handler: (args, context = NO_CONTEXT) =>
-      (spec.handler as ToolDefinition['handler'])(args, context),
+    // A fresh pin per call when there is no context, so one test's identity cannot leak into
+    // the next through a shared module-level object.
+    handler: (args, context) => (spec.handler as ToolDefinition['handler'])(args, context ?? noContext()),
   };
 }

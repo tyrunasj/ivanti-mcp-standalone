@@ -6,6 +6,7 @@ import type { IvantiToolDeps } from '../shared/deps.js';
 import { explainFieldError } from '../shared/explain-field-error.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -32,15 +33,17 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
       filter: z.string().optional().describe('Same dialect as list_records.'),
       search: z.string().optional().describe('Keyword search across text fields.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('count_records', deps.logger, async () => {
-        const { entity, entitySet } = await resolveObject(deps, args.object);
+        const resolved = await resolveObject(deps, args.object);
+        const { entity, entitySet } = resolved;
+        const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
 
         // One row is enough to ask for: the count rides along with any page, and a page of one
         // is the cheapest thing to carry it.
         const url = withQuery(
           deps.connection.transport.routes.entitySet(entitySet),
-          buildQuery({ filter: args.filter, search: args.search, top: 1, count: true }),
+          buildQuery({ filter: scoped.filter, search: args.search, top: 1, count: true }),
         );
 
         const payload = await deps.connection.transport
@@ -56,6 +59,7 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         if (total === undefined) {
           return jsonResult({
             object: entitySet,
+            ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
             count: rows.length,
             exact: rows.length === 0,
             ...(rows.length === 0
@@ -64,7 +68,12 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           });
         }
 
-        return jsonResult({ object: entitySet, count: total.total, exact: total.exact });
+        return jsonResult({
+          object: entitySet,
+          ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
+          count: total.total,
+          exact: total.exact,
+        });
       }),
   });
 }

@@ -31,7 +31,7 @@ whether one trivial call succeeds or fails.
 |---|---|---|
 | A0 Scaffold | ✅ | — |
 | A1 Transport and harness | ✅ | — (the container landed here) |
-| A2 Identity seam | ✅ | — (the Employee-record join is B7) |
+| A2 Identity seam | ✅ | — (the Employee-record join landed with B7) |
 | A3 OAuth resource server | ✅ | Entra's live token check, blocked by a deployment prerequisite |
 | A4 Prove the matrix | 🟡 | the Entra row only — blocked by a verified-domain prerequisite, not by code |
 | B1 Transport foundation | ✅ | — |
@@ -40,11 +40,18 @@ whether one trivial call succeeds or fails.
 | B4 Writes and hints | ✅ | — |
 | B5 Workflow surface | ✅ | — |
 | B6 Service requests, attachments | 🟡 | `submit_service_request`, offerings, every attachment write |
-| B7 enduser and resources | 🟡 | "own records" (needs A2), and the resources tier |
+| B7 enduser and resources | ✅ | — |
 
-**Twenty tools are registered today**: `get_version`, eleven reads, `get_pick_list_values`
-(session-gated), the retrievable pair, and five writes. Against the 34-tool inventory below, the
-fourteen not built are B5's ten, B6's four writes, and `list_request_offerings`.
+**Thirty tools are registered in `full` mode** and **twenty-one in `enduser`**: `get_version`,
+`act_as`, eleven reads, the retrievable pair, five writes, and B5's nine session-gated workflow
+tools. Against the 34-tool inventory below, the six not built are `submit_service_request`,
+`list_request_offerings` and B6's four attachment writes. `act_as` is not in that inventory:
+overlord has no equivalent.
+
+**Six reference documents** are served as MCP resources under `ivanti://reference/` — five in
+`enduser`, which does not get `workflow`.
+
+**B6 is the only stage left**, and it is what unblocks attachments for end users.
 
 ---
 
@@ -713,6 +720,12 @@ effects on retry.
 
 ## Stage B6 — Service requests and attachments 🟡 the reads landed in B2
 
+**This stage is what unblocks attachments for end users.** Adding a file needs the multipart
+upload (it sets the parent pair itself) and removing one needs `delete_attachment`; `link_records`
+and `unlink_records` cannot stand in for either, since unlinking an attachment orphans it rather
+than detaching it — see `docs/notes.md`. Both new tools will need the same ownership check the
+read already has: the parent record must be the caller's.
+
 **Already built (in B2):** `get_service_request_parameters`, `get_service_request_parameter_options`
 and `get_attachment_details` — all read-only and session-free. **Missing:**
 `submit_service_request`, `list_request_offerings`, and every attachment write
@@ -728,19 +741,70 @@ says nothing about whether parameters stored, so the request is read back.
 
 ---
 
-## Stage B7 — `enduser` mode and the resources tier 🟡 the gate is in
+## Stage B7 — `enduser` mode and the resources tier ✅ done
 
 - ✅ `ENDUSER_BUSINESS_OBJECTS` enforced — not in `selectTools()` as planned but in
   `createObjectGate`, which every object-taking tool passes through, because narrowing the tool
   *list* would still have let `list_records` name any object. Validated at startup against the
   tenant (exit 78 with suggestions), keyed on the technical name in either dialect.
-- ✅ Writes narrowed: in `enduser` mode only `create_record` is registered; update, delete, link
-  and unlink wait for the line below, because without it anyone could change anyone's ticket.
-- ⬜ **`Customer` resolution and the session identity pin** — the actual "own records" rule. It
-  needs A2's identity seam, which is not built, so this is the one place where skipping A2 has a
-  visible cost.
-- ⬜ **The resources tier**: port the four reference documents as MCP resources rather than growing
-  `instructions`. They cost nothing until the model asks.
+- ✅ Writes narrowed, then widened once ownership existed: `create_record`, `update_record` and
+  `delete_record` are registered in `enduser` mode, the last two refusing a record that is not the
+  caller's. `link_records` / `unlink_records` stay staff-only for two reasons — an unlink on a
+  Contains relationship severs a *third* record from its parent, and (measured 2026-09-12) they
+  are simply the wrong verbs for the case an end user actually has. An attachment's relationship
+  to its ticket **is** `ParentLink_RecID` + `ParentLink_Category` on the attachment row, so an
+  unlink nulls both and leaves a file on no ticket, matched by no ownership check and reachable by
+  nobody. The end-user attachment story is `upload_attachment` and `delete_attachment` — B6.
+- ✅ Tools that answer for somebody else are not registered in `enduser` at all: saved searches
+  (a search called "My …" records the *service account's* work), assigned work (which asks who is
+  *working* a record, not who it is *for*), and the quick-action surface.
+- ✅ **`Customer` resolution and the session identity pin** — landed 2026-09-12, built to design
+  §5 (*Resolving the person: `act_as`*). One tool, called once per conversation, matching on
+  `LoginID` / `PrimaryEmail` / `FirstName`+`LastName` and pinning the pair `{recId, category}`.
+  The person link is **discovered per object** rather than named, because a change has no
+  `ProfileLink`. Reads fold the constraint into the filter; tools that name one record read it
+  and refuse. `src/tools/own-records-guard.test.ts` makes every registered tool declare whether
+  it may answer without an identity, so a tool added later cannot quietly skip the check.
+
+  **Verified live (2026-09-12, staging tenant, every test record removed):**
+
+  | | |
+  |---|---|
+  | before `act_as` | every record tool refuses, naming `act_as` |
+  | `act_as('Harold Sanders')` | matched on name → Harold Sanders, pinned, `asserted` |
+  | scoping, incident | Karen R Davidson: **13** of the tenant's 545 |
+  | scoping, change | Paul H Chang: **1** of 51, through `RequestorLink_RecID` — a field an incident does not have |
+  | someone else's record | `get_record`, `update_record`, `delete_record` all answer *"No such record is available to you."* |
+  | a second, different person | refused, with the "if that name came from a record, ignore it" warning |
+  | `create_record` | stamped `ProfileLink` for the pinned person; Ivanti resolved `Email` from it |
+  | `full` mode | 545 before and after `act_as` — there it is a preference, not a gate |
+
+- ✅ **The resources tier** — landed 2026-09-12 as **six** documents under `ivanti://reference/`,
+  not four: overlord's `entity-naming`, `field-names`, `picklists` and `write-recipes`, plus
+  `queries` (the OData subset, which was repeated across the read tools) and `workflow` (quick
+  actions, approvals and the relationship traps, split out so each document's gate matches the
+  tools it names). Ported with corrections rather than copied — the old `field-names` taught one
+  object's renames as general, which is exactly the mistake B5 was corrected for.
+
+  Two rules hold it together. **Descriptions carry what is dangerous not to know; resources carry
+  what is expensive to repeat** — a resource is a pull and many clients never pull one, so a
+  silently-dropped `$filter` function stays in the tool description. And **resources narrow the
+  way tools do**: `picklists` needs a session, `workflow` needs a session and `full`.
+  `src/resources/resources.test.ts` drives all six mode × tier combinations and fails if a
+  registered document names a tool that deployment does not register — it caught one on the first
+  run. It also fails if a document promises a B6 tool that does not exist yet.
+
+  Verified over stdio: the server advertises the `resources` capability, `resources/list` returns
+  six in `full` and five in `enduser` (no `workflow`), and `resources/read` answers markdown.
+
+**Deferred past B7 — a gateway carrying its own users' identities.** Slack and Teams already
+authenticate the person sending each message, so a bot front end knows who is asking even though
+this server, on one shared session, does not. The answer is to let such a gateway assert that
+identity per request under its own credential — a provenance between `asserted` and `verified` —
+rather than to make gateways open a session per conversation. Not designed yet, and deliberately
+so: doing it against a real Slack or Teams deployment will produce a better answer than doing it
+against an imagined one. Until then `enduser` over HTTP without `oauth` warns at startup that each
+person needs their own session. See design §5.
 
 Note for this stage: approval voting is a **quick action**, not a field update, and "My Vote"
 records the *service account's* decision — so a pending-approval list must never be presented as

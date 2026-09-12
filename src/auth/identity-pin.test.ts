@@ -1,72 +1,91 @@
 import { describe, expect, it } from 'vitest';
-import { createIdentityPins, IdentityConflictError, initialIdentity } from './identity-pin.js';
-import { ANONYMOUS, assertedIdentity, verifiedIdentity } from './identity.js';
+import {
+  createSessionPin,
+  IdentityConflictError,
+  initialIdentity,
+  VerifiedSessionError,
+  type PinnedPerson,
+} from './identity-pin.js';
+import { ANONYMOUS, verifiedIdentity } from './identity.js';
 
 const VERIFIED = verifiedIdentity({
   subject: '367708',
   issuer: 'https://idp',
   scopes: [],
-  claims: {},
+  claims: { email: 'jsmith@corp.example' },
 });
 
-describe('createIdentityPins', () => {
-  it('pins the first claim and keeps it', () => {
-    const pins = createIdentityPins();
+function person(overrides: Partial<PinnedPerson> = {}): PinnedPerson {
+  return {
+    recId: 'A1',
+    category: 'employee',
+    displayName: 'John Smith',
+    loginId: 'jsmith',
+    matchedOn: 'LoginID',
+    provenance: 'asserted',
+    ...overrides,
+  };
+}
 
-    expect(pins.resolve('s1', ANONYMOUS, 'jsmith')).toEqual(assertedIdentity('jsmith'));
-    // A later call with no claim still acts for the pinned person.
-    expect(pins.resolve('s1', ANONYMOUS)).toEqual(assertedIdentity('jsmith'));
+describe('createSessionPin', () => {
+  it('pins the first person and keeps them', () => {
+    const pin = createSessionPin(ANONYMOUS);
+
+    pin.pin(person());
+
+    expect(pin.person()?.displayName).toBe('John Smith');
+    expect(pin.identity()).toEqual({ provenance: 'asserted', subject: 'jsmith' });
   });
 
-  it('refuses a second, different claim rather than switching', () => {
+  it('refuses a second, different person rather than switching', () => {
     // The new name may have come from a ticket the conversation just read.
-    const pins = createIdentityPins();
-    pins.resolve('s1', ANONYMOUS, 'jsmith');
+    const pin = createSessionPin(ANONYMOUS);
+    pin.pin(person());
 
-    expect(() => pins.resolve('s1', ANONYMOUS, 'adale')).toThrow(IdentityConflictError);
-    expect(() => pins.resolve('s1', ANONYMOUS, 'adale')).toThrow(/already acting for 'jsmith'/);
+    expect(() => pin.pin(person({ recId: 'B2', displayName: 'Ada Dale' }))).toThrow(
+      IdentityConflictError,
+    );
+    expect(pin.person()?.displayName).toBe('John Smith');
   });
 
-  it('accepts the same claim repeated', () => {
-    const pins = createIdentityPins();
-    pins.resolve('s1', ANONYMOUS, 'jsmith');
+  it('accepts the same person again', () => {
+    const pin = createSessionPin(ANONYMOUS);
+    pin.pin(person());
 
-    expect(pins.resolve('s1', ANONYMOUS, ' jsmith ')).toEqual(assertedIdentity('jsmith'));
+    expect(() => pin.pin(person({ matchedOn: 'PrimaryEmail' }))).not.toThrow();
+    // The first pin stands: a repeat confirms, it does not overwrite.
+    expect(pin.person()?.matchedOn).toBe('LoginID');
   });
 
-  it('ignores a claim entirely when the session is verified', () => {
+  it('refuses a claim outright when the session is verified', () => {
     // Not merged, not preferred: otherwise the strong path has a bypass around it.
-    const pins = createIdentityPins();
+    const pin = createSessionPin(VERIFIED);
 
-    expect(pins.resolve('s1', VERIFIED, 'someone-else')).toEqual(VERIFIED);
-    expect(pins.size()).toBe(0);
+    expect(() => pin.pin(person())).toThrow(VerifiedSessionError);
+    expect(pin.person()).toBeUndefined();
   });
 
-  it('keeps sessions apart', () => {
-    const pins = createIdentityPins();
-    pins.resolve('s1', ANONYMOUS, 'jsmith');
+  it('lets a verified session pin the person its own token resolved to', () => {
+    const pin = createSessionPin(VERIFIED);
 
-    expect(pins.resolve('s2', ANONYMOUS, 'adale')).toEqual(assertedIdentity('adale'));
-    expect(pins.size()).toBe(2);
+    pin.pin(person({ provenance: 'verified' }));
+
+    expect(pin.person()?.recId).toBe('A1');
+    // The identity stays the token's: resolving the person adds to what is known about it
+    // rather than downgrading how it was established.
+    expect(pin.identity()).toBe(VERIFIED);
   });
 
-  it('forgets a session when it closes', () => {
-    const pins = createIdentityPins();
-    pins.resolve('s1', ANONYMOUS, 'jsmith');
+  it('keeps conversations apart, because the pin is the conversation', () => {
+    // stdio has no session id to key a map by, and this is why that no longer matters.
+    const first = createSessionPin(ANONYMOUS);
+    const second = createSessionPin(ANONYMOUS);
 
-    pins.forget('s1');
+    first.pin(person());
+    second.pin(person({ recId: 'B2', displayName: 'Ada Dale' }));
 
-    expect(pins.size()).toBe(0);
-    // A fresh session may act for someone else.
-    expect(pins.resolve('s1', ANONYMOUS, 'adale')).toEqual(assertedIdentity('adale'));
-  });
-
-  it('has nothing to pin to without a session', () => {
-    // stdio is one process and one conversation; there is no second session to confuse it with.
-    const pins = createIdentityPins();
-
-    expect(pins.resolve(undefined, ANONYMOUS, 'jsmith')).toEqual(assertedIdentity('jsmith'));
-    expect(pins.size()).toBe(0);
+    expect(first.person()?.displayName).toBe('John Smith');
+    expect(second.person()?.displayName).toBe('Ada Dale');
   });
 });
 

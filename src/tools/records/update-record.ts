@@ -11,6 +11,7 @@ import { explainFieldError } from '../shared/explain-field-error.js';
 import { explainRequiredFields } from '../shared/explain-required-fields.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
+import { assertOwnRecordById } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 
@@ -44,9 +45,14 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         .record(z.string(), z.unknown())
         .describe('Only the fields to change, e.g. { "Status": "Resolved" }.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('update_record', deps.logger, async () => {
-        const { entity, entitySet } = await resolveObject(deps, args.object);
+        const target = await resolveObject(deps, args.object);
+        const { entity, entitySet } = target;
+
+        // Checked before anything is resolved, let alone written: in `enduser` mode this is the
+        // line between editing your own ticket and editing anyone's.
+        await assertOwnRecordById(deps, context, target, args.recordId);
 
         const resolved = await resolveValidatedWrite({
           connection: deps.connection,

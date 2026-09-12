@@ -31,6 +31,11 @@ export interface McpHandlerDeps<S extends McpSession> {
   logger: Logger;
   /** Builds a session for this identity; registration happens through the transport's callbacks. */
   createSession: (identity: CallerIdentity) => S;
+  /**
+   * Which token claim names the person, for matching against Ivanti. Absent means the default
+   * probe order — `email`, then `preferred_username`, then `upn`.
+   */
+  directoryClaim?: string;
 }
 
 export type McpHandler = (
@@ -59,7 +64,7 @@ function sameSubject(sessionIdentity: CallerIdentity, authorization: Authorizati
 }
 
 export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>): McpHandler {
-  const { sessions, logger } = deps;
+  const { sessions, logger, directoryClaim } = deps;
 
   /** One place that knows the shape of a request log line. */
   const logExchange = (
@@ -158,7 +163,9 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
     }
 
     const session = deps.createSession(
-      authorization.identity === undefined ? ANONYMOUS : verifiedIdentity(authorization.identity),
+      authorization.identity === undefined
+        ? ANONYMOUS
+        : verifiedIdentity(authorization.identity, directoryClaim),
     );
     await session.connect();
     const startedAt = Date.now();

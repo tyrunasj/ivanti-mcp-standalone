@@ -69,6 +69,20 @@ async function main(): Promise<void> {
     });
   }
 
+  // `enduser` scopes records to one person per MCP session, and a session is whatever the client
+  // opened — so a gateway that multiplexes many people onto one connection would show the second
+  // person the first person's records. Under `oauth` this cannot happen: every request carries a
+  // token and a session belongs to the subject that opened it (`sameSubject`, 403 otherwise).
+  // Under `none` and `bearer` there is no per-request principal at all, so the server cannot tell
+  // two people apart and the deployment has to.
+  if (config.MCP_MODE === 'enduser' && config.AUTH_MODE !== 'oauth') {
+    logger.warn(
+      'enduser over HTTP without oauth: every person must get their own MCP session — this ' +
+        'server cannot tell two callers apart on one',
+      { authMode: config.AUTH_MODE },
+    );
+  }
+
   let verifier: TokenVerifier | undefined;
   if (config.AUTH_MODE === 'oauth') {
     const setup = await createOAuthSetup(config);

@@ -18,7 +18,7 @@ const ENTITIES = { incident: {}, servicereq: {}, change: {} };
 
 const tools = (responses: Record<string, unknown>) => {
   const { connection, urls } = connectionFixture({ entities: ENTITIES, responses });
-  const deps = { connection, gate: OPEN_GATE, logger: logger() };
+  const deps = { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false };
   return { urls, search: createSearchTool(deps), fetch: createFetchTool(deps) };
 };
 

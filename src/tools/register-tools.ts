@@ -32,7 +32,9 @@ import { createListSavedSearchesTool } from './search/list-saved-searches.js';
 import { createSavedSearchTool } from './search/saved-search.js';
 import { createListBusinessObjectsTool } from './schema/list-business-objects.js';
 import { createObjectGate } from './shared/object-gate.js';
+import { createActAsTool } from './identity/act-as.js';
 import { auditFields } from '../auth/identity.js';
+import { createSessionPin } from '../auth/identity-pin.js';
 import type { CallContext, ToolDefinition } from './tool-definition.js';
 
 export interface ToolContext {
@@ -54,11 +56,18 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
 
   if (context.ivanti === undefined) return tools;
 
+  const enduser = config.MCP_MODE === 'enduser';
+
   const deps = {
     connection: context.ivanti,
     gate: createObjectGate(config),
     logger: context.logger,
+    ownRecordsOnly: enduser,
   };
+
+  // Who the conversation is helping. First in both modes, and in `enduser` the gate every record
+  // tool below stands behind.
+  tools.push(createActAsTool(deps));
 
   // Reads first: they need no session and work with any key role.
   tools.push(
@@ -69,7 +78,6 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
     createCountRecordsTool(deps),
     createGetRelatedRecordsTool(deps),
     createFulltextSearchObjectTool(deps),
-    createListAssignedWorkTool(deps),
     createGetServiceRequestParametersTool(deps),
     createGetServiceRequestParameterOptionsTool(deps),
     createGetAttachmentDetailsTool(deps),
@@ -79,6 +87,10 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
     createFetchTool(deps),
   );
 
+  // "Assigned to me" is a staff question: it asks who is *working* a record, where an end user
+  // only ever asks who it is *for*. Scoping it would not make it meaningful.
+  if (!enduser) tools.push(createListAssignedWorkTool(deps));
+
   // Need the ASMX session: all of these live on a workspace or a create form, which OData
   // cannot see.
   if (context.ivanti.capability.tier !== 'odata') {
@@ -86,27 +98,35 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
       createGetPickListValuesTool(deps),
       createGetPickListConstraintsTool(deps),
       createGetLinkFieldsTool(deps),
-      createListSavedSearchesTool(deps),
-      createSavedSearchTool(deps),
       createGroupCountTool(deps),
-      createListQuickActionsTool(deps),
-      createPreviewQuickActionTool(deps),
-      createPreviewDeleteTool(deps),
     );
+
+    // Staff surfaces, all of which answer across everyone or for the service account. A saved
+    // search called "My …" records *this server's* account, so presenting one to an end user as
+    // their own would be a lie the model could not detect.
+    if (!enduser) {
+      tools.push(
+        createListSavedSearchesTool(deps),
+        createSavedSearchTool(deps),
+        createListQuickActionsTool(deps),
+        createPreviewQuickActionTool(deps),
+        createPreviewDeleteTool(deps),
+      );
+    }
   }
 
-  // An end user may raise a ticket on an allowlisted object; the gate already holds that line.
+  // An end user may raise a ticket on an allowlisted object; the gate holds which objects, and
+  // `ownershipFields` makes the ticket theirs.
   tools.push(createCreateRecordTool(deps));
 
-  if (config.MCP_MODE === 'full') {
-    // Editing and deleting wait for `enduser` to learn what "own records" means: without that,
-    // an end-user deployment would let anyone change anyone's ticket. Fail closed until B7.
-    tools.push(
-      createUpdateRecordTool(deps),
-      createDeleteRecordTool(deps),
-      createLinkRecordsTool(deps),
-      createUnlinkRecordsTool(deps),
-    );
+  // Editing and deleting are now safe in `enduser` too: both read the record first and refuse one
+  // that is not the caller's. Linking is not — `unlink_records` on a Contains relationship
+  // severs a *third* record from its parent, which no ownership check on the two named records
+  // would catch.
+  tools.push(createUpdateRecordTool(deps), createDeleteRecordTool(deps));
+
+  if (!enduser) {
+    tools.push(createLinkRecordsTool(deps), createUnlinkRecordsTool(deps));
 
     // Runs whatever the tenant defined — email, child records, status changes — and repeats it
     // on retry. It needs the session, so it lands only where both hold.
@@ -134,14 +154,19 @@ export function registerTools(
   context: CallContext,
   logger: Logger,
 ): string[] {
+  // One pin per server, and a server is one connection — so the identity a conversation settles
+  // on cannot reach another, and stdio (which has no session id to key a map by) is covered by
+  // the same object as everything else.
+  const bound: CallContext = { ...context, pin: createSessionPin(context.identity) };
+
   for (const tool of tools) {
     server.registerTool(tool.name, tool.config, (args: Record<string, unknown>) => {
       logger.info('tool called', {
         tool: tool.name,
         ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
-        ...auditFields(context.identity),
+        ...auditFields(bound.pin?.identity() ?? context.identity),
       });
-      return tool.handler(args, context);
+      return tool.handler(args, bound);
     });
   }
 

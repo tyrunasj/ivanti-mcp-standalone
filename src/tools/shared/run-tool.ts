@@ -10,6 +10,12 @@ import {
 import { FieldNameError } from './explain-field-error.js';
 import { RequiredFieldsError } from './explain-required-fields.js';
 import { ObjectNotAllowedError } from './object-gate.js';
+import {
+  IdentityRequiredError,
+  NotYourRecordError,
+  UnscopableObjectError,
+} from './own-records.js';
+import { IdentityConflictError, VerifiedSessionError } from '../../auth/identity-pin.js';
 import { errorResult } from './result.js';
 
 /**
@@ -38,6 +44,29 @@ export async function runTool(
 
     if (error instanceof ObjectNotAllowedError) {
       logger.debug('tool refused an object', { tool, ref: error.ref });
+      return errorResult(error.message);
+    }
+
+    // Refusals about who is asking. All of them are ordinary answers the model can act on — the
+    // conversation has not said who it is helping, or has tried to become someone else — so none
+    // of them is an error in the log. The one thing recorded is that it happened, never the name
+    // that was claimed.
+    if (
+      error instanceof IdentityRequiredError ||
+      error instanceof IdentityConflictError ||
+      error instanceof VerifiedSessionError
+    ) {
+      logger.info('tool refused on identity', { tool, reason: error.name });
+      return errorResult(error.message);
+    }
+
+    if (error instanceof NotYourRecordError) {
+      logger.info('tool refused a record that is not the caller\'s', { tool });
+      return errorResult(error.message);
+    }
+
+    if (error instanceof UnscopableObjectError) {
+      logger.warn('object has no person link', { tool, object: error.object });
       return errorResult(error.message);
     }
 

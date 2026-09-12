@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { configFixture } from '../config/config.fixture.js';
-import { connectionFixture } from '../ivanti/connection.fixture.js';
+import { connectionFixture, field } from '../ivanti/connection.fixture.js';
 import type { Logger } from '../logger.js';
 import { selectTools } from './register-tools.js';
+import { createSessionPin } from '../auth/identity-pin.js';
+import { ANONYMOUS } from '../auth/identity.js';
+import type { CallContext } from './tool-definition.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -11,12 +14,33 @@ const GATED = configFixture({
   ENDUSER_BUSINESS_OBJECTS: ['incident', 'change', 'servicereq'],
 });
 
+const PERSON = { RecId: 'e1', LoginID: 'JSmith', DisplayName: 'Jon Smith', Status: 'Active' };
+
 const tools = () => {
   const { connection, urls } = connectionFixture({
-    entities: { incident: {}, change: {}, servicereq: {}, employee: {}, frs_hc_calllog: {} },
+    entities: {
+      incident: {
+        fields: [
+          field('RecId'),
+          field('Subject'),
+          field('ProfileLink_RecID'),
+          field('ProfileLink_Category'),
+        ],
+      },
+      change: {},
+      servicereq: {},
+      employee: {},
+      frs_hc_calllog: {},
+    },
     responses: {
-      incidents: { value: [{ RecId: 'i1', Subject: 'Printer' }] },
-      employees: { value: [{ LoginID: 'JSmith' }] },
+      // Every incident here belongs to the person the tests act as, so a scoped read has
+      // something to return.
+      incidents: {
+        value: [
+          { RecId: 'i1', Subject: 'Printer', ProfileLink_RecID: 'e1', ProfileLink_Category: 'Employee' },
+        ],
+      },
+      employees: { value: [PERSON] },
     },
   });
   const selected = selectTools(GATED, {
@@ -26,7 +50,16 @@ const tools = () => {
     ivanti: connection,
   });
   const byName = new Map(selected.map((tool) => [tool.name, tool]));
-  return { urls, tool: (name: string) => byName.get(name)! };
+  const tool = (name: string) => byName.get(name)!;
+
+  // One conversation, so `act_as` and everything after it share a pin.
+  const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+  const actAs = async (person = 'JSmith'): Promise<void> => {
+    const result = await tool('act_as').handler({ person }, context);
+    if (result.isError === true) throw new Error(text(result));
+  };
+
+  return { urls, tool, context, actAs, names: selected.map((entry) => entry.name) };
 };
 
 const text = (result: { content: { type: string; text?: string }[] }): string =>
@@ -55,13 +88,16 @@ describe('enduser mode gates every object-taking tool', () => {
     expect(urls).toEqual([]);
   });
 
-  it('still serves the allowed objects', async () => {
-    const { tool } = tools();
+  it('still serves the allowed objects, once it knows who is asking', async () => {
+    const { tool, context, actAs } = tools();
+    await actAs();
 
-    const result = await tool('list_records').handler({ object: 'Incidents' });
+    const result = await tool('list_records').handler({ object: 'Incidents' }, context);
 
     expect(result.isError).toBeUndefined();
     expect(text(result)).toContain('"returned": 1');
+    // The answer says whose records these are, rather than implying they are everyone's.
+    expect(text(result)).toContain('"scopedTo": "Jon Smith"');
   });
 
   it('narrows the catalog to the allowlist', async () => {
@@ -79,9 +115,10 @@ describe('enduser mode gates every object-taking tool', () => {
   });
 
   it('narrows the cross-object search rather than refusing it', async () => {
-    const { tool } = tools();
+    const { tool, context, actAs } = tools();
+    await actAs();
 
-    const body = JSON.parse(text(await tool('search').handler({ query: 'printer' }))) as {
+    const body = JSON.parse(text(await tool('search').handler({ query: 'printer' }, context))) as {
       searched: string[];
     };
 
@@ -91,6 +128,8 @@ describe('enduser mode gates every object-taking tool', () => {
   it('refuses a search aimed at a gated object', async () => {
     const { tool } = tools();
 
+    // Refused on the gate before the identity is ever needed: a gated object is not confirmed
+    // to exist, whoever is asking.
     const body = JSON.parse(
       text(await tool('search').handler({ query: 'x', objects: ['Employees'] })),
     ) as { results: unknown[]; note?: string };
@@ -99,19 +138,25 @@ describe('enduser mode gates every object-taking tool', () => {
     expect(body.note).toContain('incident, change, servicereq');
   });
 
-  it('leaves the gated objects out of assigned work', async () => {
-    const { tool } = tools();
+  it('does not offer the tools that answer for someone other than the caller', () => {
+    const { names } = tools();
 
-    const body = JSON.parse(text(await tool('list_assigned_work').handler({ person: 'JSmith' }))) as {
-      groups: { object: string }[];
-    };
-
-    // tasks and problems are not on the allowlist.
-    expect(body.groups.map((group) => group.object)).toEqual([
-      'incidents',
-      'servicereqs',
-      'changes',
-    ]);
+    // A saved search called "My …" records the *service account's* work, and assigned work asks
+    // who is working a record rather than who it is for. Narrowing them would not make either
+    // one mean what an end user would read it to mean, so they are not registered at all.
+    for (const absent of [
+      'list_assigned_work',
+      'list_saved_searches',
+      'saved_search',
+      'list_quick_actions',
+      'preview_quick_action',
+      'run_quick_action',
+      'preview_delete',
+      'link_records',
+      'unlink_records',
+    ]) {
+      expect(names, `${absent} should not exist in enduser mode`).not.toContain(absent);
+    }
   });
 
   it('gates an attachment by the record it hangs off, not by the attachment table', async () => {
