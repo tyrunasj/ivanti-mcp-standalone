@@ -103,7 +103,9 @@ describe('group_count', () => {
     );
 
     expect(result).toMatchObject({ valuesFrom: 'the field’s own list' });
-    expect(String(result['warning'])).toContain("not on the field's list");
+    expect(String(result['warning'])).toContain("the field's list does not offer");
+    // And it must name a way out, not just flag the problem.
+    expect(String(result['warning'])).toContain('TO FIX');
   });
 
   it('takes the values from the caller when it is given them', async () => {
@@ -128,7 +130,10 @@ describe('group_count', () => {
     const result = await createGroupCountTool(d).handler({ object: 'Incidents', groupBy: 'Subject' });
 
     expect(result.isError).toBe(true);
-    expect(text(result)).toContain('Pass `values`');
+    // The refusal must not tell the caller to supply the values they called it to discover
+    // without saying how to get them.
+    expect(text(result)).toContain('CANNOT DISCOVER THE VALUES');
+    expect(text(result)).toContain('list_records');
   });
 
   it('narrows every bucket with a filter', async () => {

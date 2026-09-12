@@ -38,7 +38,17 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
       '`ParentLink_Category` — passed here, in the create, which wires the relationship in one ' +
       'call. link_records is for records that already exist.\n\n' +
       'The record is read back before this reports success. A write Ivanti accepted but did not ' +
-      'store is reported as a failure.',
+      'store is reported as a failure.' +
+      (deps.ownRecordsOnly
+        ? '\n\nA REQUEST GOES TO THE CATALOG; A FAULT IS AN INCIDENT. "I need a laptop / access" ' +
+          'is a request — check list_request_offerings first, for the questions, routing and ' +
+          'approvals the tenant encoded. "X is broken / has stopped" is a fault and belongs ' +
+          'here, even when an offering shares its name.\n\n' +
+          'A REOPEN ACTION BESIDE A CLOSE ACTION IS NOT EVIDENCE THE CLOSE IS REVERSIBLE. ' +
+          'Measured: a self-service Close landed on `Closed` while the Reopen accepted only ' +
+          '`Resolved`, so whoever can close can never reopen — and the record is then ' +
+          'permanently read-only and undeletable. Never promise someone they can undo it.'
+        : ''),
     annotations: {
       title: 'Create a record',
       readOnlyHint: false,

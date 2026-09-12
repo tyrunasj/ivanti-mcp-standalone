@@ -113,14 +113,28 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
           // go on supplying constraints. That cost one tester ~67 calls.
           ...(options.length === 0
             ? {
+                // Three causes, and it must name the RIGHT one. The old wording said "supply the
+                // constraining answer" even when `constraintsUsed` two lines below proved one had
+                // been supplied — naming a specific wrong fix, which is worse than saying
+                // nothing. It sent a tester probing a constraint name that was already correct.
                 note:
                   args.search !== undefined && args.search !== ''
                     ? `No options start with '${args.search}'. This matches the beginning of the ` +
                       'option label, not a substring and not the value — drop `search` and read ' +
                       'the whole list rather than trying another term.'
-                    : 'No options. If this parameter is constrained by another answer, supply ' +
-                      'that answer — a dependent list is empty rather than complete until its ' +
-                      'parent is given.',
+                    : args.constraints !== undefined && args.constraints.length > 0
+                      ? 'No options matched the constraints below. They WERE applied, so the ' +
+                        'constraint field name is not the problem — the likeliest cause is that ' +
+                        'a value you passed is not one the parent parameter actually holds. ' +
+                        "Check it against that parameter's own options before changing anything " +
+                        'else.'
+                      : 'No options, and no constraints were supplied. If this parameter is ' +
+                        'constrained by another answer, supply that answer — a dependent list ' +
+                        'is empty rather than complete until its parent is given. If its ' +
+                        '`ValidationConstraints` is `[]` it is NOT dependent on anything, and ' +
+                        'this means the validation list itself holds no rows on this tenant: ' +
+                        'nothing can ever be selected here, and any chain hanging off it is ' +
+                        'dead. Check the parameter before assuming a missing constraint.',
                 ...(args.constraints === undefined || args.constraints.length === 0
                   ? {}
                   : { constraintsUsed: args.constraints }),

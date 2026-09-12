@@ -66,10 +66,18 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
       'Takes the TEMPLATE RecId (from the service request template object), not a subscription ' +
       'id and not an offering name. A wrong id returns no parameters rather than an error.\n\n' +
       'Read `required` rather than `RequiredExpression`: the raw field is an expression and is a ' +
-      'string either way, so `$(false)` looks true to a naive check. When `required` is absent ' +
-      'the rule is conditional and only Ivanti can evaluate it — treat it as "ask anyway".\n\n' +
+      'string either way, so `$(false)` looks true to a naive check. `required: true` is ' +
+      'unconditional; absent WITH a `RequiredExpression` is conditional — read the expression, ' +
+      'because a parameter can become required the moment another answer is given; absent with ' +
+      'NO `RequiredExpression` is genuinely optional.\n\n' +
+      '`VisibilityExpression` IS A CONDITION ON ANOTHER ANSWER ON THE SAME FORM, e.g. ' +
+      '`$(IsThisForYou == false)`. A parameter whose expression is false is not on the form — do ' +
+      'not answer it. Answering a hidden parameter, or omitting one your other answers have just ' +
+      'revealed, is how a submit gets refused.\n\n' +
       'Parameters whose `DisplayType` is a list take their values from a validation list: use ' +
-      'get_service_request_parameter_options for those instead of inventing values.',
+      'get_service_request_parameter_options for those instead of inventing values. A ' +
+      '`DisplayType` of `category` is a SECTION HEADING, not a question — never answer it; ' +
+      '`answerable` counts the rest.',
     annotations: {
       title: 'Get service request parameters',
       readOnlyHint: true,
@@ -182,9 +190,24 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
           dropEmpty: true,
         });
 
+        // Headings are not questions. Counting them as parameters sends a caller answering
+        // four things that take no value, on Ivanti's one-refusal-at-a-time treadmill.
+        const answerable = projected.filter(
+          (parameter) => (parameter as { DisplayType?: unknown }).DisplayType !== 'category',
+        ).length;
+
         return jsonResult({
           templateId: args.templateId,
           returned: projected.length,
+          answerable,
+          ...(answerable === projected.length
+            ? {}
+            : {
+                answerableNote:
+                  `${String(projected.length - answerable)} of these have DisplayType ` +
+                  '`category`: they are section headings on the form, not questions. Do not ' +
+                  'answer them.',
+              }),
           ...(projected.length === 0
             ? {
                 note:

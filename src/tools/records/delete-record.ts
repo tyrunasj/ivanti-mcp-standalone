@@ -20,7 +20,10 @@ export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
       'Status to Closed or Cancelled keeps the history, and is almost always what a service desk ' +
       'actually wants.\n\n' +
       'The record is read back afterwards; if it is still there, this reports a failure rather ' +
-      'than success.',
+      'than success.\n\n' +
+      'DELETE BEFORE CLOSING, NOT AFTER. A closed record is read-only and this tool refuses it, ' +
+      "so \"close it now, tidy up later\" does not work — the tidying is exactly what closing " +
+      'prevents.',
     annotations: {
       title: 'Delete a record',
       readOnlyHint: false,

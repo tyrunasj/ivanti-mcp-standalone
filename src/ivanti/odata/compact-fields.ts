@@ -63,58 +63,92 @@ const AUDIT_FIELDS = new Set(
  */
 const FALLBACK_FIELDS = 8;
 
-/** Whether the preference list identified anything on this object, ignoring audit columns. */
-function preferenceMatches(available: readonly string[]): string[] {
+/**
+ * How many preference fields must carry a value before the default is considered to fit.
+ *
+ * One is not enough, and the audit case proves it: `audit_incident` rows carry a real `Priority`
+ * on some rows and null for `Subject`, `Status`, `Owner` and `OwnerTeam` on all of them. A
+ * single-field match suppressed the fallback and the rows still came back five-sixths empty,
+ * while `AuditHistoryDescription` — the entire point of the object — went unasked for. Two is the
+ * smallest threshold that says "this object really is shaped like the ones the list knows".
+ */
+const MIN_IDENTIFYING = 2;
+
+/** A value that actually identifies something, as opposed to a key that merely exists. */
+function hasValue(value: unknown): boolean {
+  return value !== null && value !== undefined && value !== '';
+}
+
+/**
+ * Preference fields that carry a real value in at least one of the sampled rows.
+ *
+ * Key presence is not enough, and that gap shipped: `audit_incident` rows DO have `Subject`,
+ * `Status`, `Priority`, `Owner` and `OwnerTeam` as columns — all null on every row — so the
+ * preference list matched, the fallback never fired, and eight real audit entries came back as
+ * `{RecId, Subject: null, Status: null, …}`. A reader sees "8 entries, all blank" and is wrong
+ * twice: the rows are not blank, and their actual content (`AuditHistoryDescription`,
+ * `AuditHistoryDateTime`, `AuditHistoryUser`) was never asked for.
+ */
+function preferenceMatches(rows: readonly Record<string, unknown>[]): string[] {
   const compact = new Set(COMPACT_ROW_FIELDS.map((name) => name.toLowerCase()));
-  return available.filter(
-    (name) => compact.has(name.toLowerCase()) && !AUDIT_FIELDS.has(name.toLowerCase()),
-  );
+  const useful = new Set<string>();
+  for (const row of rows) {
+    for (const [field, value] of Object.entries(row)) {
+      const lower = field.toLowerCase();
+      if (compact.has(lower) && !AUDIT_FIELDS.has(lower) && hasValue(value)) useful.add(field);
+    }
+  }
+  return [...useful];
 }
 
 /**
  * The fields to project from a row, for ANY object — including one this file has never heard of.
  *
  * The preference list first, because on the objects Ivanti ships it is genuinely good. When it
- * matches nothing but audit columns — a tenant's own Business Object, or a shipped one whose
- * fields were renamed — the row's own leading fields are used instead. That is not a guess about
- * which fields matter; it is simply better than handing back a RecId and two timestamps, which is
- * what every row of `attachment` and `standarduserteam` looked like before.
+ * carries nothing useful — a tenant's own Business Object, a shipped one whose fields were
+ * renamed, or a target like `audit_incident` whose ticket-shaped columns are all null — the rows'
+ * own populated fields are used instead. That is not a guess about which fields matter; it is
+ * simply better than handing back a RecId and two timestamps.
  *
  * `extras` is for candidates a caller has from somewhere better than a name list — the object's
- * required and validated fields, say. They are used only if the row actually has them.
+ * required and validated fields, say. They are used only where the rows actually carry them.
  */
 export function compactFieldsFor(
-  rowKeys: readonly string[],
+  rows: readonly Record<string, unknown>[],
   extras: readonly string[] = [],
 ): { fields: string[]; fellBack: boolean } {
-  const present = new Set(rowKeys.map((name) => name.toLowerCase()));
+  const populated = new Set<string>();
+  for (const row of rows) {
+    for (const [field, value] of Object.entries(row)) {
+      if (hasValue(value)) populated.add(field);
+    }
+  }
+
   const identifying = [
-    ...preferenceMatches(rowKeys),
+    ...preferenceMatches(rows),
     ...extras.filter(
-      (name) => present.has(name.toLowerCase()) && !AUDIT_FIELDS.has(name.toLowerCase()),
+      (name) => populated.has(name) && !AUDIT_FIELDS.has(name.toLowerCase()),
     ),
   ];
 
-  if (identifying.length > 0) {
+  if (identifying.length >= MIN_IDENTIFYING) {
     return { fields: [...new Set([...COMPACT_ROW_FIELDS, ...identifying])], fellBack: false };
   }
 
-  const own = rowKeys.filter((name) => !AUDIT_FIELDS.has(name.toLowerCase()));
+  const own = [...populated].filter((name) => !AUDIT_FIELDS.has(name.toLowerCase()));
   return {
     fields: [...COMPACT_ROW_FIELDS, ...own.slice(0, FALLBACK_FIELDS)],
     fellBack: own.length > 0,
   };
 }
 
-/**
- * The fields NOT shown after a fallback, so the caller can pick properly next time.
- *
- * Returns undefined when the preference list did fit, which is the signal that no explanation is
- * owed.
- */
-export function compactMissedObject(available: readonly string[]): string[] | undefined {
-  if (preferenceMatches(available).length > 0) return undefined;
-  return available.filter((name) => !AUDIT_FIELDS.has(name.toLowerCase()));
+export function compactMissedObject(
+  rows: readonly Record<string, unknown>[],
+): string[] | undefined {
+  if (preferenceMatches(rows).length >= MIN_IDENTIFYING) return undefined;
+  const names = new Set<string>();
+  for (const row of rows) for (const field of Object.keys(row)) names.add(field);
+  return [...names].filter((name) => !AUDIT_FIELDS.has(name.toLowerCase()));
 }
 
 /**

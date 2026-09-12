@@ -94,7 +94,14 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
          */
         const diagnosed = Object.fromEntries(
           Object.entries(lists).map(([field, list]) => {
-            const parents = constrainedBy(form, field).filter((parent) => parent !== field);
+            const all = constrainedBy(form, field);
+            // A field constrained by ITSELF is a workflow state machine: the list Ivanti offers
+            // is the transitions available from a NEW record, not the field's range. Filtering
+            // the self-reference out left `parents` empty, so `change.Status` answered 4 of its 9
+            // values with no `subset` flag at all — and a breakdown built from it covered 12 of
+            // 51 records.
+            const selfConstrained = all.some((parent) => parent === field);
+            const parents = all.filter((parent) => parent !== field);
             const supplied = new Set(Object.keys(list.filteredBy ?? {}).map((k) => k.toLowerCase()));
             const missing = parents.filter((parent) => !supplied.has(parent.toLowerCase()));
 
@@ -119,6 +126,24 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
                           "parent's own list first."
                         : 'Empty: this field is validated but the form offers no options for it ' +
                           'in this role. Read the backing object directly with list_records.',
+                },
+              ];
+            }
+
+            if (selfConstrained && list.values.length > 0) {
+              return [
+                field,
+                {
+                  ...list,
+                  subset: true,
+                  constrainedBy: [field],
+                  note:
+                    `THESE ARE NOT ALL THE VALUES. '${field}' is constrained by its own current ` +
+                    'value — a workflow state machine — so this is the set reachable from a NEW ' +
+                    'record, not everything the field can hold. Measured: change.Status answers ' +
+                    '4 here while 7 are in use, and the largest group is missing. Read the ' +
+                    'backing object (list_business_objects with includeValidationLists) for the ' +
+                    'full range before counting or grouping by it.',
                 },
               ];
             }

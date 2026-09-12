@@ -13,7 +13,13 @@ Ivanti drops the clause and returns the **full unfiltered set**, which looks exa
 successful query with a lot of matches. These are refused before the request is sent rather than
 being allowed to mislead you. Use \`search\` for substrings.
 
-    Owner eq '$NULL'                 the only way to match an empty field
+    Owner eq '$NULL'                 the only way to match an empty field — TEXT FIELDS ONLY.
+                                     On a date or numeric field Ivanti answers 400 "No such
+                                     entry exists", which reads as a bad field NAME; the field
+                                     is fine, the operator is not, and there is no null test
+                                     for those types. \`ne '$NULL'\` also counts the empty
+                                     string as present (13 of 42 rows, measured), so pair it
+                                     with \`and Owner ne ''\` to exclude both.
     CreatedDateTime gt 2026-01-01    dates are bare and unquoted
     (A eq 1 or B eq 2) and C eq 3    parentheses work, and precedence needs them
 

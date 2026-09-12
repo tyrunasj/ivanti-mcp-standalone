@@ -22,14 +22,19 @@
  * 2. **`or` is a real operator**, in either case, and is the only way to widen.
  * 3. **`AND` is not** — it is searched for literally, so writing it guarantees zero.
  * 4. **Quoting a phrase matches nothing**, and matching is prefix-from-the-start-of-a-word:
- *    `projec` finds `projector`, `rojector` finds nothing.
+ *    `projec` finds `projector`, `rojector` finds nothing. The corollary is the one that bites:
+ *    the word a person says is usually LONGER than the stem that finds everything. Measured,
+ *    `printer` returns 48 incidents and `print` returns 57 — searching the obvious term
+ *    under-reports by 16% with no sign that anything was missed.
  */
 export const QUERY_WORDS =
   'Two or three distinctive KEYWORDS — never the user’s sentence. A SPACE MEANS AND: every ' +
   'word must appear in the same record, so `projector printer` finds nothing while each word ' +
   'alone finds plenty. Use `or` to widen (`projector or clicker`); do NOT write `AND`, which is ' +
   'searched for literally, and do NOT quote a phrase, which matches nothing. Words match from ' +
-  'their START — `projec` finds "projector", `rojector` finds nothing. Case-insensitive.';
+  'their START, so SEARCH THE STEM, NOT THE WORD THE PERSON SAID: measured, `print` finds 57 ' +
+  'incidents where `printer` finds 48, because "printing" does not begin with "printer". ' +
+  'Truncating too far fails from the other end — `rojector` finds nothing. Case-insensitive.';
 
 /**
  * Whether the AND advice applies to this query.

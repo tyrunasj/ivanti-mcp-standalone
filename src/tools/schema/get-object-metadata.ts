@@ -83,12 +83,31 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
          * target match is what makes `journal` work when the relationship is called
          * `IncidentContainsJournal`.
          */
-        const relationships = entity.relationships.filter(
-          (relationship) =>
-            search === undefined ||
-            relationship.name.toLowerCase().includes(search) ||
-            relationship.target.toLowerCase().includes(search),
-        );
+        const relationships = entity.relationships
+          .filter(
+            (relationship) =>
+              search === undefined ||
+              relationship.name.toLowerCase().includes(search) ||
+              relationship.target.toLowerCase().includes(search),
+          )
+          /**
+           * Whether the caller can actually follow it.
+           *
+           * `get_related_records` says "relationship names come from get_object_metadata", and on
+           * a gated deployment that list was 7/8 dead ends — every one refused the moment it was
+           * used. Advertising a path the gate forbids is worse than not listing it, because the
+           * refusal arrives after the caller has committed to a plan.
+           */
+          .map((relationship) =>
+            deps.gate.allows(relationship.target)
+              ? relationship
+              : {
+                  ...relationship,
+                  available: false,
+                  reason: 'this deployment does not expose that object, so this relationship ' +
+                    'cannot be followed — get_related_records will refuse it',
+                },
+          );
 
         return jsonResult({
           object: entity.name,
@@ -100,7 +119,25 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
               }
             : {}),
           fieldCount: fields.length,
-          ...(search === undefined ? {} : { searchedFor: args.search }),
+          ...(search === undefined
+            ? {}
+            : {
+                searchedFor: args.search,
+                // Without this, `fieldCount: 0` is byte-identical to the field-less entity Ivanti
+                // fabricates for an object that does not exist — so a search that simply matched
+                // nothing reads as a typo in the OBJECT name. Measured: `category` has 9 fields
+                // and none contains "name".
+                totalFieldCount: visibleFields(entity).length,
+                ...(fields.length === 0
+                  ? {
+                      fieldsNote:
+                        `This object is real and has ${String(visibleFields(entity).length)} ` +
+                        `fields; none matches '${args.search ?? ''}'. Call again without ` +
+                        '`search` to see them. This is not the empty document Ivanti returns for ' +
+                        'an object that does not exist.',
+                    }
+                  : {}),
+              }),
           fields,
           ...(args.includeRelationships === false
             ? {}

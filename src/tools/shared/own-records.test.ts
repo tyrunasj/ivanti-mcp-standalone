@@ -8,9 +8,12 @@ import {
   NotYourRecordError,
   UnscopableObjectError,
   assertOwnRecord,
+  hideMissingRecord,
+  missingRecordMessage,
   ownershipFields,
   scopeToOwnRecords,
 } from './own-records.js';
+import { IvantiApiError } from '../../ivanti/http/errors.js';
 import { resolveObject } from './resolve-object.js';
 import { createSessionPin } from '../../auth/identity-pin.js';
 import { ANONYMOUS } from '../../auth/identity.js';
@@ -149,5 +152,42 @@ describe('ownershipFields', () => {
     const resolved = await resolveObject(deps, 'Incidents');
 
     expect(await ownershipFields(deps, anonymous(), resolved)).toEqual({});
+  });
+});
+
+describe('hideMissingRecord', () => {
+  const notFound = new IvantiApiError({
+    status: 400,
+    method: 'GET',
+    url: 'incidents',
+    body: '{"code":"ISM_4000","message":["Invalid key"]}',
+  });
+
+  it('collapses "not there" into "not yours" for a scoped caller', () => {
+    // The oracle, measured in enduser: someone else's record answered "No such record is
+    // available to you." while a nonexistent one answered Ivanti's 400 gloss — so a leaked RecId
+    // could be confirmed, and asking under two object names attributed it to one of them.
+    expect(() => hideMissingRecord({ ownRecordsOnly: true } as never, notFound)).toThrow(
+      NotYourRecordError,
+    );
+    expect(missingRecordMessage({ ownRecordsOnly: true } as never)).toBe(
+      'No such record is available to you.',
+    );
+  });
+
+  it('keeps the useful answer when the caller is not scoped', () => {
+    // An analyst debugging a typo is not an adversary; "the record does not exist" is the right
+    // answer in `full`.
+    expect(() => hideMissingRecord({ ownRecordsOnly: false } as never, notFound)).toThrow(
+      IvantiApiError,
+    );
+    expect(missingRecordMessage({ ownRecordsOnly: false } as never)).toBeUndefined();
+  });
+
+  it('never swallows an unrelated failure', () => {
+    const boom = new IvantiApiError({ status: 500, method: 'GET', url: 'incidents' });
+    expect(() => hideMissingRecord({ ownRecordsOnly: true } as never, boom)).toThrow(
+      IvantiApiError,
+    );
   });
 });

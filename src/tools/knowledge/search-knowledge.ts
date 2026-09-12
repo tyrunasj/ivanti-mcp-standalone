@@ -102,15 +102,18 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
       'answered before. An article that solves it is faster than a ticket that gets the same ' +
       'answer three days later.\n\n' +
       (enduser
-        ? 'Only PUBLISHED articles are searched. Drafts, articles still under review and ' +
-          'rejected ones are internal and are not returned.'
+        ? 'Only PUBLISHED articles are searched; drafts and articles under review are not ' +
+          'returned. PUBLISHED DOES NOT MEAN WRITTEN FOR A CUSTOMER — many are agent ' +
+          'runbooks. Summarise the steps that apply to the person and do not read out ' +
+          'internal queue names or referenced ticket numbers.'
         : 'All states are searched, and each result says which. A Draft or Rejected article is ' +
           'internal — do not pass its content to the person who raised the ticket as though it ' +
           'were guidance.') +
-      '\n\nBodies are HTML and come back as text, shortened — each result says whether it was ' +
-      'cut. For the whole article pass `articleNumber` instead of `query`: the full text lives ' +
-      'on a subtype that the record tools cannot reach from `FRS_Knowledge`, so this is the only ' +
-      'way to read one end to end.',
+      '\n\nEVERY SEARCH RESULT IS THE SUMMARY ONLY, never the fix. `excerpt` comes from the ' +
+      "article's summary field and is marked `summaryOnly: true`; `truncated` describes that " +
+      'field alone, so `truncated: false` does NOT mean you have the whole article — the ' +
+      'resolution steps live on a subtype and are not in the search result at all. ALWAYS pass ' +
+      '`articleNumber` before telling anyone what an article says or that it lacks an answer.',
     annotations: {
       title: 'Search the knowledge base',
       readOnlyHint: true,
@@ -123,9 +126,12 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
         .string()
         .optional()
         .describe(
-          'Keywords — "vpn error 413", "reset password". REQUIRED unless you pass ' +
-            '`articleNumber`: a call with neither is always refused, and this schema cannot say ' +
-            'so structurally. Words are ANDed, so pass two or three, not a sentence.',
+          'ONE distinctive keyword to start — `vpn`, `password`. REQUIRED unless you pass ' +
+            '`articleNumber`: a call with neither is always refused, and this schema cannot ' +
+            'say so structurally. WORDS ARE ANDed and match from their START, so a second word ' +
+            'narrows hard — measured, `password reset` returns 0 while `password` returns 6, ' +
+            'one of them about resetting a password. Start with one word; add a second only to ' +
+            'narrow a list that is too long.',
         ),
       articleNumber: z
         .number()
@@ -276,6 +282,16 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
                   ...(body !== undefined && body.length > limit
                     ? { moreChars: body.length - limit }
                     : {}),
+                  /**
+                   * `truncated` describes THIS FIELD, and this field is not the article.
+                   *
+                   * `Details` is the summary. The fix — an IssueResolution's `Resolution`, a
+                   * Document's body — lives on the subtype and is not searched or excerpted here
+                   * at all. So a short summary reported `truncated: false`, which asserts nothing
+                   * was cut, while the entire answer was missing. A tester nearly told an end
+                   * user the VPN article contained no fix; they found the four steps on a hunch.
+                   */
+                  summaryOnly: true,
                 }),
           };
         });
@@ -283,6 +299,27 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
         return jsonResult({
           query: args.query,
           returned: articles.length,
+          /**
+           * The zero-hit note its two sibling search tools have and this one did not.
+           *
+           * `search` and `fulltext_search_object` both explain an empty answer in the payload;
+           * this returned a bare `articles: []`. With the AND rule undocumented and the worked
+           * example itself returning nothing, a tester reported "there are no knowledge articles
+           * about password resets" about a base holding six.
+           */
+          ...(articles.length === 0 && args.articleNumber === undefined
+            ? {
+                note:
+                  'ZERO ARTICLES IS A WEAK ANSWER, not a fact about the knowledge base. Words ' +
+                  'are ANDed and match from their START — measured, `password reset` returns 0 ' +
+                  'while `password` returns 6. DROP TO ONE WORD and search again before saying ' +
+                  'nothing exists.' +
+                  (enduser
+                    ? ' Only published articles are searched here, so an unpublished one ' +
+                      'answers zero too.'
+                    : ''),
+              }
+            : {}),
           ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),
           ...(enduser ? { searched: 'published articles only' } : {}),
           ...(enduser || status !== undefined

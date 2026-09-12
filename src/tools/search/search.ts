@@ -21,8 +21,10 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
     title: 'Search across Business Objects',
     description:
       'Keyword search ACROSS Business Objects — the one to reach for when you do not know ' +
-      'which object holds the answer. Returns `{ results: [{ id, title, text }] }`; pass an ' +
-      '`id` to `fetch` for the whole record.\n\n' +
+      'which object holds the answer. Returns `{ results: [{ id, title, text }] }`, where ' +
+      '`text` is a STATUS STRIP (status, priority, owner, dates) and NOT the record\'s own ' +
+      'words — the description or symptom is not in it. Pass an `id` to `fetch` when the ' +
+      'answer depends on what the record actually says.\n\n' +
       `Searches ${DEFAULT_OBJECTS.join(', ')} by default, ${String(PER_OBJECT_TOP)} hits each — ` +
       'the three Ivanti ships that hold most requests, NOT a statement about where this ' +
       "tenant's answers live. A tenant can define its own Business Objects, and anything the " +
@@ -32,6 +34,11 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
       'This fans out Ivanti\'s per-object keyword search rather than using its cross-object ' +
       'search endpoint, which has been observed to answer an empty array for terms that ' +
       'per-object search matches dozens of times. An empty result means no match IN THE INDEXED TEXT, which is not the same as no such record: this searches the subject, description and notes Ivanti indexes, not every field. A value held in a structured field — a category, a chassis type, a filename — will not match even when it is exactly the word you searched. Say "nothing came up in the ticket text" rather than "there are none", and check with list_records and an `eq` filter before ruling it out.\n\n' +
+      'A HIT YOU CANNOT FIND IN THE RECORD IS STILL A REAL HIT. On a service request the ' +
+      'indexed text includes the ANSWERS given on its form, which are not fields on the record — ' +
+      'so `fetch` can return every field and contain none of your search term. Read ' +
+      'get_service_request_parameters with the request\'s id before calling such a match ' +
+      'spurious.\n\n' +
       'For one known object use fulltext_search_object; for an exact value use list_records.',
     annotations: {
       title: 'Search across Business Objects',
@@ -118,11 +125,37 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
         const failed = new Set(skipped.map((entry) => entry.object));
         const searched = objects.filter((object) => !failed.has(object));
 
+        /**
+         * That this answer is one person's, said in the payload.
+         *
+         * Every other read tool emits `scopedTo` and `list_records` teaches the rule "IF AND ONLY
+         * IF the answer carries `scopedTo`, it means something weaker". Omitting the field here
+         * turned that rule into an affirmative licence to read a one-person result as the whole
+         * tenant: a tester was one sentence from "nobody has reported a printer problem" when the
+         * truth was "you have no printer tickets".
+         */
+        const scopedTo = deps.ownRecordsOnly ? context.pin?.person()?.displayName : undefined;
+
         return jsonResult({
+          // Emitted even when every object was skipped: dropping it there made a gate refusal
+          // and a genuine empty answer the same shape, on the tool least able to afford it.
+          ...(scopedTo === undefined ? {} : { scopedTo }),
           results,
           searched,
           ...(skipped.length > 0 ? { skipped } : {}),
-          ...(results.length === 0 ? { note: noHitsNote(args.query) } : {}),
+          ...(results.length === 0
+            ? {
+                note:
+                  (scopedTo === undefined
+                    ? ''
+                    : `This searched only ${scopedTo}'s own records, so an empty answer is TWO ` +
+                      'claims at once: not in the indexed text, AND not theirs. Say the second ' +
+                      'one — a record belonging to someone else answers zero here too. ') +
+                  noHitsNote(args.query) +
+                  ` Searched ${String(searched.length)} Business Object(s) of the ` +
+                  `${String(objects.length)} asked for; the tenant has far more.`,
+              }
+            : {}),
         });
       }),
   });
