@@ -254,11 +254,31 @@ success. A value that is not on the list is refused before anything is written, 
 **The form is the authority on what is validated, not `$metadata`**: Task's CSDL reports no
 validated fields while its form declares twenty.
 
+**A field has three names, resolved in one order.** The form's own label for it, then the
+object's display name, then the technical name — `fieldLabels` in `form-context.ts` does that, and
+`displayNames` maps every layer back to the field so a refusal quoting any of them can be
+translated. All of it is per object *and* per form: `ProfileLink` is "Customer" on an incident and
+"Contact Link" on a service request, and a change has no such field at all. Never teach one
+object's field names as the general rule — `get_link_fields` and `get_object_metadata` answer for
+the object at hand.
+
 **Ivanti's write refusals speak a different language.** A required-field message names the
 *display* name (`Incident.Description` is `Symptom`) and sometimes names a link rather than a
 field (`Incident.Customer` is `ProfileLink_RecID` + `ProfileLink_Category`).
 `explain-required-fields.ts` translates both through the form. The rules are conditional: an
 incident goes to `Logged` with nothing, and to `Active` only with Category and Owner.
+
+**A quick-action preview must use the form path.** `SaveDataExecuteAction` honours
+`shouldSave: false` on `FormParams` and **ignores it on `GridParams`**, where a "preview" is a live
+execution that reports itself as a probe. `src/ivanti/quick-actions/execute.ts` therefore never
+builds `GridParams`, and `preview_quick_action` refuses when the role has no form rather than
+falling back. `run_quick_action` probes again itself — the commit echoes a token minted by *that*
+probe — and is the only tool marked destructive *and* non-idempotent.
+
+**Read `validationErrors`, not `status`.** A quick action's real failure is
+`validationErrors[recId].fieldErrors[field].fieldMessages[]`, which names the field;
+`PreDeleteObject` answers status `error` for a clean preview that carries only warnings, so only
+`errorMessages` count as blockers.
 
 **`unlink_records` checks the link exists first.** Ivanti accepts an unlink of something that was
 never linked and, on a Contains relationship, severs the target from whichever record *is* its

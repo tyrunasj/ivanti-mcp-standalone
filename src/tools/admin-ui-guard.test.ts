@@ -45,6 +45,15 @@ const ARGUMENTS: Record<string, Record<string, unknown>> = {
   search: { query: 'printer' },
   fetch: { id: 'incidents:abc' },
   get_pick_list_values: { object: 'Incidents', fields: ['Status'] },
+  get_pick_list_constraints: { object: 'Incidents' },
+  get_link_fields: { object: 'Incidents' },
+  list_saved_searches: { object: 'Incidents' },
+  saved_search: { object: 'Incidents', name: 'All Active', searchId: 'a1' },
+  group_count: { object: 'Incidents', groupBy: 'Status', values: ['Active'] },
+  list_quick_actions: { object: 'Incidents' },
+  preview_quick_action: { object: 'Incidents', recordId: 'abc', actionId: 'act-1' },
+  run_quick_action: { object: 'Incidents', recordId: 'abc', actionId: 'act-1' },
+  preview_delete: { object: 'Incidents', recordId: 'abc' },
   create_record: { object: 'Incidents', fields: { Subject: 'stub' } },
   update_record: { object: 'Incidents', recordId: 'abc', fields: { Subject: 'stub' } },
   delete_record: { object: 'Incidents', recordId: 'abc' },
@@ -86,6 +95,7 @@ describe('every tool, over a stubbed tenant', () => {
         GetWorkspaceData: {
           ObjectId: 'Incident#',
           LayoutData: { newRecordViews: { 'Incident#': 'v' } },
+          SearchData: { favorites: [{ Id: 'a1', Name: 'All Active', isDefault: true }] },
         },
         FindFormViewData: {
           formDef: {
@@ -95,6 +105,9 @@ describe('every tool, over a stubbed tenant', () => {
         },
         GetFormDefaultData: { Data: { Objects: { t1: { Values: { Status: '' } } } } },
         GetFormValidationListData: { Status: { FieldMap: { Status: 0 }, Data: [['Active']] } },
+        GetObjectQuickActions: [['act-1', 'Escalate', 'UpdateObject']],
+        SaveDataExecuteAction: { saved: true },
+        PreDeleteObject: { errors: { warningMessages: ['contains Journal records'] } },
         GetBriefBusinessObjects: new Error('404 — not an administrator'),
       },
     });

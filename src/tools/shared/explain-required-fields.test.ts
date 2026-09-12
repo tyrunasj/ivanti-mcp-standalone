@@ -9,6 +9,7 @@ const FORM: ResolvedForm = {
   formName: 'F',
   validatedFields: {},
   displayNames: { description: 'Symptom', customer: 'ProfileLink', owner: 'Owner' },
+  fieldLabels: { Symptom: 'Description', ProfileLink: 'Customer', Owner: 'Owner' },
   linkFields: { ProfileLink: 'ProfileLink_RecID' },
 };
 

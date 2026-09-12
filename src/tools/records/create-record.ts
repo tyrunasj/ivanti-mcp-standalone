@@ -26,9 +26,13 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
       'get_object_metadata first, and get_pick_list_values for any field it marks `validated`: ' +
       'those take a value from a list, and this tool refuses one that is not on it rather than ' +
       'letting Ivanti accept the write and store nothing.\n\n' +
-      'A PERSON IS NOT A NAME. Links are a pair of fields: the customer of an incident is ' +
-      '`ProfileLink_RecID` (the employee\'s RecId) together with `ProfileLink_Category` ' +
-      '("Employee"). Creating a child under a parent is the same shape — `ParentLink_RecID` plus ' +
+      'A PERSON IS NOT A NAME. A link is always a PAIR — `<Link>_RecID` holding the target\'s ' +
+      'RecId and `<Link>_Category` naming the object it lives in — but WHICH link is which ' +
+      'differs per object: on an incident the customer is `ProfileLink`, on a service request the ' +
+      'same field is labelled "Contact Link", and a change has no `ProfileLink` at all. Call ' +
+      'get_link_fields for the object you are writing to rather than reusing a name that worked ' +
+      'elsewhere.\n\n' +
+      'Creating a child under a parent is the same shape — `ParentLink_RecID` plus ' +
       '`ParentLink_Category` — passed here, in the create, which wires the relationship in one ' +
       'call. link_records is for records that already exist.\n\n' +
       'The record is read back before this reports success. A write Ivanti accepted but did not ' +

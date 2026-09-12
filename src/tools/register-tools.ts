@@ -20,7 +20,16 @@ import { createSearchTool } from './search/search.js';
 import { createGetServiceRequestParameterOptionsTool } from './service-request/get-service-request-parameter-options.js';
 import { createGetServiceRequestParametersTool } from './service-request/get-service-request-parameters.js';
 import { createGetObjectMetadataTool } from './schema/get-object-metadata.js';
+import { createGetLinkFieldsTool } from './schema/get-link-fields.js';
+import { createGetPickListConstraintsTool } from './schema/get-pick-list-constraints.js';
 import { createGetPickListValuesTool } from './schema/get-pick-list-values.js';
+import { createGroupCountTool } from './records/group-count.js';
+import { createPreviewDeleteTool } from './records/preview-delete.js';
+import { createListQuickActionsTool } from './quick-actions/list-quick-actions.js';
+import { createPreviewQuickActionTool } from './quick-actions/preview-quick-action.js';
+import { createRunQuickActionTool } from './quick-actions/run-quick-action.js';
+import { createListSavedSearchesTool } from './search/list-saved-searches.js';
+import { createSavedSearchTool } from './search/saved-search.js';
 import { createListBusinessObjectsTool } from './schema/list-business-objects.js';
 import { createObjectGate } from './shared/object-gate.js';
 import { auditFields } from '../auth/identity.js';
@@ -70,9 +79,20 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
     createFetchTool(deps),
   );
 
-  // Needs the ASMX session: the allowed values live on a create form, which OData cannot see.
+  // Need the ASMX session: all of these live on a workspace or a create form, which OData
+  // cannot see.
   if (context.ivanti.capability.tier !== 'odata') {
-    tools.push(createGetPickListValuesTool(deps));
+    tools.push(
+      createGetPickListValuesTool(deps),
+      createGetPickListConstraintsTool(deps),
+      createGetLinkFieldsTool(deps),
+      createListSavedSearchesTool(deps),
+      createSavedSearchTool(deps),
+      createGroupCountTool(deps),
+      createListQuickActionsTool(deps),
+      createPreviewQuickActionTool(deps),
+      createPreviewDeleteTool(deps),
+    );
   }
 
   // An end user may raise a ticket on an allowlisted object; the gate already holds that line.
@@ -87,6 +107,10 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
       createLinkRecordsTool(deps),
       createUnlinkRecordsTool(deps),
     );
+
+    // Runs whatever the tenant defined — email, child records, status changes — and repeats it
+    // on retry. It needs the session, so it lands only where both hold.
+    if (context.ivanti.capability.tier !== 'odata') tools.push(createRunQuickActionTool(deps));
   }
 
   return tools;
