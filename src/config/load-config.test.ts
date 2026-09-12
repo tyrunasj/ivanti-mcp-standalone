@@ -77,4 +77,17 @@ describe('loadConfig', () => {
 
     expect(config.IVANTI_API_KEY).toBe('key-from-file');
   });
+
+  it('treats a variable set to nothing as unset', () => {
+    // `docker run -e AUTH_MODE=` clears a value inherited from an --env-file; so does a bare
+    // `AUTH_MODE=` line in .env. Neither should read as an invalid option.
+    const config = loadConfig({ AUTH_MODE: '', MCP_BIND: '   ', MCP_MODE: 'enduser', ENDUSER_BUSINESS_OBJECTS: 'Incident' });
+
+    expect(config.AUTH_MODE).toBeUndefined();
+    expect(config.MCP_BIND).toBe('127.0.0.1');
+  });
+
+  it('still refuses a value that is wrong rather than empty', () => {
+    expect(() => loadConfig({ AUTH_MODE: 'nonsense' })).toThrow(/Invalid option/);
+  });
 });

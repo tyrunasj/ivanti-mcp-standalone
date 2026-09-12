@@ -45,6 +45,37 @@ Mounted Docker/K8s secret files must be readable by it. Root-owned secrets are t
 
 ---
 
+**pnpm's `node_modules` cannot be copied between image stages.**
+The default layout is symlinks into a content-addressed store, and a `COPY --from=deps` moves the
+links without their target. `pnpm install --prod --node-linker=hoisted` writes real directories,
+which is what a distroless runtime can use.
+
+**A distroless image has no shell, so `HEALTHCHECK CMD` cannot be a command line.**
+It has to be the exec form against the image's own node — `["/nodejs/bin/node", "…"]` — and the
+check itself has to be a script the image carries. `docker/healthcheck.mjs` is plain JS for that
+reason: there is no build step inside the image.
+
+**A file-based Docker secret keeps its host ownership, and a distroless image is not root.**
+`secrets:` mounts the file as it is on the host, so a key written by your own account with mode 600
+is unreadable by uid 65532 inside the container. The server exits 78 with
+`EACCES: permission denied, open '/run/secrets/bearer_token'` and the container restart-loops —
+which reads like a missing file rather than a permission. `chown 65532:65532` the secret and keep
+mode 600: the container can read it and the host account cannot, which is the right way round.
+
+**The tenant hostname resolving on the host says nothing about the container.**
+Measured: `dig` on a Mac answered a public address, and the same name inside a container on that
+Mac answered `192.168.1.215` — a LAN address it could not route to, so every startup probe failed
+as a transport error rather than a 404. `--add-host` (or `extra_hosts:`) pins the address the host
+uses. On a Linux host **on that LAN** the same image needs none of this: the name resolves to the
+LAN address and the tenant answers. So the failure is a property of where the container runs, not
+of the image — check DNS from inside a container before suspecting the server.
+
+**`docker run -e VAR=` sets the variable to an empty string, it does not unset it.**
+That is the idiom for clearing a value inherited from `--env-file`, so an empty string now means
+"absent" when configuration loads. Before that, `-e AUTH_MODE=` failed with
+`Invalid option: expected one of "none"|"bearer"|"oauth"`, which reads like a typo in the schema
+rather than a deliberate override.
+
 ## Toolchain
 
 **TypeScript is pinned to 6.x deliberately.**

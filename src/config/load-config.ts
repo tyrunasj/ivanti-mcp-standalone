@@ -19,8 +19,24 @@ export class ConfigError extends Error {
  * rules — in that order, because a rule such as "bearer mode needs a token" cannot be
  * judged until `BEARER_TOKEN_FILE` has been read.
  */
+/**
+ * An environment variable set to nothing is not set.
+ *
+ * `docker run -e AUTH_MODE=` is how an operator clears a value inherited from an `--env-file`,
+ * and a `.env` line with nothing after the `=` means the same. Treating the empty string as a
+ * value makes both of those a startup failure that reads like a typo in the schema.
+ */
+function withoutEmpty(env: EnvRecord): EnvRecord {
+  const kept: EnvRecord = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === 'string' && value.trim() === '') continue;
+    kept[key] = value;
+  }
+  return kept;
+}
+
 export function loadConfig(env: EnvRecord, readFile?: FileReader): Config {
-  const resolved: EnvRecord = { ...env };
+  const resolved: EnvRecord = withoutEmpty(env);
 
   for (const key of SECRET_KEYS) {
     try {

@@ -73,6 +73,36 @@ anything Ivanti resolves "for the current user" answers for that account and not
 asking. Told this once at connect time, a model stops reporting one person's queue as another's;
 `src/server/instructions.ts` builds it from the capability profile.
 
+## Container
+
+Everything container-related is in `docker/` — `Dockerfile`, `compose.yaml`, `healthcheck.mjs` —
+but the **build context is the repository root**, so:
+
+```bash
+docker build -f docker/Dockerfile -t ivanti-mcp .
+docker compose -f docker/compose.yaml up
+```
+
+`.dockerignore` stays at the root: that is where the context is and where the classic builder
+looks for it. Three stages:
+build → production dependencies → **distroless** runtime (`gcr.io/distroless/nodejs22-debian12`,
+uid 65532, no shell, no package manager). 245 MB.
+
+- **pnpm's symlinked `node_modules` does not survive a `COPY` between stages.** The dependency
+  stage installs with `--node-linker=hoisted` so the layout is real directories.
+- **`package.json` ships next to `dist/`** — `src/version.ts` reads it at startup and the server
+  refuses to start without it.
+- **The health check is a Node script** (`docker/healthcheck.mjs`), because a distroless image has
+  no shell and no curl. It exits 0 when `HTTP_TRANSPORT_ON` is off: a stdio deployment serves no
+  HTTP, and reporting it unhealthy for running as configured would be worse than not checking.
+- **The tenant hostname must resolve inside the container**, which is not the same question as
+  whether it resolves on the host. On a Mac, a split-horizon answer gave the container a LAN
+  address it could not route to and every startup probe failed as a connection error; on a Linux
+  host on that LAN the same image needed nothing. `extra_hosts` / `--add-host` pins it when needed.
+- **Verified on both**: Docker Desktop on macOS (arm64) and Ubuntu 26.04 / Docker 29.1.3 on x86_64,
+  the latter beside the tenant it talks to.
+- Runs under `--read-only`, `--cap-drop ALL` and `no-new-privileges`; nothing is written to disk.
+
 ## Commands
 
 `pnpm dev` and `pnpm start` load `.env` via `--env-file-if-exists`, so a clone without one still
@@ -145,6 +175,23 @@ Each file has one reason to change, and tests live next to the file they cover
 applies cross-field rules. A rule like "bearer mode needs a token" cannot be judged before the
 secret file has been read. `env-schema.ts` describes *what a setting is*; `validate-config.ts`
 decides *which combinations are allowed*. Keep that split.
+
+**Identity is threaded, never reached for.** `CallerIdentity` (`src/auth/identity.ts`) carries a
+provenance — `anonymous`, `asserted`, `verified` — and arrives at a handler as its second
+argument, bound per session by `registerTools`. Only the closure is per session; the tool *config*
+stays shared, so the zod schemas still exist once. `get_version` reports the provenance and never
+the person: a tool that answered *who* would be an identity oracle for anyone who can call it.
+
+**Three rules from design §5 live in `identity-pin.ts`.** A verified session ignores any claim
+outright — not merged, not preferred, or the strong path has a bypass. A session with no token
+pins the first claim. A later, different claim is **refused**, because Ivanti ticket text is
+written by whoever filed the ticket and a conversation can be told to become someone else by a
+record it merely read. An HTTP session also belongs to the subject that opened it: another
+verified subject presenting its own valid token gets 403.
+
+**Every tool call is audited in `registerTools`**, the one place they all pass through: tool,
+session, provenance — and the subject only when an issuer vouched for it. Arguments are never
+logged, and an asserted subject is never logged as though it were a fact.
 
 **Two audience modes, chosen at startup.** `MCP_MODE=full` (IT staff, everything) or
 `enduser`. Tool narrowing happens in `selectTools()` at registration time, never inside a handler:

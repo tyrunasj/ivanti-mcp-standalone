@@ -1,3 +1,4 @@
+import { ANONYMOUS } from './auth/identity.js';
 import { createOAuthSetup } from './auth/oauth/create-verifier.js';
 import type { TokenVerifier } from './auth/oauth/verify-token.js';
 import { ConfigError, loadConfig } from './config/load-config.js';
@@ -48,7 +49,9 @@ async function main(): Promise<void> {
   });
 
   if (config.STDIO_TRANSPORT_ON) {
-    await startStdio(factory.create());
+    // Process trust: whoever can run this binary is the caller, and nothing vouches for who
+    // they are. One process is one conversation, so there is no session id either.
+    await startStdio(factory.create({ identity: ANONYMOUS }));
     logger.info('listening on stdio', {
       mcpMode: config.MCP_MODE,
       ivanti: ivanti !== undefined,

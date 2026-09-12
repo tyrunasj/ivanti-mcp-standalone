@@ -1,3 +1,4 @@
+import { ANONYMOUS, assertedIdentity } from '../auth/identity.js';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it } from 'vitest';
 import { buildVersionInfo, createGetVersionTool } from './get-version.js';
@@ -46,5 +47,20 @@ describe('createGetVersionTool', () => {
       serverVersion: '0.1.0',
       protocolVersion: LATEST_PROTOCOL_VERSION,
     });
+  });
+
+  it('reports how the caller was identified, and never who they are', async () => {
+    const tool = createGetVersionTool(deps);
+
+    const anonymous = await tool.handler({}, { identity: ANONYMOUS });
+    const asserted = await tool.handler({}, { identity: assertedIdentity('jsmith') });
+
+    const read = (result: { content: { type: string; text?: string }[] }): Record<string, string> =>
+      JSON.parse(result.content[0]?.text ?? '{}') as Record<string, string>;
+
+    expect(read(anonymous).caller).toBe('anonymous');
+    expect(read(asserted).caller).toBe('asserted');
+    // The provenance is the answer; the person is not this tool's business.
+    expect(JSON.stringify(asserted)).not.toContain('jsmith');
   });
 });

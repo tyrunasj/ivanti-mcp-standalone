@@ -1,4 +1,5 @@
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import type { IdentityProvenance } from '../auth/identity.js';
 import { readSdkVersion } from '../version.js';
 import { jsonResult } from './shared/result.js';
 import { defineTool, type ToolDefinition } from './tool-definition.js';
@@ -8,6 +9,12 @@ export interface VersionInfo {
   serverVersion: string;
   protocolVersion: string;
   sdkVersion: string;
+  /**
+   * How this call's identity was established — `anonymous`, `asserted` or `verified`. The
+   * provenance, never the person: this exists so an operator can see which path executed, and a
+   * tool that reported *who* would be an identity oracle for anyone who can call it.
+   */
+  caller: IdentityProvenance;
 }
 
 export interface GetVersionDeps {
@@ -18,12 +25,16 @@ export interface GetVersionDeps {
   sdkVersion?: string;
 }
 
-export function buildVersionInfo(deps: GetVersionDeps): VersionInfo {
+export function buildVersionInfo(
+  deps: GetVersionDeps,
+  caller: IdentityProvenance = 'anonymous',
+): VersionInfo {
   return {
     serverName: deps.serverName,
     serverVersion: deps.serverVersion,
     protocolVersion: deps.protocolVersion ?? LATEST_PROTOCOL_VERSION,
     sdkVersion: deps.sdkVersion ?? readSdkVersion(),
+    caller,
   };
 }
 
@@ -33,8 +44,9 @@ export function createGetVersionTool(deps: GetVersionDeps): ToolDefinition {
     title: 'Get server version',
     description:
       'Returns the name and version of this MCP server, the MCP protocol version it ' +
-      'implements, and the SDK version it is built on. Useful for confirming which build a ' +
-      'client is talking to.',
+      'implements, the SDK version it is built on, and how the caller was identified — ' +
+      '`anonymous`, `asserted` or `verified`. Useful for confirming which build a client is ' +
+      'talking to and which authentication path it came in on.',
     annotations: {
       title: 'Get server version',
       readOnlyHint: true,
@@ -43,6 +55,6 @@ export function createGetVersionTool(deps: GetVersionDeps): ToolDefinition {
       openWorldHint: false,
     },
     inputSchema: {},
-    handler: () => jsonResult(buildVersionInfo(deps)),
+    handler: (_args, context) => jsonResult(buildVersionInfo(deps, context.identity.provenance)),
   });
 }

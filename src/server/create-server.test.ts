@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ANONYMOUS } from '../auth/identity.js';
 import { configFixture } from '../config/config.fixture.js';
 import { connectionFixture } from '../ivanti/connection.fixture.js';
 import type { Logger } from '../logger.js';
@@ -9,6 +10,8 @@ const config = configFixture();
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 const deps = (): { logger: Logger } => ({ logger: logger() });
 
+const CALL = { identity: ANONYMOUS };
+
 describe('createServerFactory', () => {
   it('reports the tools every server will expose', () => {
     expect(createServerFactory(config, deps()).toolNames).toEqual(['get_version']);
@@ -17,7 +20,7 @@ describe('createServerFactory', () => {
   it('hands out a distinct server per connection', () => {
     const factory = createServerFactory(config, deps());
 
-    expect(factory.create()).not.toBe(factory.create());
+    expect(factory.create(CALL)).not.toBe(factory.create(CALL));
   });
 
   it('exposes the same tool set in enduser mode', () => {
@@ -29,8 +32,8 @@ describe('createServerFactory', () => {
   it('builds servers that are usable independently', () => {
     const factory = createServerFactory(config, deps());
 
-    expect(factory.create()).toBeDefined();
-    expect(factory.create()).toBeDefined();
+    expect(factory.create(CALL)).toBeDefined();
+    expect(factory.create(CALL)).toBeDefined();
   });
 
   it('exposes the Ivanti tools when a tenant is connected', () => {

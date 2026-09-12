@@ -25,6 +25,29 @@ whether one trivial call succeeds or fails.
 
 ---
 
+## Where this stands (2026-09-12)
+
+| Stage | | What is missing |
+|---|---|---|
+| A0 Scaffold | ✅ | — |
+| A1 Transport and harness | ✅ | — (the container landed here) |
+| A2 Identity seam | ✅ | — (the Employee-record join is B7) |
+| A3 OAuth resource server | ✅ | Entra's live token check, blocked by a deployment prerequisite |
+| A4 Prove the matrix | 🟡 | the Entra row only — blocked by a verified-domain prerequisite, not by code |
+| B1 Transport foundation | ✅ | — |
+| B2 Metadata, naming, reads | ✅ | — |
+| B3 Session and capability tier | ✅ | the `.ashx` payload and multipart, which wait for a caller |
+| B4 Writes and hints | ✅ | — |
+| B5 Workflow surface | ⬜ | quick actions, saved searches, `group_count`, `preview_delete` |
+| B6 Service requests, attachments | 🟡 | `submit_service_request`, offerings, every attachment write |
+| B7 enduser and resources | 🟡 | "own records" (needs A2), and the resources tier |
+
+**Twenty tools are registered today**: `get_version`, eleven reads, `get_pick_list_values`
+(session-gated), the retrievable pair, and five writes. Against the 34-tool inventory below, the
+fourteen not built are B5's ten, B6's four writes, and `list_request_offerings`.
+
+---
+
 # Phase A — Authentication, complete and proven
 
 ## Stage A0 — Scaffold ✅ done
@@ -42,10 +65,22 @@ meaningfully tested on a transport that cannot hold two clients.
 
 ---
 
-## Stage A1 — Transport correctness and the test harness 🟡 session routing done
+## Stage A1 — Transport correctness and the test harness ✅ done
 
 **Goal:** a server that can hold several clients at once, and a way to stand up a real identity
 provider beside it.
+
+**The container landed 2026-09-12**, in `docker/` (`Dockerfile`, `compose.yaml`, `healthcheck.mjs`)
+with the build context at the repository root. Three stages — build, production dependencies, distroless
+runtime — ~240 MB, uid 65532, no shell. Verified on **two hosts**: Docker Desktop on macOS
+(arm64, 245 MB) and Ubuntu 26.04 with Docker 29.1.3 on x86_64 (238 MB), the latter on the same LAN
+as the tenant VM it talks to. On both the image speaks MCP over stdio (initialize, tools/list, a
+live `list_records` returning incident 10244 of 545), serves HTTP with Docker reporting the
+container **healthy** through its own Node health check, and keeps running under
+`--read-only --cap-drop ALL --security-opt no-new-privileges`. Four things the build taught us are
+in `docs/notes.md`: pnpm's symlinks do not survive a stage copy, a distroless image cannot take a
+shell-form HEALTHCHECK, a hostname that resolves on the host may resolve differently inside a
+container, and `-e VAR=` means empty rather than absent.
 
 **Built (2026-09-10):**
 - Session routing — a transport **and its own `McpServer`** per session, in a bounded map keyed
@@ -116,7 +151,7 @@ an auth failure.
 
 ---
 
-## Stage A2 — The identity seam
+## Stage A2 — The identity seam ✅ done
 
 **Goal:** one request-scoped representation of "who is this call for", before there are two
 sources feeding it.
@@ -129,6 +164,28 @@ sources feeding it.
   can see which path executed.
 - The audit-log skeleton: every call records tool, session, and identity provenance.
 
+**Built 2026-09-12, last of Phase A** — after A3 and B1-B4 rather than before them, which cost
+more than doing it in order would have: twenty tools already existed and every one of their
+handler signatures changed.
+
+- `CallerIdentity` with the three provenances, in `src/auth/identity.ts`.
+- Threaded as a handler's second argument. `registerTools` binds one `CallContext` per session;
+  the tool *config* stays shared, so the schemas still exist once however many sessions are open.
+- The three rules from design §5, in `identity-pin.ts`: a verified session ignores claims, a
+  tokenless session pins the first claim, a later different claim is refused. Plus a rule the plan
+  did not anticipate — an HTTP session belongs to the subject that opened it, and another verified
+  subject presenting its own valid token gets **403**.
+- `get_version` reports the provenance and never the person.
+- The audit skeleton: `tool called` with tool, session and provenance on every call, arguments
+  never, and an asserted subject never written as though it were a fact.
+
+Verified live over both transports: stdio reports `caller: anonymous` and logs
+`{"message":"tool called","tool":"get_version","identity":"anonymous"}`; the HTTP path adds the
+session id, which is read at call time because it does not exist until `initialize` completes.
+
+**Still deliberately stubbed:** resolving an asserted name to an Ivanti Employee record, and using
+it to scope reads. That is B7, and it is now unblocked.
+
 **Deliberately stubbed:** resolving an identity to an Ivanti Employee record. That join needs
 Ivanti and lands in Phase B. What matters now is that the seam exists, because it touches every
 handler and is the one thing that is expensive to add later.
@@ -139,7 +196,7 @@ handler and is the one thing that is expensive to add later.
 
 ---
 
-## Stage A3 — OAuth resource server 🟡 mostly built
+## Stage A3 — OAuth resource server ✅ done *(Entra live token check blocked, see A4)*
 
 **Goal:** `AUTH_MODE=oauth` works against **both Zitadel and Microsoft Entra ID**.
 
@@ -171,7 +228,12 @@ handler and is the one thing that is expensive to add later.
 > object and the challenge is one header — both are a few lines on `node:http`. So express is
 > still not a declared dependency, and the server remains framework-free.
 
-**Still to do:** live verification against Zitadel and Entra, which needs the A1 harness.
+**Verified end to end against Zitadel (2026-09-10)** over a public HTTPS hostname: discovery,
+issuer match, JWKS, audience membership, three concurrent sessions, and a subject extracted from a
+verified token. Entra's live token check is the one thing left, and it is blocked by a deployment
+prerequisite rather than by code — see A4.
+
+**Originally listed as still to do, now done:**
 - `OAUTH_AUDIENCE` as **its own setting**, defaulting to `MCP_PUBLIC_URL` but independently
   configurable — `api://…` for Entra, a project ID for Zitadel. Validation is **membership in
   the `aud` claim**, which both IdPs may emit as an array, not string equality.
@@ -205,7 +267,7 @@ and the authorization server (design §11).
 
 ---
 
-## Stage A4 — Prove the matrix
+## Stage A4 — Prove the matrix 🟡 four of five rows proven
 
 **Goal:** every access mode exercised deliberately, against the same one tool. This is the
 "check it" stage — its output is evidence, not features.
@@ -213,12 +275,16 @@ and the authorization server (design §11).
 **The matrix.** Transport × door × surface (design §1). `stdio` has exactly one door, so the
 combinations are 1 + 3 transports-and-doors, each against two surfaces:
 
-| Transport | Door | `full` | `enduser` |
-|---|---|---|---|
-| `stdio` | n/a — process trust | ✓ | ✓ |
-| `http` | `none` | loopback default; `MCP_BIND` is the second explicit key | ✓ |
-| `http` | `bearer` | constant-time compare, 401 on mismatch | ✓ |
-| `http` | `oauth` | verified identity, audience-bound | ✓ |
+| Transport | Door | `full` | `enduser` | Proven |
+|---|---|---|---|---|
+| `stdio` | n/a — process trust | ✓ | ✓ | **yes** — locally and from the container image |
+| `http` | `none` | loopback default; `MCP_BIND` is the second explicit key | ✓ | **yes** — dev runs throughout B1-B4 |
+| `http` | `bearer` | constant-time compare, 401 on mismatch | ✓ | **yes** — the sandbox deployment, 401 without and with a wrong token |
+| `http` | `oauth` | verified identity, audience-bound | ✓ | **Zitadel yes**, Entra blocked below |
+
+`enduser` was exercised live on 2026-09-11 with `ENDUSER_BUSINESS_OBJECTS=Incident,Change,ServiceReq`:
+the catalog answers three objects, and `Employees`, `frs_hc_calllog` and `fetch('employees:…')`
+are each refused with the list of what is allowed.
 
 ### Entra: verified as far as is possible without a customer tenant (2026-09-11)
 
@@ -608,7 +674,7 @@ credential has, since no default metadata graph contains `task__assignment`.
 
 ---
 
-## Stage B5 — Workflow surface
+## Stage B5 — Workflow surface ⬜ not started
 
 `list_quick_actions`, `preview_quick_action`, `run_quick_action`, `preview_delete`,
 `get_pick_list_values`, `get_pick_list_constraints`, `get_link_fields`, `list_saved_searches`,
@@ -624,7 +690,13 @@ effects on retry.
 
 ---
 
-## Stage B6 — Service requests and attachments
+## Stage B6 — Service requests and attachments 🟡 the reads landed in B2
+
+**Already built (in B2):** `get_service_request_parameters`, `get_service_request_parameter_options`
+and `get_attachment_details` — all read-only and session-free. **Missing:**
+`submit_service_request`, `list_request_offerings`, and every attachment write
+(`upload_attachment`, `request_attachment_upload`, `check_attachment_upload`, `delete_attachment`),
+which is also where the multipart CSRF convention finally gets a caller.
 
 The quirkiest area, and the one with the most one-way doors.
 
@@ -635,12 +707,18 @@ says nothing about whether parameters stored, so the request is read back.
 
 ---
 
-## Stage B7 — `enduser` mode and the resources tier
+## Stage B7 — `enduser` mode and the resources tier 🟡 the gate is in
 
-- `ENDUSER_BUSINESS_OBJECTS` enforced in `selectTools()`, validated at startup against the BO
-  catalog, keyed on the technical name in either dialect.
-- `Customer` resolution and the session identity pin.
-- **The resources tier**: port the four reference documents as MCP resources rather than growing
+- ✅ `ENDUSER_BUSINESS_OBJECTS` enforced — not in `selectTools()` as planned but in
+  `createObjectGate`, which every object-taking tool passes through, because narrowing the tool
+  *list* would still have let `list_records` name any object. Validated at startup against the
+  tenant (exit 78 with suggestions), keyed on the technical name in either dialect.
+- ✅ Writes narrowed: in `enduser` mode only `create_record` is registered; update, delete, link
+  and unlink wait for the line below, because without it anyone could change anyone's ticket.
+- ⬜ **`Customer` resolution and the session identity pin** — the actual "own records" rule. It
+  needs A2's identity seam, which is not built, so this is the one place where skipping A2 has a
+  visible cost.
+- ⬜ **The resources tier**: port the four reference documents as MCP resources rather than growing
   `instructions`. They cost nothing until the model asks.
 
 Note for this stage: approval voting is a **quick action**, not a field update, and "My Vote"

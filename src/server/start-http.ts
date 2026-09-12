@@ -7,9 +7,11 @@ import {
   metadataPaths,
   metadataUrl,
 } from '../auth/oauth/protected-resource-metadata.js';
+import type { CallerIdentity } from '../auth/identity.js';
 import type { TokenVerifier } from '../auth/oauth/verify-token.js';
 import type { Config } from '../config/env-schema.js';
 import type { Logger } from '../logger.js';
+import type { CallContext } from '../tools/tool-definition.js';
 import { authorizeRequest, type AuthorizationResult } from './http/authorize-request.js';
 import { buildHealth, MINIMAL_HEALTH } from './http/health.js';
 import { createMcpHandler, type McpSession } from './http/mcp-handler.js';
@@ -23,7 +25,7 @@ const SWEEP_INTERVAL_MS = 30_000;
 export interface HttpDeps {
   verifier?: TokenVerifier;
   /** A fresh McpServer per session: `connect()` binds one transport at a time. */
-  createMcpServer: () => McpServer;
+  createMcpServer: (context: CallContext) => McpServer;
   serverName: string;
   serverVersion: string;
   /** Resolved once at startup: reading it walks node_modules, and /health is a hot path. */
@@ -64,8 +66,7 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): Serve
       { verifier: deps.verifier, resourceMetadataUrl },
     );
 
-  const createSession = (): Session => {
-    const mcpServer = deps.createMcpServer();
+  const createSession = (identity: CallerIdentity): Session => {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: (): string => crypto.randomUUID(),
       onsessioninitialized: (sessionId: string): void => {
@@ -75,9 +76,22 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): Serve
         sessions.unregister(sessionId);
       },
     });
+
+    // The identity is fixed when the session is created, which is what "pinned per session"
+    // means for the verified path: a later request cannot change who this conversation acts as.
+    // The session id is not fixed — it does not exist until `initialize` completes — so it is
+    // read when a tool is called rather than captured now.
+    const mcpServer = deps.createMcpServer({
+      identity,
+      get sessionId(): string | undefined {
+        return transport.sessionId;
+      },
+    });
+
     const session: Session = {
       transport,
       server: mcpServer,
+      identity,
       connect: () => mcpServer.connect(transport),
       close: () => void transport.close(),
     };

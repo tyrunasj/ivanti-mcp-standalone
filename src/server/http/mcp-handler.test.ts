@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
+import { ANONYMOUS, verifiedIdentity } from '../../auth/identity.js';
 import type { Logger } from '../../logger.js';
 import type { AuthorizationResult } from './authorize-request.js';
 import { createMcpHandler, type McpSession } from './mcp-handler.js';
@@ -23,9 +24,13 @@ interface FakeSession extends McpSession {
   handled: ReturnType<typeof vi.fn<() => void>>;
 }
 
-const fakeSession = (sessionId = 'generated-id'): FakeSession => {
+const fakeSession = (
+  sessionId = 'generated-id',
+  identity = ANONYMOUS,
+): FakeSession => {
   const handled = vi.fn<() => void>();
   return {
+    identity,
     close: vi.fn<() => void>(),
     connect: () => Promise.resolve(),
     handled,
@@ -199,5 +204,66 @@ describe('createMcpHandler', () => {
     await handler(request('DELETE', { 'mcp-session-id': 'abc' }), response(), authorized);
 
     expect(existing.handled).toHaveBeenCalled();
+  });
+
+  it('refuses a session that belongs to another verified identity', async () => {
+    // A different subject with its own perfectly valid token is not entitled to this
+    // conversation, or to the records it has already been told about.
+    const owner = verifiedIdentity({
+      subject: 'user-1',
+      issuer: 'https://id.example',
+      scopes: [],
+      claims: {},
+    });
+    const logger = silentLogger();
+    const sessions = new SessionManager<FakeSession>({ maxSessions: 10, idleTtlMs: 60_000, logger });
+    const session = fakeSession('s1', owner);
+    sessions.register('s1', session);
+    const handler = createMcpHandler<FakeSession>({
+      sessions,
+      logger,
+      createSession: () => session,
+    });
+    const res = response();
+
+    await handler(
+      request('POST', { 'mcp-session-id': 's1' }, { jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      res,
+      {
+        authorized: true,
+        status: 200,
+        identity: { subject: 'someone-else', issuer: 'https://id.example', scopes: [], claims: {} },
+      },
+    );
+
+    expect(res.status).toBe(403);
+    expect(res.payload).toContain('another identity');
+    expect(session.handled).not.toHaveBeenCalled();
+  });
+
+  it('lets the same verified subject continue its own session', async () => {
+    const owner = verifiedIdentity({
+      subject: 'user-1',
+      issuer: 'https://id.example',
+      scopes: [],
+      claims: {},
+    });
+    const logger = silentLogger();
+    const sessions = new SessionManager<FakeSession>({ maxSessions: 10, idleTtlMs: 60_000, logger });
+    const session = fakeSession('s1', owner);
+    sessions.register('s1', session);
+    const handler = createMcpHandler<FakeSession>({
+      sessions,
+      logger,
+      createSession: () => session,
+    });
+
+    await handler(
+      request('POST', { 'mcp-session-id': 's1' }, { jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      response(),
+      { authorized: true, status: 200, identity: { subject: 'user-1', issuer: 'https://id.example', scopes: [], claims: {} } },
+    );
+
+    expect(session.handled).toHaveBeenCalled();
   });
 });

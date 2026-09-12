@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { ANONYMOUS, verifiedIdentity, type CallerIdentity } from '../../auth/identity.js';
 import type { Logger } from '../../logger.js';
 import type { AuthorizationResult } from './authorize-request.js';
 import { describeRpc } from './describe-rpc.js';
@@ -12,6 +13,8 @@ const RETRY_AFTER_SECONDS = 30;
 
 /** The slice of a session this handler needs — narrow enough to fake in a test. */
 export interface McpSession extends ClosableSession {
+  /** Who this session acts for — fixed when it was created. */
+  identity: CallerIdentity;
   transport: {
     sessionId?: string;
     handleRequest: (
@@ -26,8 +29,8 @@ export interface McpSession extends ClosableSession {
 export interface McpHandlerDeps<S extends McpSession> {
   sessions: SessionManager<S>;
   logger: Logger;
-  /** Builds a session; registration happens through the transport's own callbacks. */
-  createSession: () => S;
+  /** Builds a session for this identity; registration happens through the transport's callbacks. */
+  createSession: (identity: CallerIdentity) => S;
 }
 
 export type McpHandler = (
@@ -43,6 +46,18 @@ export type McpHandler = (
  * initialize, is the body well formed — while `startHttp` is HTTP plumbing. They change for
  * different reasons, and only this half is worth testing without a socket.
  */
+/**
+ * Whether this request's credential belongs to the session it addresses.
+ *
+ * Only meaningful for verified identities: under `none` and `bearer` every caller is the same
+ * anonymous one, so there is nothing to compare and refusing would break the shared-token
+ * deployment that mode exists for.
+ */
+function sameSubject(sessionIdentity: CallerIdentity, authorization: AuthorizationResult): boolean {
+  if (sessionIdentity.provenance !== 'verified') return true;
+  return authorization.identity?.subject === sessionIdentity.subject;
+}
+
 export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>): McpHandler {
   const { sessions, logger } = deps;
 
@@ -108,6 +123,14 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
         sendRpcError(response, 404, 'Unknown or expired session');
         return;
       }
+      if (!sameSubject(existing.identity, authorization)) {
+        // A session belongs to the identity that opened it. Another verified subject presenting
+        // its own valid token is not entitled to this conversation — or to the records it has
+        // already been told about.
+        logger.warn('session subject mismatch', { sessionId });
+        sendRpcError(response, 403, 'This session belongs to another identity');
+        return;
+      }
       const startedAt = Date.now();
       await existing.transport.handleRequest(request, response, parsed.body);
       logExchange('mcp request', startedAt, subject, { ...describeRpc(parsed.body), sessionId });
@@ -134,7 +157,9 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
       return;
     }
 
-    const session = deps.createSession();
+    const session = deps.createSession(
+      authorization.identity === undefined ? ANONYMOUS : verifiedIdentity(authorization.identity),
+    );
     await session.connect();
     const startedAt = Date.now();
     await session.transport.handleRequest(request, response, parsed.body);
