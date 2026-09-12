@@ -38,7 +38,7 @@ whether one trivial call succeeds or fails.
 | B2 Metadata, naming, reads | ✅ | — |
 | B3 Session and capability tier | ✅ | the `.ashx` payload and multipart, which wait for a caller |
 | B4 Writes and hints | ✅ | — |
-| B5 Workflow surface | ⬜ | quick actions, saved searches, `group_count`, `preview_delete` |
+| B5 Workflow surface | ✅ | — |
 | B6 Service requests, attachments | 🟡 | `submit_service_request`, offerings, every attachment write |
 | B7 enduser and resources | 🟡 | "own records" (needs A2), and the resources tier |
 
@@ -674,7 +674,7 @@ credential has, since no default metadata graph contains `task__assignment`.
 
 ---
 
-## Stage B5 — Workflow surface ⬜ not started
+## Stage B5 — Workflow surface ✅ done
 
 `list_quick_actions`, `preview_quick_action`, `run_quick_action`, `preview_delete`,
 `get_pick_list_values`, `get_pick_list_constraints`, `get_link_fields`, `list_saved_searches`,
@@ -687,6 +687,27 @@ while answering OK and are refused client-side rather than reported as success.
 
 `run_quick_action` is the one tool carrying `DESTRUCTIVE_NON_IDEMPOTENT` — it repeats its side
 effects on retry.
+
+**Landed 2026-09-12** as nine tools (`get_pick_list_values` came early, in B3):
+`list_quick_actions`, `preview_quick_action`, `run_quick_action`, `preview_delete`,
+`get_pick_list_constraints`, `get_link_fields`, `list_saved_searches`, `saved_search`,
+`group_count` — all session-gated, with the protocol in `src/ivanti/quick-actions/execute.ts`.
+
+**Verified live against the staging tenant (every test record removed):**
+
+| | |
+|---|---|
+| `list_quick_actions` | 104 actions on Incident#, 12 types; the 7 `UIAction` ones flagged |
+| `preview_quick_action` | no prompts, no blockers — and `LastModDateTime` **unchanged** by two previews |
+| unknown id / `UIAction` | both refused before anything is sent |
+| `run_quick_action` (update) | refused with Ivanti's own *"Category: Required field…"*, record untouched |
+| `run_quick_action` (email) | ran: `saved: true`, and reported the object it created |
+| `preview_delete` | `wouldDelete: true` with **7 cascades** listed |
+| `list_saved_searches` | 25, of which 13 flagged as answering for the service account |
+| `saved_search` | "All Active Incidents" → 54, matching `group_count` exactly |
+| `group_count(Status)` | Closed 405, Resolved 55, Active 54, Waiting 21, Logged 10 — summing to 545, the tenant's incident count |
+| `get_pick_list_constraints` | 4 of 21 validated fields are filtered: Category ← Service, Owner ← OwnerTeam, Subcategory ← Service+Category |
+| `get_link_fields` | 14 links, each with the `_RecID` + `_Category` pair and its real label |
 
 ---
 

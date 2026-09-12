@@ -119,6 +119,7 @@ describe('readPickLists', () => {
     formName: 'Incident.Admin.Header',
     validatedFields: FORM.formDef.TableMeta.ValidatedFields,
     displayNames: {},
+    fieldLabels: {},
     linkFields: {},
   };
 

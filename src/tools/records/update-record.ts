@@ -26,8 +26,9 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
       'judged against the service the record already has rather than against an empty one.\n\n' +
       'OMITTING A VALIDATED FIELD IS NOT THE SAME AS LEAVING IT ALONE on some objects, because ' +
       'Ivanti recalculates dependent fields; read the result rather than assuming.\n\n' +
-      'To change a link — the customer, the owner — set the pair: `ProfileLink_RecID` plus ' +
-      '`ProfileLink_Category`.',
+      'To change a link — the customer, the requestor, the owner — set BOTH halves of its pair: ' +
+      '`<Link>_RecID` and `<Link>_Category`. Which link carries which meaning differs per object, ' +
+      'so get_link_fields for this object rather than assuming the name another object used.',
     annotations: {
       title: 'Update a record',
       readOnlyHint: false,

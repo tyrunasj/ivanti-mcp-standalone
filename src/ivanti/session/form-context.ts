@@ -24,6 +24,22 @@ export interface ResolvedForm {
    */
   displayNames: Record<string, string>;
   /**
+   * Field name → what a person is shown for it.
+   *
+   * Ivanti has **three** naming layers, and they are resolved in this order:
+   *
+   * 1. the **form's** label for the control bound to that field — a form may rename a field for
+   *    its own users, and that is what those users actually read;
+   * 2. the object's **display name** (`TableMeta.Fields[].DisplayName`) — `Symptom` → `Description`;
+   * 3. the technical **name**, when nothing else exists.
+   *
+   * Layer 1 is only as complete as the form this context resolved. That form is the create/header
+   * form, which on a stock tenant binds very few fields, so most labels come from layer 2 — and a
+   * field renamed on some *other* form will not be seen here. Knowing which layer answered
+   * matters more than pretending there is one name.
+   */
+  fieldLabels: Record<string, string>;
+  /**
    * Link field → the identifier field that sets it: `ProfileLink` → `ProfileLink_RecID`. A link
    * is written as a pair, the RecId and a `_Category` naming the target object, so being told
    * "Customer is required" is only useful alongside this.
@@ -46,7 +62,11 @@ interface WorkspaceData {
 
 interface FormViewData {
   formDef?: {
-    FormMeta?: { Name?: string };
+    FormMeta?: {
+      Name?: string;
+      /** Keyed by control name; a control bound to a field carries `FieldRef`. */
+      Controls?: Record<string, { FieldRef?: string; Label?: string }>;
+    };
     TableMeta?: {
       TableRef?: string;
       ValidatedFields?: Record<string, unknown>;
@@ -110,10 +130,25 @@ export function createFormContext(
     }
 
     const displayNames: Record<string, string> = {};
+    const fieldLabels: Record<string, string> = {};
+
+    // Layer 2 first, so layer 1 can override it below.
     for (const [name, meta] of Object.entries(table?.Fields ?? {})) {
       const display = meta.DisplayName;
       if (typeof display === 'string' && display !== '') {
         displayNames[display.toLowerCase()] ??= name;
+        fieldLabels[name] = display;
+      }
+    }
+
+    // Layer 1: what this form calls the field, which is what its users read. Control labels
+    // routinely end in a colon, which is punctuation rather than part of the name.
+    for (const control of Object.values(view.formDef?.FormMeta?.Controls ?? {})) {
+      const field = control.FieldRef;
+      const label = control.Label?.replace(/\s*:\s*$/, '').trim();
+      if (typeof field === 'string' && field !== '' && label !== undefined && label !== '') {
+        fieldLabels[field] = label;
+        displayNames[label.toLowerCase()] ??= field;
       }
     }
 
@@ -128,6 +163,7 @@ export function createFormContext(
       formName,
       validatedFields,
       displayNames,
+      fieldLabels,
       linkFields,
     };
   };
@@ -165,4 +201,33 @@ export function constrainedBy(form: ResolvedForm, field: string): string[] {
   if (!Array.isArray(refs)) return [];
 
   return refs.filter((ref): ref is string => typeof ref === 'string' && !ref.startsWith('(other)'));
+}
+
+export interface LinkField {
+  /** The link itself, e.g. `ProfileLink`. */
+  field: string;
+  /** What a person calls it — `Customer`. */
+  displayName: string;
+  /** The field that takes the target's RecId. */
+  recIdField: string;
+  /** The field that names the object the target lives in, e.g. "Employee". */
+  categoryField: string;
+}
+
+/**
+ * The links on this object, and the **pair of fields** each one is written through.
+ *
+ * A link is not a column: setting a customer means `ProfileLink_RecID` plus
+ * `ProfileLink_Category`, and Ivanti's own refusal calls the thing "Customer", which is neither.
+ */
+export function linkFieldsOf(form: ResolvedForm): LinkField[] {
+  return Object.entries(form.linkFields)
+    .map(([field, recIdField]) => ({
+      field,
+      // The label as Ivanti writes it — `Customer`, not `profilelink`.
+      displayName: form.fieldLabels[field] ?? field,
+      recIdField,
+      categoryField: `${recIdField.replace(/_RecID$/i, '')}_Category`,
+    }))
+    .sort((a, b) => a.field.localeCompare(b.field));
 }

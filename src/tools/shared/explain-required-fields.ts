@@ -6,7 +6,12 @@ import type { ResolvedForm } from '../../ivanti/session/form-context.js';
  *
  * `Required field Incident.Description value must be provided` means the field `Symptom`; a
  * caller who takes the message literally writes a field that does not exist. Worse, `Customer`
- * is not a field at all — it is a link, written as `ProfileLink_RecID` plus a `_Category`.
+ * is not a field at all — it is a link, written as a `_RecID` plus a `_Category`.
+ *
+ * Both translations are **per object**, which is why they come from that object's form rather
+ * than a table: "Description" is `Symptom` on an incident and a service request, `Description` on
+ * a change, and `Details` on a knowledge article; "Customer" labels `ProfileLink` on an incident
+ * while the same field is "Contact Link" on a service request.
  *
  * These rules are also conditional: moving an incident to Active requires Category and Owner,
  * which nothing asks for while it is Logged.

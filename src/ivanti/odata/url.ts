@@ -14,6 +14,8 @@ export interface IvantiRoutes {
   related: (entitySet: string, recId: string, relationship: string) => string;
   /** `…/Incidents('<RecId>')/<Relationship>('<TargetId>')/$Ref` — link and unlink */
   ref: (entitySet: string, recId: string, relationship: string, targetId: string) => string;
+  /** `…/businessobject/Incidents/<Saved search name>` — a saved search runs as a route segment. */
+  savedSearch: (entitySet: string, name: string) => string;
   /** `…/api/rest/<path>` — the REST surface, on the same key as OData. */
   rest: (path: string) => string;
   /**
@@ -49,6 +51,7 @@ export function createIvantiRoutes(baseUrl: string, basePath: string): IvantiRou
     related: (entitySet, recId, relationship) => `${bo}/${entitySet}${key(recId)}/${relationship}`,
     ref: (entitySet, recId, relationship, targetId) =>
       `${bo}/${entitySet}${key(recId)}/${relationship}${key(targetId)}/$Ref`,
+    savedSearch: (entitySet, name) => `${bo}/${entitySet}/${encodeURIComponent(name)}`,
     rest: (path: string) => `${root}/api/rest/${path.replace(/^\/+/, '')}`,
     service: (path: string) => `${root}/${path.replace(/^\/+/, '')}`,
     metadata: (graph) => `${root}/api/odata/${graph === undefined ? '' : `${graph}/`}$metadata`,

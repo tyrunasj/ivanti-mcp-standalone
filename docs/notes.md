@@ -368,6 +368,40 @@ the handler answers **551**; with it, 200. The payload each handler wants is its
 is still unknown for GridDataHandler. *(Corrected 2026-09-11 — the earlier note said the handler
 was absent on this tenant.)*
 
+**Ivanti names a field three times, and the user reads the one nearest them.**
+
+| Layer | Where it lives | Example |
+|---|---|---|
+| technical name | the object | `Symptom` |
+| display name | `TableMeta.Fields[].DisplayName` | `Description` |
+| form label | a form control's `Label` | whatever this form's designer chose |
+
+A form may rename a field **for its own users**, so the display name is not the last word: two
+forms over the same object can show the same field under different words, and the words a person
+quotes are their form's. `fieldLabels` therefore resolves form label → display name → technical
+name, in that order.
+
+**The limit of that, measured:** the form this server resolves is the create/header form, and on a
+stock tenant it binds almost no fields — `Incident.Admin.Header.AUSpark` has **one** field-bound
+control out of twenty. So nearly every label in practice comes from layer 2, and a field renamed
+on some other form is invisible here. That is a gap to know about rather than one to paper over:
+when a user's words match nothing, ask which screen they are reading rather than assuming the
+field does not exist.
+
+**Field labels and link fields differ per object — the same field name can mean different things.**
+Measured across one tenant's forms: `ProfileLink` is labelled **"Customer"** on `Incident#` and
+**"Contact Link"** on `ServiceReq#`; `Change#` has no `ProfileLink` at all and carries
+`RequestorLink`; `FRS_Knowledge#` has **no link fields** while `CI#` has 21. The label "Customer"
+exists on exactly one of those objects. "Description" resolves to `Symptom` on incidents and
+service requests, `Description` on changes, problems and CIs, and **`Details`** on knowledge
+articles.
+
+So nothing may hardcode a mapping, and a tool description that teaches one object's field names as
+the general rule is a bug even when the code is right: the model will carry `ProfileLink_RecID`
+from an incident to a change, where it does not exist. The rule that *is* general is the shape —
+a link is `<Link>_RecID` plus `<Link>_Category` — and `get_link_fields` answers the rest per
+object. `Task#Assignment` has no form for an admin role here at all, so it has no answer to give.
+
 **Ivanti's required-field refusals name DISPLAY names, and some of them are not fields.**
 `Required field Incident.Description value must be provided` means `Symptom`; `Incident.Customer`
 is not a field at all but a link, written as `ProfileLink_RecID` plus `ProfileLink_Category`. The
@@ -386,6 +420,38 @@ form can equally be narrower than the object. Gating the write path on the CSDL 
 sent a picklist value out unresolved and Ivanti answered **500 with an empty message**. The form
 is the authority for a write; the form chain is cached per object, so consulting it costs three
 calls once.
+
+**A quick-action "preview" over the grid path RUNS the action.**
+`Save.asmx/SaveDataExecuteAction` honours `shouldSave: false` on the **FormParams** path only;
+`GridParams` ignores it and executes while answering like a probe. So a preview needs a form the
+role can reach, and where there is none this server refuses to preview rather than guessing. The
+form path is verified harmless: two previews against a live incident left `LastModDateTime`
+unchanged.
+
+**A quick action's failure is in `validationErrors`, not in `status`.**
+The shape is `validationErrors[recId].fieldErrors[field].fieldMessages[]`, and those messages name
+the field — *"Category: Required field Incident.Category value must be provided"* — while the
+top-level status says only that something went wrong. `PreDeleteObject` is worse: a clean preview
+answers **status `error`** while carrying nothing but warnings, so only `errorMessages` blocks.
+
+**Seven of 104 quick actions on a stock Incident are `UIAction`.**
+They are behaviour of Ivanti's own web client with nothing to execute server-side: running one
+answers OK and changes nothing. Both the preview and the run refuse them, because reporting that
+as success is worse than refusing.
+
+**Action ids are per-tenant *and* role-scoped.** An id seen under another role, or on another
+tenant, does not exist here — so every call re-reads the list rather than trusting an id it was
+handed.
+
+**A saved search keeps every key and blanks the values under `$select`.**
+Asking for `$select=Subject` returns all 181 keys with nulls in the ones not selected, so it costs
+a round trip and saves nothing; the trim is client-side. A search that matches nothing answers
+**204 with an empty body**. Thirteen of the 25 saved searches on a stock Incident begin "My" and
+resolve against the signed-in account — the API key's, never the caller's.
+
+**Ivanti has no aggregation endpoint.** "How many per status" is one filtered count per value, and
+the values come from the field's own validation list. That is why `group_count` is capped at 25
+buckets: each one is a round trip.
 
 **A base type cannot be created — its subtypes can.**
 `Task#` is a base type with seven subtypes (`Task#Assignment`, `Task#WorkOrder`, …), and `TaskType`
