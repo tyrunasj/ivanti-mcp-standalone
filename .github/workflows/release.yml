@@ -36,6 +36,7 @@ jobs:
     permissions:
       contents: write   # create the GitHub release
       id-token: write   # keyless signing, no key to store or rotate
+      packages: write   # push the Helm chart to ghcr.io
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -53,12 +54,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # `helm push` keeps its own credential store — logging Docker in does not log
-      # Helm in, and the failure is a 401 at the very end of an otherwise good release.
-      - name: Log Helm in to the same registry
+      # THE CHART GOES TO ghcr.io, NOT DOCKER HUB, AND THIS IS NOT A PREFERENCE.
+      #
+      # `helm push chart.tgz oci://<registry>/<namespace>` appends the CHART NAME to
+      # the namespace, so pushing `ivanti-mcp` to `oci://registry-1.docker.io/tyrunas`
+      # targets `tyrunas/ivanti-mcp:<version>` — the exact coordinate the image was
+      # pushed to twelve steps earlier. Both are manifests, the registry accepts the
+      # second, and the chart silently replaces the image: `docker pull` then returns
+      # a Helm chart. Docker Hub has only `user/repo`, so there is no free namespace
+      # to move it to.
+      #
+      # ghcr.io nests, so the chart gets `<owner>/charts/ivanti-mcp` and the chart
+      # itself needs no renaming. `helm push` also keeps its own credential store —
+      # logging Docker in does not log Helm in.
+      - name: Log Helm in to ghcr.io
         run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | helm registry login registry-1.docker.io \
-            --username "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin
 
       # `latest` moves only for a final release. A prerelease tag (v1.2.3-rc.1)
       # publishes its exact version and nothing else, so nobody pulls an rc by
@@ -105,9 +117,9 @@ jobs:
           path="$(./scripts/release-tarball.sh "${RUNNER_TEMP}/release" | head -1)"
           echo "path=${path}" >> "$GITHUB_OUTPUT"
 
-      # The chart ships to the same namespace as an OCI artifact, so it reuses the
-      # Docker Hub credentials and needs no gh-pages branch. Chart version and
-      # appVersion both follow the tag: this chart serves exactly one application.
+      # An OCI artifact, so no gh-pages branch and no chart-repo index to maintain.
+      # Chart version and appVersion both follow the tag: this chart serves exactly
+      # one application, and appVersion is what `image.tag: ""` falls back to.
       - name: Package and push the Helm chart
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -115,7 +127,7 @@ jobs:
             --version "$version" --app-version "$version" \
             --destination "${RUNNER_TEMP}/chart"
           helm push "${RUNNER_TEMP}/chart/ivanti-mcp-${version}.tgz" \
-            "oci://registry-1.docker.io/${IMAGE%%/*}"
+            "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -133,7 +145,7 @@ jobs:
               --certificate-oidc-issuer=https://token.actions.githubusercontent.com
             ```
 
-            **Kubernetes** — `helm install ivanti-mcp oci://registry-1.docker.io/tyrunas/ivanti-mcp --version ${{ github.ref_name }}`
+            **Kubernetes** — `helm install ivanti-mcp oci://ghcr.io/${{ github.repository_owner }}/charts/ivanti-mcp --version ${{ github.ref_name }}`
             One release is one tenant and one audience. See `charts/ivanti-mcp/README.md`.
 
             **Plain Node host** — download the tarball below, unpack it, and run

@@ -5,7 +5,7 @@ audience** — staging, UAT and production are three releases; `full` and `endus
 two more.
 
 ```bash
-helm install ivanti-mcp oci://registry-1.docker.io/tyrunas/ivanti-mcp \
+helm install ivanti-mcp oci://ghcr.io/tyrunasj/charts/ivanti-mcp \
   --set server.publicUrl=https://mcp.example.com/mcp \
   --set 'server.trustedOrigins={https://claude.ai}' \
   --set ivanti.baseUrl=https://your-tenant.example.com \

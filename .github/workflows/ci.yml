@@ -10,8 +10,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  IMAGE: tyrunas/ivanti-mcp
 
 jobs:
   verify:
@@ -61,48 +59,25 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      # Whether we can publish at all. A secret is not readable in an `if:`,
-      # so it is turned into an output here and the push steps key off that.
-      # Without this the login step hard-fails and reds a run whose only real
-      # problem is that nobody has configured a registry yet.
-      - id: creds
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::DOCKERHUB_USERNAME / DOCKERHUB_TOKEN are not set - building without publishing."
-          fi
-
-      - name: Log in to Docker Hub
-        if: github.event_name == 'push' && steps.creds.outputs.available == 'true'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=raw,value=main,enable={{is_default_branch}}
-            type=sha,prefix=sha-,format=short
-
-      # A pull request builds but never pushes: a fork must not be able to
-      # publish to the namespace. Nor does a push with no credentials configured
-      # — it still builds both architectures, which is the part worth checking.
+      # CI BUILDS BUT NEVER PUBLISHES. Only a tag publishes, in release.yml.
+      #
+      # What is worth checking on every commit is that the image still builds for
+      # both architectures — arm64 goes through QEMU here and is the one that
+      # breaks. What is NOT worth doing is filling a public registry with a tag per
+      # commit: `main` and `sha-<short>` are indistinguishable from a release to
+      # anyone reading the tag list, and they cost a push every merge.
+      #
+      # Because nothing is pushed, this job needs no registry credentials at all —
+      # which also means a fork's pull request builds exactly what main does.
       # The build context is the REPOSITORY ROOT.
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' && steps.creds.outputs.available == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          push: false
+          tags: ivanti-mcp:ci
           cache-from: type=gha
+          # Warms the cache the release build reads, so a tag does not rebuild
+          # both architectures from scratch.
           cache-to: type=gha,mode=max

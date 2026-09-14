@@ -7,7 +7,14 @@ and a self-contained tarball from the same commit, so all three are the same cod
 |---|---|---|---|
 | **Plain Node host** | a systemd service | stdio or HTTP | the release tarball |
 | **Container** | `docker run` / compose | either | `tyrunas/ivanti-mcp` |
-| **Kubernetes** | a Deployment | HTTP only | `oci://registry-1.docker.io/tyrunas/ivanti-mcp` |
+| **Kubernetes** | a Deployment | HTTP only | `oci://ghcr.io/tyrunasj/charts/ivanti-mcp` |
+
+The image is on Docker Hub and the chart is on ghcr.io, which is deliberate. `helm push`
+derives the repository from the chart name, so pushing `ivanti-mcp` into the `tyrunas`
+namespace would target `tyrunas/ivanti-mcp:<version>` — the coordinate the image already
+occupies — and the chart would silently replace it. Docker Hub is only `user/repo`, with
+no free namespace to move to; ghcr.io nests, so the chart lives under `charts/` and needs
+no renaming. Both are public and neither needs a login to pull.
 
 Whatever the shape, two rules hold. **One instance serves one tenant** — staging, UAT
 and production are three deployments, not three tenants in one process. And **one
@@ -110,7 +117,7 @@ Three things that bite, all of them recorded in `notes.md` after they bit:
 ## 3. Kubernetes
 
 ```bash
-helm install ivanti-mcp oci://registry-1.docker.io/tyrunas/ivanti-mcp \
+helm install ivanti-mcp oci://ghcr.io/tyrunasj/charts/ivanti-mcp \
   --version 0.1.0 \
   --set server.publicUrl=https://mcp.example.com/mcp \
   --set 'server.trustedOrigins={https://claude.ai}' \
