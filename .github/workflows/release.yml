@@ -112,9 +112,18 @@ jobs:
       # The same commit, as a tree that runs on a plain Node host.
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # No `head -1`: the script prints the path on stdout and nothing else. It used
+      # to print pnpm's progress there too, so `head -1` captured a log line as the
+      # filename — the upload then matched nothing AND still exited 0, which is why
+      # the file is asserted here rather than trusted.
       - id: tarball
         run: |
-          path="$(./scripts/release-tarball.sh "${RUNNER_TEMP}/release" | head -1)"
+          set -euo pipefail
+          path="$(./scripts/release-tarball.sh "${RUNNER_TEMP}/release")"
+          if [ ! -f "${path}" ]; then
+            echo "::error::release-tarball.sh did not produce a file at '${path}'"
+            exit 1
+          fi
           echo "path=${path}" >> "$GITHUB_OUTPUT"
 
       # An OCI artifact, so no gh-pages branch and no chart-repo index to maintain.

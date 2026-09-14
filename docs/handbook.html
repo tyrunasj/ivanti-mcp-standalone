@@ -616,8 +616,8 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
           <fieldset>
             <legend>Exposure</legend>
             <div class="opts">
-              <label class="opt"><input type="radio" name="bind" value="loopback" checked><span><span class="t">Loopback</span><span class="d"><code>127.0.0.1</code> — this machine only.</span></span></label>
-              <label class="opt"><input type="radio" name="bind" value="all"><span><span class="t">All interfaces</span><span class="d"><code>0.0.0.0</code> — required inside a container.</span></span></label>
+              <label class="opt"><input type="radio" name="bind" value="loopback" checked><span><span class="t">Not published</span><span class="d">On a host, binds <code>127.0.0.1</code>. In a cluster, no ingress — reached by <code>port-forward</code> or from inside it.</span></span></label>
+              <label class="opt"><input type="radio" name="bind" value="all"><span><span class="t">Published</span><span class="d">On a host, binds <code>0.0.0.0</code> — required in a container. In a cluster, an ingress on a public hostname.</span></span></label>
             </div>
           </fieldset>
         </div>
@@ -1117,8 +1117,16 @@ function buildValuesText(s) {
            "  hosts:", "    - host: mcp.example.com",
            "      paths: [{ path: /, pathType: Prefix }]");
   else
-    L.push("", "# No ingress. Reach it from inside the cluster, or with",
-           "#   kubectl port-forward svc/ivanti-mcp 3000:3000",
+    L.push("", "# NOT REACHABLE FROM OUTSIDE THE CLUSTER, which is what this answer means.",
+           "# In-cluster callers still reach it at ivanti-mcp.<namespace>.svc:3000.",
+           "# Three ways out, when you want one:",
+           "#   kubectl port-forward svc/ivanti-mcp 3000:3000   ad hoc; publicUrl above",
+           "#                                                   already matches it",
+           "#   ingress.enabled: true with a host               what the other answer",
+           "#                                                   generates",
+           "#   service.type: LoadBalancer | NodePort           no ingress controller",
+           "#                                                   needed; set publicUrl to",
+           "#                                                   whatever address it gets",
            "ingress:", "  enabled: false");
   if (s.dns === "pin")
     L.push("", "# The tenant hostname must resolve INSIDE the pod.",
@@ -1200,7 +1208,9 @@ const NOTES = {
   compose: "Save beside your secrets/ directory and run: docker compose up -d",
   values: (s) => s.transport === "stdio"
     ? "A pod has nobody to hold the other end of a pipe, so Kubernetes is HTTP-only and the chart sets the transport itself — your stdio answer does not reach it. Everything else below does."
-    : "helm install … -f values.yaml. The chart refuses to render a configuration the server would reject at boot; the six guards are listed in section 03.",
+    : s.bind === "loopback"
+      ? "No ingress: this is reachable only from inside the cluster, or through kubectl port-forward — which is what the publicUrl below assumes. Answer Exposure with \u201cPublished\u201d for an ingress, or set service.type yourself."
+      : "helm install … -f values.yaml. The chart refuses to render a configuration the server would reject at boot; the six guards are listed in section 03.",
   helm: (s) => s.auth === "none" && s.bind === "all"
     ? "As configured this is refused before anything reaches the cluster — see the comment at the top. Either put authentication in front of it, or leave the ingress off."
     : "Run these beside the values.yaml from the previous tab. The release name carries the audience, because one release is one tenant and one audience.",
