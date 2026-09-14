@@ -10,6 +10,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { zeroNote } from '../shared/zero-note.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 /** Answers OK and changes nothing: a behaviour of Ivanti's own web client. */
 export const NO_OP_ACTION_TYPE = 'UIAction';
@@ -64,12 +65,13 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
     },
     handler: (args, context) =>
       runTool('list_quick_actions', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
         const { entity } = await resolveObject(deps, args.object);
         const objectId = toActionObjectId(toObjectId(entity.name));
 
         // Only what this audience may actually run: offering an end user an action the gate
         // would refuse is an invitation to a refusal, not a capability.
-        const actions = (await listQuickActions(deps.connection.session, objectId)).filter(
+        const actions = (await listQuickActions(connection.session, objectId)).filter(
           (action) => deps.actions.allows(action.name),
         );
         const search = args.search?.toLowerCase();

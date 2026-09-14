@@ -18,6 +18,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 /** An answer is either a plain value or a chosen option carrying its identifier. */
 const ANSWER = z.union([
@@ -128,6 +129,7 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
     },
     handler: (args, context) =>
       runTool('submit_service_request', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
         const personRecId = resolveSubject(deps, context, args.person, (person) => person.recId);
 
         if (personRecId === undefined) {
@@ -148,7 +150,7 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
         let localOffset = args.localOffsetMinutes ?? 0;
         let offsetNote: string | undefined;
         if (args.localOffsetMinutes === undefined && sendsDate) {
-          const tenant = await deps.connection.serviceRequests.tenantOffset.get();
+          const tenant = await connection.serviceRequests.tenantOffset.get();
           if (tenant === undefined) {
             offsetNote =
               'The tenant UTC offset could not be read, so dates were sent unadjusted and may ' +
@@ -159,7 +161,7 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
         }
 
         const submitRequest = {
-          transport: deps.connection.transport,
+          transport: connection.transport,
           subscriptionId: args.subscriptionId,
           personRecId,
           answers,
@@ -189,7 +191,7 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
           }
           staged.push(
             await stageAttachment({
-              session: deps.connection.session,
+              session: connection.session,
               subscriptionId: args.subscriptionId,
               customerLocation: '',
               filename: file.filename,
@@ -202,9 +204,9 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
         // Files force the ASMX path: REST takes an `attachments` field and drops it silently.
         const reply =
           staged.length > 0
-            ? await submitWithAttachments(deps.connection.session, submitRequest, staged)
-            : await deps.connection.transport.requestRequired<unknown>(
-                deps.connection.transport.routes.rest('ServiceRequest/new'),
+            ? await submitWithAttachments(connection.session, submitRequest, staged)
+            : await connection.transport.requestRequired<unknown>(
+                connection.transport.routes.rest('ServiceRequest/new'),
                 { method: 'POST', body: buildSubmitPayload(submitRequest) },
               );
 
@@ -222,9 +224,9 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
          * someone else was reported under the pinned account's name — the write right, the
          * narration wrong, and nothing downstream to contradict it.
          */
-        const filed = await deps.connection.transport
+        const filed = await connection.transport
           .request<OdataRecord>(
-            deps.connection.transport.routes.record('servicereqs', submitted.recId),
+            connection.transport.routes.record('servicereqs', submitted.recId),
           )
           .catch(() => undefined);
         const filedForName =
@@ -232,7 +234,7 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
 
         // Ivanti reports a submit as successful without checking that the answers stored.
         const check = await verifyStoredAnswers(
-          deps.connection.transport,
+          connection.transport,
           submitted.recId,
           answers,
           localOffset,

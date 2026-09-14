@@ -11,6 +11,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -61,12 +62,13 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
             'looks exactly like a field with no options. Get parent values from this same tool.',
         ),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('get_pick_list_values', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
         const { entity } = await resolveObject(deps, args.object);
         const objectId = toObjectId(entity.name);
 
-        const form = await deps.connection.forms.get(objectId);
+        const form = await connection.forms.get(objectId);
         if (form === undefined) {
           return errorResult(
             `Ivanti has no create form for ${objectId} that this role can reach, and the allowed ` +
@@ -79,7 +81,7 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
         const unknownFields = args.fields.filter((field) => !known.has(field.toLowerCase()));
 
         const { lists, ignoredValues } = await readPickLists({
-          session: deps.connection.session,
+          session: connection.session,
           form,
           objectId,
           fields: args.fields,

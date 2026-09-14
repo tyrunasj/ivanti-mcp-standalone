@@ -12,7 +12,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-import { transportFor } from '../shared/transport-for.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 /** Each bucket is its own round trip, so the fan-out is capped. */
 const MAX_BUCKETS = 25;
@@ -76,7 +76,8 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('group_count', deps.logger, async () => {
-        const transport = transportFor(deps.connection.transport, context);
+        const connection = connectionFor(deps, context);
+        const transport = connection.transport;
         const resolved = await resolveObject(deps, args.object);
         const { entity, entitySet } = resolved;
         const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
@@ -85,7 +86,7 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
         let valuesFrom = 'caller';
 
         if (values.length === 0) {
-          const form = await deps.connection.forms.get(toObjectId(entity.name));
+          const form = await connection.forms.get(toObjectId(entity.name));
           if (form === undefined) {
             return errorResult(
               `No form for ${entity.name} is reachable, so the values of '${args.groupBy}' ` +
@@ -94,7 +95,7 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
           }
 
           const { lists } = await readPickLists({
-            session: deps.connection.session,
+            session: connection.session,
             form,
             objectId: toObjectId(entity.name),
             fields: [args.groupBy],

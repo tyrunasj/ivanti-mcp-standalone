@@ -10,6 +10,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { IvantiApiError } from '../../ivanti/http/errors.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 export function createPreviewDeleteTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -35,8 +36,9 @@ export function createPreviewDeleteTool(deps: IvantiToolDeps): ToolDefinition {
       object: z.string().describe('Business Object the record belongs to.'),
       recordId: z.string().describe('The 32-character RecId that would be deleted.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('preview_delete', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
         const { entity } = await resolveObject(deps, args.object);
         const objectId = toObjectId(entity.name);
 
@@ -54,7 +56,7 @@ export function createPreviewDeleteTool(deps: IvantiToolDeps): ToolDefinition {
          * cleanup and left a test note on a live customer ticket; `delete_record` then worked
          * first time.
          */
-        const result = await deps.connection.session
+        const result = await connection.session
           .call<ActionResult>(
           'Services/Save.asmx',
           'PreDeleteObject',

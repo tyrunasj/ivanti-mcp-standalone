@@ -9,7 +9,7 @@ import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-import { transportFor } from '../shared/transport-for.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 /**
  * Casting a vote, which is only safe because of where it is cast.
@@ -21,7 +21,7 @@ import { transportFor } from '../shared/transport-for.js';
  * named approver, so the decision counts as theirs. This tool uses the second, and refuses any row
  * whose `Owner` is not the person the conversation is acting for. That check is what makes it safe.
  *
- * `VotedBy` still records the service account, and that is accurate rather than a flaw: the
+ * Without impersonation `VotedBy` records the service account, which is accurate rather than a flaw: the
  * approver decided, this server performed it — the same shape as a delegated approval.
  *
  * Measured: a raw field update on the vote row is **not** a vote. It stores the status, overwrites
@@ -73,6 +73,7 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('vote_on_approval', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
         const person = context.pin?.person();
         if (person?.loginId === undefined) {
           return errorResult(
@@ -81,8 +82,8 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        const transport = transportFor(deps.connection.transport, context);
-        const { session } = deps.connection;
+        const transport = connection.transport;
+        const { session } = connection;
         const url = withQuery(
           transport.routes.entitySet(VOTES),
           buildQuery({ filter: `RecId eq ${quoteOdataString(args.approvalId)}`, top: 1 }),

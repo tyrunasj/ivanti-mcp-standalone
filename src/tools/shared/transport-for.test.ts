@@ -8,17 +8,9 @@ import type { IvantiTransport } from '../../ivanti/http/transport.js';
 import type { ImpersonatedSession } from '../../ivanti/session/impersonated-session.js';
 import type { CallContext } from '../tool-definition.js';
 import { transportFor } from './transport-for.js';
+import { impersonatedSessionFixture } from '../../ivanti/session/impersonated-session.fixture.js';
 
-const session = (sid: string): ImpersonatedSession =>
-  ({
-    sid,
-    loginId: 'HSanders',
-    role: 'ServiceDeskAnalyst',
-    roles: [],
-    call: () => Promise.reject(new Error('unused')),
-    switchTo: () => Promise.reject(new Error('unused')),
-    release: () => Promise.resolve(),
-  }) as ImpersonatedSession;
+const session = (sid: string): ImpersonatedSession => impersonatedSessionFixture({ sid });
 
 const base = (asPerson = vi.fn()): IvantiTransport => ({ asPerson }) as unknown as IvantiTransport;
 

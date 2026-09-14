@@ -34,9 +34,8 @@ that account — like a call-centre operator working on someone's behalf. Anythi
 **Given a ConfigDB key it goes further and signs in *as* them.** With `IVANTI_CONFIG_URL` and
 `IVANTI_CENTRAL_CONFIG_API_KEY` set, `act_as` opens a real Ivanti session for that person, and
 Ivanti applies their own access to it — a self-service role reads none of the incidents an analyst
-reads, and tickets they raise carry their name rather than the service account's. It covers the
-record surface only: forms, pick lists, quick actions and the admin catalog keep using the service
-account, because Ivanti refuses a session minted that way on those. Set neither and the server
+reads, and tickets they raise carry their name rather than the service account's. And so does a note they add, a quick action they run, and a service request they file with
+a file attached. Set neither and the server
 behaves exactly as described above. See [`docs/impersonation-plan.md`](docs/impersonation-plan.md).
 
 Three Ivanti surfaces, and the authentication is not uniform — which is why the connection is

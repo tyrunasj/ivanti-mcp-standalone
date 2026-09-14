@@ -17,6 +17,7 @@ import { ActionNotAllowedError } from '../shared/action-gate.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { NO_OP_ACTION_TYPE } from './list-quick-actions.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 export function createPreviewQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -54,6 +55,7 @@ export function createPreviewQuickActionTool(deps: IvantiToolDeps): ToolDefiniti
     },
     handler: (args, context) =>
       runTool('preview_quick_action', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
         const resolved = await resolveObject(deps, args.object);
         const { entity } = resolved;
         const objectId = toActionObjectId(toObjectId(entity.name));
@@ -62,7 +64,7 @@ export function createPreviewQuickActionTool(deps: IvantiToolDeps): ToolDefiniti
         // the deployment named. Both are no-ops in `full`, where the audience is IT staff.
         await assertRecordWritable(deps, context, resolved, args.recordId);
 
-        const known = await listQuickActions(deps.connection.session, objectId);
+        const known = await listQuickActions(connection.session, objectId);
         const action = known.find(
           (candidate) => candidate.actionId.toLowerCase() === args.actionId.toLowerCase(),
         );
@@ -85,7 +87,7 @@ export function createPreviewQuickActionTool(deps: IvantiToolDeps): ToolDefiniti
           );
         }
 
-        const form = await deps.connection.forms.get(objectId);
+        const form = await connection.forms.get(objectId);
         if (form === undefined) {
           return errorResult(
             `Cannot preview an action on ${objectId}: this role has no form for it, and Ivanti ` +
@@ -95,7 +97,7 @@ export function createPreviewQuickActionTool(deps: IvantiToolDeps): ToolDefiniti
         }
 
         const result = await executeAction({
-          session: deps.connection.session,
+          session: connection.session,
           objectId,
           recordId: args.recordId,
           actionId: args.actionId,

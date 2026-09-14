@@ -12,6 +12,7 @@ import { ANONYMOUS, verifiedIdentity } from '../../auth/identity.js';
 import type { CallContext } from '../tool-definition.js';
 import { createImpersonationSlot } from '../../auth/impersonation.js';
 import type { ImpersonatedSession } from '../../ivanti/session/impersonated-session.js';
+import { impersonatedSessionFixture } from '../../ivanti/session/impersonated-session.fixture.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -201,17 +202,12 @@ describe('act_as', () => {
 
 describe('act_as when the deployment can impersonate', () => {
   const session = (overrides: Partial<ImpersonatedSession> = {}): ImpersonatedSession =>
-    ({
+    impersonatedSessionFixture({
       sid: 'tenant#A#1',
-      loginId: 'HSanders',
-      role: 'ServiceDeskAnalyst',
       roles: [
         { name: 'ServiceDeskAnalyst', displayName: 'Service Desk Analyst', selfService: false },
         { name: 'SelfServiceMobile', displayName: 'Self Service', selfService: true },
       ],
-      call: () => Promise.reject(new Error('unused')),
-      switchTo: () => Promise.reject(new Error('unused')),
-      release: () => Promise.resolve(),
       ...overrides,
     });
 

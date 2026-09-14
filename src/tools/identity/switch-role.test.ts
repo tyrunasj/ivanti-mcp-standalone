@@ -41,6 +41,10 @@ function session(switchTo = vi.fn((role: string) => Promise.resolve(role))): Imp
     },
     roles: ROLES,
     call: () => Promise.reject(new Error('unused')),
+    callHandler: () => Promise.reject(new Error('unused')),
+    uploadToHandler: () => Promise.reject(new Error('unused')),
+    identity: () => Promise.resolve({ role }),
+    identityIfKnown: () => ({ role }),
     switchTo: async (next: string): Promise<string> => {
       role = await switchTo(next);
       return role;
