@@ -90,6 +90,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail "server.authMode=oauth needs oauth.issuer." -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.ivanti.configUrl (not .Values.secrets.existingSecret) (not .Values.secrets.centralConfigApiKey) -}}
+{{- fail "ivanti.configUrl needs the ConfigDB key: set secrets.centralConfigApiKey, or provide it in secrets.existingSecret under the key ivanti-central-config-api-key." -}}
+{{- end -}}
+{{- if and .Values.ivanti.impersonationRole (eq .Values.server.mode "enduser") -}}
+{{- fail "ivanti.impersonationRole applies to server.mode=full; an enduser deployment opens the role server.enduser.role names." -}}
+{{- end -}}
 {{- if and (eq .Values.server.authMode "bearer") (not .Values.secrets.existingSecret) (not .Values.secrets.bearerToken) -}}
 {{- fail "server.authMode=bearer needs a bearer token: set secrets.bearerToken, or provide it in secrets.existingSecret under the key bearer-token." -}}
 {{- end -}}

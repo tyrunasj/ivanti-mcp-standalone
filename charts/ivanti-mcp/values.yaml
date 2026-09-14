@@ -39,10 +39,20 @@ server:
   enduser:
     businessObjects: []
     quickActions: []
+    # The self-service role an impersonated enduser session opens under.
+    # Empty = the server default, SelfServiceMobile. Checked against the tenant.
+    role: ""
 
 ivanti:
   baseUrl: ""           # tenant origin, no path. The /HEAT prefix is probed.
   maxTier: ""           # odata | session | admin. Empty = whatever the key can do.
+  # Impersonation. Set this AND provide the key ivanti-central-config-api-key
+  # in the secret, and act_as opens an Ivanti session AS the person — every
+  # surface follows them. Empty = act_as only decides who "my" means.
+  configUrl: ""         # the ConfigDB tenant, e.g. https://config-<tenant>/
+  # full mode only: pin the role an impersonated session opens under. Refused
+  # when the person does not hold it, never silently ignored.
+  impersonationRole: ""
 
 oauth:
   issuer: ""
@@ -56,12 +66,15 @@ oauth:
 # variables: `kubectl describe pod` and /proc/<pid>/environ both show the
 # environment, a projected secret shows a path.
 secrets:
-  # Recommended. Keys: ivanti-api-key, bearer-token (the latter only for authMode=bearer).
+  # Recommended. Keys: ivanti-api-key, bearer-token (only for authMode=bearer),
+  # ivanti-central-config-api-key (only with ivanti.configUrl — NOT the tenant key:
+  # it comes from the ConfigDB tenant's CentralConfigApiKey group).
   existingSecret: ""
   # Development only — puts the values in the release, and therefore in Helm history.
   create: false
   ivantiApiKey: ""
   bearerToken: ""
+  centralConfigApiKey: ""
   mountPath: /run/secrets
 
 # The tenant hostname must resolve INSIDE the pod, which is a different question
