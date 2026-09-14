@@ -7,42 +7,48 @@
 <title>Ivanti MCP Handbook</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 /* ── Tokens ───────────────────────────────────────────────────────────────
    Complete light palette on bare :root, redefined token-for-token in the two
    dark states, so the un-stamped (system) document resolves as a set.        */
 :root {
-  --paper:#F7F5F6; --surface:#FFFFFF; --surface-2:#F1EDEF; --code-bg:#F3EFF1;
-  --ink:#1A1517; --ink-2:#5A5157; --ink-3:#8C8288;
-  --line:#E2DBDE; --line-strong:#CFC6CA;
-  --accent:#B3243B; --accent-soft:#FBEEF0; --on-accent:#FFFFFF;
+  /* SYNERGY brand: --_colors---pink #c80a4e, over the site's own neutral ramp
+     (neutral-100 … neutral-800). Read off www.synergy.eu's stylesheet, not guessed. */
+  --paper:#FAFAFA; --surface:#FFFFFF; --surface-2:#ECECEC; --code-bg:#F2F1F2;
+  --ink:#111111; --ink-2:#484848; --ink-3:#727272;
+  --line:#E4E4E4; --line-strong:#CECECE;
+  --accent:#C80A4E; --accent-soft:#FDEDF3; --on-accent:#FFFFFF;
   --read:#12706B; --read-soft:#E6F2F1;
   --write:#9A6412; --write-soft:#FBF1E1;
-  --danger:#B3243B; --danger-soft:#FBEEF0;
-  --shadow:0 1px 2px rgba(26,21,23,.05), 0 8px 24px -16px rgba(26,21,23,.25);
+  --danger:#C80A4E; --danger-soft:#FDEDF3;
+  --shadow:0 1px 2px rgba(17,17,17,.05), 0 8px 24px -16px rgba(17,17,17,.25);
   --rail:240px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper:#141115; --surface:#1C181E; --surface-2:#252029; --code-bg:#221D26;
-    --ink:#EDE8EA; --ink-2:#ADA3A9; --ink-3:#7D747A;
-    --line:#2E2831; --line-strong:#463E4A;
-    --accent:#F2536E; --accent-soft:#2B1A20; --on-accent:#1A1517;
+    --paper:#111111; --surface:#1A1A1A; --surface-2:#242424; --code-bg:#1E1E1E;
+    --ink:#FAFAFA; --ink-2:#CECECE; --ink-3:#A9A9A9;
+    --line:#2A2A2A; --line-strong:#484848;
+    /* The brand pink at 41% lightness fails on a dark ground; this is the same
+       hue and saturation lifted to 62%, so it still reads as the brand. */
+    --accent:#F54787; --accent-soft:#2C1220; --on-accent:#111111;
     --read:#57C0B6; --read-soft:#15302E;
     --write:#DCA24A; --write-soft:#2E2415;
-    --danger:#F2536E; --danger-soft:#2B1A20;
+    --danger:#F54787; --danger-soft:#2C1220;
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
   }
 }
 :root[data-theme="dark"] {
-  --paper:#141115; --surface:#1C181E; --surface-2:#252029; --code-bg:#221D26;
-  --ink:#EDE8EA; --ink-2:#ADA3A9; --ink-3:#7D747A;
-  --line:#2E2831; --line-strong:#463E4A;
-  --accent:#F2536E; --accent-soft:#2B1A20; --on-accent:#1A1517;
+  --paper:#111111; --surface:#1A1A1A; --surface-2:#242424; --code-bg:#1E1E1E;
+  --ink:#FAFAFA; --ink-2:#CECECE; --ink-3:#A9A9A9;
+  --line:#2A2A2A; --line-strong:#484848;
+  /* The brand pink at 41% lightness fails on a dark ground; this is the same
+     hue and saturation lifted to 62%, so it still reads as the brand. */
+  --accent:#F54787; --accent-soft:#2C1220; --on-accent:#111111;
   --read:#57C0B6; --read-soft:#15302E;
   --write:#DCA24A; --write-soft:#2E2415;
-  --danger:#F2536E; --danger-soft:#2B1A20;
+  --danger:#F54787; --danger-soft:#2C1220;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
 }
 
@@ -52,7 +58,7 @@ body {
   font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
 }
-h1,h2,h3,h4 { font-family:Archivo, ui-sans-serif, system-ui, sans-serif; text-wrap:balance; margin:0; }
+h1,h2,h3,h4 { font-family:"Space Grotesk", ui-sans-serif, system-ui, sans-serif; text-wrap:balance; margin:0; }
 code, kbd, .mono { font-family:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
 a { color:var(--accent); text-underline-offset:2px; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:3px; }
@@ -67,8 +73,17 @@ a { color:var(--accent); text-underline-offset:2px; }
   max-width:1240px; margin:0 auto; padding-block:12px; padding-inline:24px;
   display:flex; align-items:center; gap:16px; flex-wrap:wrap;
 }
-.wordmark { display:flex; align-items:baseline; gap:9px; margin-right:auto; min-width:0; }
-.wordmark b { font-family:Archivo; font-weight:700; font-size:16px; letter-spacing:-.01em; }
+.wordmark { display:flex; align-items:center; gap:10px; margin-right:auto; min-width:0; }
+.wordmark b { font-family:"Space Grotesk"; font-weight:600; font-size:15px; letter-spacing:-.01em; line-height:1; }
+.brandmark { height:20px; width:auto; display:block; flex:none; }
+/* The mark is the true brand pink (#c80a4e), which sits at 3.25:1 on the dark
+   ground while UI accents are lifted to 5.52:1. This closes that gap without
+   touching the file, and never applies in light mode. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .brandmark { filter:brightness(1.22) saturate(.96); }
+}
+:root[data-theme="dark"] .brandmark { filter:brightness(1.22) saturate(.96); }
+.brandrule { width:1px; height:18px; background:var(--line-strong); flex:none; }
 .wordmark .ver {
   font-family:"IBM Plex Mono"; font-size:11px; color:var(--ink-3);
   border:1px solid var(--line); border-radius:99px; padding:1px 7px;
@@ -95,9 +110,15 @@ a { color:var(--accent); text-underline-offset:2px; }
 .rail { position:sticky; top:73px; padding-block:32px; max-height:calc(100vh - 73px); overflow-y:auto; }
 .rail ol { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1px; }
 .rail a {
-  display:flex; gap:10px; align-items:baseline; text-decoration:none; color:var(--ink-2);
+  display:flex; gap:8px; align-items:center; text-decoration:none; color:var(--ink-2);
   font-size:13.5px; padding:5px 10px; border-radius:6px; border-left:2px solid transparent;
 }
+.nav-ico {
+  width:14px; height:14px; flex:none;
+  fill:none; stroke:currentColor; stroke-width:1.4;
+  stroke-linecap:round; stroke-linejoin:round; opacity:.65;
+}
+.rail a.on .nav-ico, .rail a:hover .nav-ico { opacity:1; }
 .rail a .n { font-family:"IBM Plex Mono"; font-size:11px; color:var(--ink-3); font-variant-numeric:tabular-nums; }
 .rail a:hover { background:var(--surface-2); color:var(--ink); }
 .rail a.on { color:var(--accent); background:var(--accent-soft); border-left-color:var(--accent); font-weight:600; }
@@ -123,17 +144,50 @@ ul.plain li { margin-bottom:6px; }
 .hero { padding-block:40px 36px; border-bottom:1px solid var(--line); margin-bottom:40px; }
 .hero h1 { font-size:40px; font-weight:700; letter-spacing:-.03em; line-height:1.1; margin-bottom:14px; }
 .hero .lede { font-size:18px; max-width:62ch; }
-.statline { display:flex; flex-wrap:wrap; gap:0; margin-top:26px; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--surface); }
-.statline div { padding:12px 18px; border-right:1px solid var(--line); flex:1 1 auto; min-width:112px; }
-.statline div:last-child { border-right:0; }
-.statline .k { font-family:Archivo; font-weight:700; font-size:21px; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
-.statline .v { font-size:11px; color:var(--ink-3); text-transform:uppercase; letter-spacing:.08em; font-weight:600; margin-top:1px; }
+/* One card per figure rather than one box with internal rules.
+   `auto-fit` collapses only tracks with no item in them at all, so with six
+   cards it never leaves a lone one stretched across a row: either every track
+   is occupied and they wrap at equal width, or there are spare tracks and all
+   six sit on one line. 128px is the largest minimum that still fits six across
+   beside the rail. */
+.statline {
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(128px, 1fr));
+  gap:8px; margin-top:24px;
+}
+/* `> div`, not `div`: each card holds a .k and a .v div, so the descendant
+   selector was styling those too — which is where the stray rules inside the
+   old cells came from. */
+.statline > div {
+  position:relative; padding:11px 13px 12px; min-width:0;
+  border:1px solid var(--line); border-radius:10px; background:var(--surface);
+}
+/* Decoration in the corner, sized so it never competes with the figure and
+   never collides with it — the card reserves the space rather than relying on
+   the number being short. */
+.statline .ico {
+  position:absolute; top:10px; right:10px; width:15px; height:15px;
+  fill:none; stroke:currentColor; stroke-width:1.5;
+  stroke-linecap:round; stroke-linejoin:round;
+  color:var(--ink-3); opacity:.75;
+}
+.statline .k { padding-right:22px; font-family:"Space Grotesk"; font-weight:700; font-size:19px; line-height:1.2; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+.statline .v { font-size:10px; color:var(--ink-3); text-transform:uppercase; letter-spacing:.07em; font-weight:600; margin-top:3px; }
 
 /* ── Callouts ─────────────────────────────────────────────────────────── */
 .note {
+  position:relative;
   border-left:3px solid var(--accent); background:var(--accent-soft);
-  padding:14px 18px; border-radius:0 8px 8px 0; margin:0 0 20px; max-width:68ch;
+  padding:14px 18px 14px 44px; border-radius:0 8px 8px 0; margin:0 0 20px; max-width:68ch;
 }
+/* Masked rather than inlined: there are seventeen of these, the icon follows
+   whatever colour the variant already sets, and no callout's markup changes. */
+.note::before {
+  content:""; position:absolute; left:15px; top:15px; width:16px; height:16px;
+  background:var(--accent);
+  -webkit-mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%226%22%2F%3E%3Cpath%20d%3D%22M8%207.4v3.4M8%205.2v.1%22%2F%3E%3C%2Fsvg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%226%22%2F%3E%3Cpath%20d%3D%22M8%207.4v3.4M8%205.2v.1%22%2F%3E%3C%2Fsvg%3E") center/contain no-repeat;
+}
+.note.warn::before { background:var(--write); -webkit-mask-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M8%202.6%2014.2%2013H1.8z%22%2F%3E%3Cpath%20d%3D%22M8%206.6v3M8%2011.3v.1%22%2F%3E%3C%2Fsvg%3E"); mask-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M8%202.6%2014.2%2013H1.8z%22%2F%3E%3Cpath%20d%3D%22M8%206.6v3M8%2011.3v.1%22%2F%3E%3C%2Fsvg%3E"); }
+.note.calm::before { background:var(--ink-3); -webkit-mask-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%226%22%2F%3E%3Cpath%20d%3D%22M5.6%208.2%207.3%2010l3.1-3.6%22%2F%3E%3C%2Fsvg%3E"); mask-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%226%22%2F%3E%3Cpath%20d%3D%22M5.6%208.2%207.3%2010l3.1-3.6%22%2F%3E%3C%2Fsvg%3E"); }
 .note.warn { border-left-color:var(--write); background:var(--write-soft); }
 .note.calm { border-left-color:var(--line-strong); background:var(--surface-2); }
 .note p:last-child { margin-bottom:0; }
@@ -221,6 +275,24 @@ fieldset.muted .opt { cursor:not-allowed; }
 .tab[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); }
 .tabnote { font-size:11.5px; line-height:1.5; color:var(--ink-3); margin:0 0 9px; max-width:none; }
 
+/* ── Delivery outline ─────────────────────────────────────────────────── */
+.gantt { border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:16px 16px 8px; margin:0 0 16px; }
+.gantt svg { display:block; width:100%; height:auto; overflow:visible; }
+.gantt .gg { stroke:var(--line); stroke-width:1; }
+.gantt .gmile { stroke:var(--line-strong); stroke-width:1; stroke-dasharray:3 3; }
+.gantt .gdia { fill:var(--accent); }
+.gantt .gbar { fill:var(--accent); opacity:.55; }
+.gantt .gbar.pivot { opacity:1; }
+.gantt .gbar.soft { opacity:.28; }
+.gantt .ggate { stroke:var(--ink-3); stroke-width:1.4; stroke-dasharray:2 4; opacity:.8; }
+.gantt .gtask { fill:var(--ink-2); font:500 11px "IBM Plex Sans", sans-serif; text-anchor:end; }
+.gantt .gtask.muted { fill:var(--ink-3); }
+.gantt .ggatelab { fill:var(--ink-3); font:400 10px "IBM Plex Mono", ui-monospace, monospace; }
+.gantt .gmon { fill:var(--ink-3); font:600 10px "IBM Plex Sans", sans-serif; letter-spacing:.09em; text-transform:uppercase; }
+.gantt .gmlab { fill:var(--accent); font:600 10px "IBM Plex Mono", ui-monospace, monospace; }
+.gantt figcaption { font-size:11.5px; color:var(--ink-3); margin:10px 0 0; line-height:1.5; max-width:none; }
+@media (max-width: 640px) { .gantt { overflow-x:auto; } .gantt svg { min-width:620px; } }
+
 /* ── Tool reference ───────────────────────────────────────────────────── */
 .toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }
 .search {
@@ -285,10 +357,12 @@ fieldset.muted .opt { cursor:not-allowed; }
 .chart .val  { fill:var(--ink-2); font:600 10px "IBM Plex Mono", ui-monospace, monospace; text-anchor:middle; }
 .chart .xlab { fill:var(--ink-3); font:500 10.5px "IBM Plex Mono", ui-monospace, monospace; text-anchor:middle; }
 .chart .ylab { fill:var(--ink-3); font:500 10px "IBM Plex Mono", ui-monospace, monospace; text-anchor:end; }
+.chart .tick { stroke:var(--line-strong); stroke-width:1; }
+.chart .axtitle { fill:var(--ink-3); font:600 10px "IBM Plex Sans", sans-serif; letter-spacing:.09em; text-transform:uppercase; text-anchor:middle; }
 .chart .lim  { stroke:var(--danger); stroke-width:1.5; stroke-dasharray:5 4; }
 .chart .req  { stroke:var(--read); stroke-width:1.5; stroke-dasharray:5 4; }
 .chart .limlab { fill:var(--danger); font:600 10px "IBM Plex Mono", ui-monospace, monospace; text-anchor:end; }
-.chart .reqlab { fill:var(--read); font:600 10px "IBM Plex Mono", ui-monospace, monospace; text-anchor:end; }
+.chart .reqlab { fill:var(--read); font:600 10px "IBM Plex Mono", ui-monospace, monospace; text-anchor:start; }
 .chart figcaption { font-size:11.5px; color:var(--ink-3); margin:8px 0 0; line-height:1.5; max-width:none; }
 
 /* ── Resource cards ───────────────────────────────────────────────────── */
@@ -320,7 +394,6 @@ footer { border-top:1px solid var(--line); margin-top:8px; padding-top:20px; fon
 }
 @media (max-width: 560px) {
   .masthead-in, .shell { padding-inline:16px; }
-  .statline div { min-width:50%; }
 }
 </style>
 <style>
@@ -336,14 +409,18 @@ img  { max-width: 100%; }
 <header class="masthead">
   <div class="masthead-in">
     <div class="wordmark">
+      <img class="brandmark" src="data:image/png;base64,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"
+           alt="SYNERGY" width="600" height="115" decoding="async">
+      <span class="brandrule" aria-hidden="true"></span>
       <b>Ivanti MCP</b>
       <span class="ver mono" id="verChip">v0.1.1</span>
     </div>
     <div class="modeswitch">
-      <span class="lbl">Audience</span>
-      <div class="seg" role="group" aria-label="Server mode">
-        <button type="button" id="mFull" aria-pressed="true">full</button>
-        <button type="button" id="mEnd" aria-pressed="false">enduser</button>
+      <span class="lbl">Theme</span>
+      <div class="seg" role="group" aria-label="Colour theme">
+        <button type="button" class="themebtn" data-theme-choice="auto" aria-pressed="true">auto</button>
+        <button type="button" class="themebtn" data-theme-choice="light" aria-pressed="false">light</button>
+        <button type="button" class="themebtn" data-theme-choice="dark" aria-pressed="false">dark</button>
       </div>
     </div>
   </div>
@@ -352,19 +429,20 @@ img  { max-width: 100%; }
 <div class="shell">
   <nav class="rail" aria-label="Sections">
     <ol id="railList">
-      <li><a href="#overview"><span class="n">01</span>Overview</a></li>
-      <li><a href="#quickstart"><span class="n">02</span>Quick start</a></li>
-      <li><a href="#deploy"><span class="n">03</span>Deploy</a></li>
-      <li><a href="#config"><span class="n">04</span>Configure</a></li>
-      <li><a href="#env"><span class="n">05</span>Every setting</a></li>
-      <li><a href="#oauth"><span class="n">06</span>OAuth providers</a></li>
-      <li><a href="#tiers"><span class="n">07</span>Capability tiers</a></li>
-      <li><a href="#modes"><span class="n">08</span>Audience modes</a></li>
-      <li><a href="#tools"><span class="n">09</span>Tool reference</a></li>
-      <li><a href="#resources"><span class="n">10</span>Reference docs</a></li>
-      <li><a href="#traps"><span class="n">11</span>Ivanti traps</a></li>
-      <li><a href="#tokens"><span class="n">12</span>What a session costs</a></li>
-      <li><a href="#trouble"><span class="n">13</span>Troubleshooting</a></li>
+      <li><a href="#overview"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.9"/><path d="M8 7.3v3.6M8 5.3v.1"/></svg><span class="n">01</span>Overview</a></li>
+      <li><a href="#quickstart"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8.9 1.9 3.1 9.1h4L7.1 14.1l5.8-7.2h-4z"/></svg><span class="n">02</span>Quick start</a></li>
+      <li><a href="#deploy"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="2.2" y="2.4" width="11.6" height="4.4" rx="1.2"/><rect x="2.2" y="9.2" width="11.6" height="4.4" rx="1.2"/><path d="M4.8 4.6v.1M4.8 11.4v.1"/></svg><span class="n">03</span>Deploy</a></li>
+      <li><a href="#config"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.5 4.6h11M2.5 11.4h11"/><circle cx="6" cy="4.6" r="1.7"/><circle cx="10.4" cy="11.4" r="1.7"/></svg><span class="n">04</span>Configure</a></li>
+      <li><a href="#env"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.4 4h8.2M5.4 8h8.2M5.4 12h8.2"/><path d="M2.6 4v.1M2.6 8v.1M2.6 12v.1"/></svg><span class="n">05</span>Every setting</a></li>
+      <li><a href="#oauth"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.4 7.2V5.4a3.6 3.6 0 0 1 7.2 0v1.8"/><rect x="3" y="7.2" width="10" height="6.4" rx="1.6"/></svg><span class="n">06</span>OAuth providers</a></li>
+      <li><a href="#tiers"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.3 2.2 5.4 8 8.5l5.8-3.1z"/><path d="M2.2 9.1 8 12.2l5.8-3.1"/></svg><span class="n">07</span>Capability tiers</a></li>
+      <li><a href="#modes"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="6" cy="5.6" r="2.4"/><path d="M1.9 13.2c0-2.3 1.9-3.7 4.1-3.7s4.1 1.4 4.1 3.7"/><path d="M10.9 3.6a2.4 2.4 0 0 1 0 4.6M11.6 9.8c1.6.4 2.6 1.6 2.6 3.4"/></svg><span class="n">08</span>Audience modes</a></li>
+      <li><a href="#tools"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="2.4" y="2.4" width="4.6" height="4.6" rx="1.1"/><rect x="9" y="2.4" width="4.6" height="4.6" rx="1.1"/><rect x="2.4" y="9" width="4.6" height="4.6" rx="1.1"/><rect x="9" y="9" width="4.6" height="4.6" rx="1.1"/></svg><span class="n">09</span>Tool reference</a></li>
+      <li><a href="#resources"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 4.6S6.8 3.3 3.5 3.3v8.4C6.8 11.7 8 13 8 13s1.2-1.3 4.5-1.3V3.3C9.2 3.3 8 4.6 8 4.6Z"/><path d="M8 4.6V13"/></svg><span class="n">10</span>Reference docs</a></li>
+      <li><a href="#traps"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.6 14.2 13H1.8z"/><path d="M8 6.6v3M8 11.3v.1"/></svg><span class="n">11</span>Ivanti traps</a></li>
+      <li><a href="#tokens"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 14a6 6 0 1 1 6-6"/><path d="M8 8l3.4-2.2"/><path d="M11.2 11.2h3.2M12.8 9.6v3.2"/></svg><span class="n">12</span>What a session costs</a></li>
+      <li><a href="#limits"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.6 14V2.6"/><path d="M3.6 3.4h8.3l-1.7 2.5 1.7 2.5H3.6z"/></svg><span class="n">13</span>Limits and roadmap</a></li>
+      <li><a href="#trouble"><svg class="nav-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.9"/><circle cx="8" cy="8" r="2.4"/><path d="m3.8 3.8 2.5 2.5M9.7 9.7l2.5 2.5M12.2 3.8 9.7 6.3M6.3 9.7l-2.5 2.5"/></svg><span class="n">14</span>Troubleshooting</a></li>
     </ol>
   </nav>
 
@@ -373,12 +451,12 @@ img  { max-width: 100%; }
       <h1>Ivanti MCP Handbook</h1>
       <p class="lede">A standalone MCP server that gives a model the Ivanti Neurons for ITSM surface — reading records, filing tickets, running the tenant's own quick actions — over stdio or authenticated HTTP. Everything below is read from the running server, not from memory.</p>
       <div class="statline">
-        <div><div class="k" id="statTools">40</div><div class="v">tools · full</div></div>
-        <div><div class="k" id="statEnd">34</div><div class="v">tools · enduser</div></div>
-        <div><div class="k">6</div><div class="v">reference docs</div></div>
-        <div><div class="k">3</div><div class="v">capability tiers</div></div>
-        <div><div class="k">3</div><div class="v">deploy shapes</div></div>
-        <div><div class="k">56<span style="font-size:13px">MB</span></div><div class="v">image, pulled</div></div>
+        <div><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="2.4" y="2.4" width="4.6" height="4.6" rx="1.1"/><rect x="9" y="2.4" width="4.6" height="4.6" rx="1.1"/><rect x="2.4" y="9" width="4.6" height="4.6" rx="1.1"/><rect x="9" y="9" width="4.6" height="4.6" rx="1.1"/></svg><div class="k" id="statTools">40</div><div class="v">tools · full</div></div>
+        <div><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="5.4" r="2.7"/><path d="M2.9 13.4c0-2.6 2.3-4.2 5.1-4.2s5.1 1.6 5.1 4.2"/></svg><div class="k" id="statEnd">34</div><div class="v">tools · enduser</div></div>
+        <div><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 4.6S6.8 3.3 3.5 3.3v8.4C6.8 11.7 8 13 8 13s1.2-1.3 4.5-1.3V3.3C9.2 3.3 8 4.6 8 4.6Z"/><path d="M8 4.6V13"/></svg><div class="k">6</div><div class="v">reference docs</div></div>
+        <div><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.3 2.2 5.4 8 8.5l5.8-3.1z"/><path d="M2.2 9.1 8 12.2l5.8-3.1"/></svg><div class="k">3</div><div class="v">capability tiers</div></div>
+        <div><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.4 13.6 5.5v5L8 13.6 2.4 10.5v-5z"/><path d="m2.4 5.5 5.6 3.1 5.6-3.1M8 8.6v5"/></svg><div class="k">3</div><div class="v">deploy shapes</div></div>
+        <div><svg class="ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.8v7"/><path d="m5.1 7 2.9 2.8L10.9 7"/><path d="M2.8 13.2h10.4"/></svg><div class="k">56<span style="font-size:13px">MB</span></div><div class="v">image, pulled</div></div>
       </div>
     </div>
 
@@ -464,7 +542,7 @@ docker run --rm -p 3000:3000 --env-file .env \
         <p><strong>Two rules hold whatever the shape.</strong> <b>One instance is one tenant</b> — staging, UAT and production are three deployments, not three tenants in one process. And <b>one instance is one audience</b>: <code>full</code> and <code>enduser</code> are different products, and mixing them is how an employee ends up holding an analyst's tool surface.</p>
       </div>
 
-      <h3>A. A plain Node host</h3>
+      <h3>A. Plain Node host</h3>
       <p>The tarball carries its own production dependencies as <em>real directories</em>, rather than the package manager's default layout of symlinks into a content-addressed store — that layout does not survive being moved to another machine, so the release flattens it rather than shipping a lockfile and hoping.</p>
       <div class="codewrap"><pre><code>curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v0.1.1/ivanti-mcp-0.1.1.tar.gz
 sudo useradd --system --home /opt/ivanti-mcp --shell /usr/sbin/nologin ivanti-mcp
@@ -485,7 +563,7 @@ sudo systemctl enable --now ivanti-mcp</code></pre></div>
         <li><strong><code>RestartPreventExitStatus=78</code> is set.</strong> A configuration error will still be a configuration error in five seconds; restarting into it just fills the journal.</li>
       </ul>
 
-      <h3>B. A container</h3>
+      <h3>B. Container</h3>
       <div class="codewrap"><pre><code>docker pull tyrunas/ivanti-mcp:0.1.1</code></pre></div>
       <p>Multi-arch (<code>linux/amd64</code>, <code>linux/arm64</code>), <strong>55.4 MB to pull</strong> on amd64 and 55.0 MB on arm64 — measured on the published manifest, of which 52.6 MB is the distroless Node base — uid 65532. Three stages: build → production dependencies → a distroless runtime (<code>gcr.io/distroless/nodejs22-debian12</code>) with no shell and no package manager — nothing to exec into and nothing to install from, which is the point. It runs under <code>--read-only</code> with all capabilities dropped and writes nothing to disk.</p>
       <p><b>Tags:</b> <code>1.2.3</code>, <code>1.2</code>, <code>1</code> and <code>latest</code> for a final release; a prerelease publishes its exact version only, so nobody pulls a release candidate by accident. Every <code>main</code> build also pushes <code>main</code> and <code>sha-&lt;short&gt;</code>. Pin a digest in production.</p>
@@ -525,7 +603,7 @@ sudo systemctl enable --now ivanti-mcp</code></pre></div>
       <h3>How much memory it needs</h3>
       <p>Measured rather than modelled: sessions were opened against a running server and held open, and resident memory read from the process after each hundred. The relationship is linear — <strong>96 MB with nothing connected, plus roughly 134 KB per concurrent session</strong>.</p>
       <figure class="chart">
-        <svg viewBox="0 0 760 300" role="img" aria-label="Resident memory against concurrent sessions: 96 MB with none open, rising roughly linearly to 242 MB at one thousand." preserveAspectRatio="xMidYMid meet"><line x1="46" x2="748" y1="210.0" y2="210.0" class="grid"/><text x="38" y="214.0" class="ylab">128</text><line x1="46" x2="748" y1="154.0" y2="154.0" class="grid"/><text x="38" y="158.0" class="ylab">256</text><line x1="46" x2="748" y1="98.0" y2="98.0" class="grid"/><text x="38" y="102.0" class="ylab">384</text><line x1="46" x2="748" y1="42.0" y2="42.0" class="grid"/><text x="38" y="46.0" class="ylab">512</text><line x1="46" x2="748" y1="266.0" y2="266.0" class="axis"/><text x="38" y="270.0" class="ylab">0</text><rect x="58.1" y="224.0" width="39.6" height="42.0" rx="3" class="bar"><title>0 sessions — 96 MB</title></rect><text x="77.9" y="218.0" class="val">96</text><text x="77.9" y="287" class="xlab">0</text><rect x="121.9" y="214.8" width="39.6" height="51.2" rx="3" class="bar"><title>100 sessions — 117 MB</title></rect><text x="141.7" y="208.8" class="val">117</text><text x="141.7" y="287" class="xlab">100</text><rect x="185.8" y="206.9" width="39.6" height="59.1" rx="3" class="bar"><title>200 sessions — 135 MB</title></rect><text x="205.5" y="200.9" class="val">135</text><text x="205.5" y="287" class="xlab">200</text><rect x="249.6" y="191.2" width="39.6" height="74.8" rx="3" class="bar"><title>300 sessions — 171 MB</title></rect><text x="269.4" y="185.2" class="val">171</text><text x="269.4" y="287" class="xlab">300</text><rect x="313.4" y="190.3" width="39.6" height="75.7" rx="3" class="bar"><title>400 sessions — 173 MB</title></rect><text x="333.2" y="184.3" class="val">173</text><text x="333.2" y="287" class="xlab">400</text><rect x="377.2" y="184.2" width="39.6" height="81.8" rx="3" class="bar"><title>500 sessions — 187 MB</title></rect><text x="397.0" y="178.2" class="val">187</text><text x="397.0" y="287" class="xlab">500</text><rect x="441.0" y="176.8" width="39.6" height="89.2" rx="3" class="bar"><title>600 sessions — 204 MB</title></rect><text x="460.8" y="170.8" class="val">204</text><text x="460.8" y="287" class="xlab">600</text><rect x="504.9" y="175.9" width="39.6" height="90.1" rx="3" class="bar"><title>700 sessions — 206 MB</title></rect><text x="524.6" y="169.9" class="val">206</text><text x="524.6" y="287" class="xlab">700</text><rect x="568.7" y="170.2" width="39.6" height="95.8" rx="3" class="bar"><title>800 sessions — 219 MB</title></rect><text x="588.5" y="164.2" class="val">219</text><text x="588.5" y="287" class="xlab">800</text><rect x="632.5" y="164.5" width="39.6" height="101.5" rx="3" class="bar"><title>900 sessions — 232 MB</title></rect><text x="652.3" y="158.5" class="val">232</text><text x="652.3" y="287" class="xlab">900</text><rect x="696.3" y="160.1" width="39.6" height="105.9" rx="3" class="bar"><title>1000 sessions — 242 MB</title></rect><text x="716.1" y="154.1" class="val">242</text><text x="716.1" y="287" class="xlab">1000</text><line x1="46" x2="748" y1="42.0" y2="42.0" class="lim"/><text x="744" y="35.0" class="limlab">chart default limit — 512Mi</text><line x1="46" x2="748" y1="182.0" y2="182.0" class="req"/><text x="744" y="175.0" class="reqlab">request — 192Mi</text></svg>
+        <svg viewBox="0 0 790 322" role="img" aria-label="Resident memory in megabytes against concurrent sessions: 96 MB with none open, rising roughly linearly to 242 MB at one thousand, against a 192 mebibyte request and a 512 mebibyte limit." preserveAspectRatio="xMidYMid meet"><line x1="64" x2="776" y1="208.9" y2="208.9" class="grid"/><line x1="60" x2="64" y1="208.9" y2="208.9" class="tick"/><text x="55" y="212.5" class="ylab">128</text><line x1="64" x2="776" y1="153.8" y2="153.8" class="grid"/><line x1="60" x2="64" y1="153.8" y2="153.8" class="tick"/><text x="55" y="157.4" class="ylab">256</text><line x1="64" x2="776" y1="98.7" y2="98.7" class="grid"/><line x1="60" x2="64" y1="98.7" y2="98.7" class="tick"/><text x="55" y="102.3" class="ylab">384</text><line x1="64" x2="776" y1="43.6" y2="43.6" class="grid"/><line x1="60" x2="64" y1="43.6" y2="43.6" class="tick"/><text x="55" y="47.2" class="ylab">512</text><line x1="64" x2="776" y1="264.0" y2="264.0" class="axis"/><line x1="64" x2="64" y1="16" y2="264.0" class="axis"/><text x="55" y="267.6" class="ylab">0</text><rect x="76.3" y="222.7" width="40.1" height="41.3" rx="3" class="bar"><title>0 sessions — 96 MB resident</title></rect><text x="96.4" y="216.7" class="val">96</text><line x1="96.4" x2="96.4" y1="264.0" y2="268.0" class="tick"/><text x="96.4" y="281.0" class="xlab">0</text><rect x="141.0" y="213.6" width="40.1" height="50.4" rx="3" class="bar"><title>100 sessions — 117 MB resident</title></rect><text x="161.1" y="207.6" class="val">117</text><line x1="161.1" x2="161.1" y1="264.0" y2="268.0" class="tick"/><text x="161.1" y="281.0" class="xlab">100</text><rect x="205.8" y="205.9" width="40.1" height="58.1" rx="3" class="bar"><title>200 sessions — 135 MB resident</title></rect><text x="225.8" y="199.9" class="val">135</text><line x1="225.8" x2="225.8" y1="264.0" y2="268.0" class="tick"/><text x="225.8" y="281.0" class="xlab">200</text><rect x="270.5" y="190.4" width="40.1" height="73.6" rx="3" class="bar"><title>300 sessions — 171 MB resident</title></rect><text x="290.5" y="184.4" class="val">171</text><line x1="290.5" x2="290.5" y1="264.0" y2="268.0" class="tick"/><text x="290.5" y="281.0" class="xlab">300</text><rect x="335.2" y="189.5" width="40.1" height="74.5" rx="3" class="bar"><title>400 sessions — 173 MB resident</title></rect><text x="355.3" y="183.5" class="val">173</text><line x1="355.3" x2="355.3" y1="264.0" y2="268.0" class="tick"/><text x="355.3" y="281.0" class="xlab">400</text><rect x="399.9" y="183.5" width="40.1" height="80.5" rx="3" class="bar"><title>500 sessions — 187 MB resident</title></rect><text x="420.0" y="177.5" class="val">187</text><line x1="420.0" x2="420.0" y1="264.0" y2="268.0" class="tick"/><text x="420.0" y="281.0" class="xlab">500</text><rect x="464.7" y="176.2" width="40.1" height="87.8" rx="3" class="bar"><title>600 sessions — 204 MB resident</title></rect><text x="484.7" y="170.2" class="val">204</text><line x1="484.7" x2="484.7" y1="264.0" y2="268.0" class="tick"/><text x="484.7" y="281.0" class="xlab">600</text><rect x="529.4" y="175.3" width="40.1" height="88.7" rx="3" class="bar"><title>700 sessions — 206 MB resident</title></rect><text x="549.5" y="169.3" class="val">206</text><line x1="549.5" x2="549.5" y1="264.0" y2="268.0" class="tick"/><text x="549.5" y="281.0" class="xlab">700</text><rect x="594.1" y="169.7" width="40.1" height="94.3" rx="3" class="bar"><title>800 sessions — 219 MB resident</title></rect><text x="614.2" y="163.7" class="val">219</text><line x1="614.2" x2="614.2" y1="264.0" y2="268.0" class="tick"/><text x="614.2" y="281.0" class="xlab">800</text><rect x="658.8" y="164.1" width="40.1" height="99.9" rx="3" class="bar"><title>900 sessions — 232 MB resident</title></rect><text x="678.9" y="158.1" class="val">232</text><line x1="678.9" x2="678.9" y1="264.0" y2="268.0" class="tick"/><text x="678.9" y="281.0" class="xlab">900</text><rect x="723.6" y="159.8" width="40.1" height="104.2" rx="3" class="bar"><title>1000 sessions — 242 MB resident</title></rect><text x="743.6" y="153.8" class="val">242</text><line x1="743.6" x2="743.6" y1="264.0" y2="268.0" class="tick"/><text x="743.6" y="281.0" class="xlab">1000</text><line x1="64" x2="776" y1="43.6" y2="43.6" class="lim"/><text x="772" y="36.6" class="limlab">chart default limit — 512Mi</text><line x1="64" x2="776" y1="181.3" y2="181.3" class="req"/><text x="70" y="174.3" class="reqlab">request — 192Mi</text><text x="16" y="140.0" class="axtitle" transform="rotate(-90 16 140.0)">Resident memory (MB)</text><text x="420.0" y="314" class="axtitle">Concurrent sessions</text></svg>
         <figcaption>Resident memory (MB) against concurrent sessions, in steps of 100. Node 22, the production dependency tree, one held session per notional user, no tool call in flight. The dashed lines are this chart's own <code>resources</code> defaults.</figcaption>
       </figure>
       <div class="tablewrap">
@@ -780,7 +858,14 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
       <h2>The surface, tool by tool</h2>
       <p>Read from the running server. Descriptions are what the model actually receives; the badges are the MCP annotations that tell a client how much care a call deserves.</p>
       <div class="toolbar">
-        <input class="search" id="toolSearch" type="search" placeholder="Search 40 tools — try “attachment”, “approval”, “picklist”" aria-label="Search tools">
+        <input class="search" id="toolSearch" type="search" placeholder="Search the tools — try “attachment”, “approval”, “picklist”" aria-label="Search tools">
+        <div class="modeswitch">
+          <span class="lbl">Audience</span>
+          <div class="seg" role="group" aria-label="Server mode">
+            <button type="button" class="modebtn" data-mode="full" aria-pressed="true">full</button>
+            <button type="button" class="modebtn" data-mode="enduser" aria-pressed="false">enduser</button>
+          </div>
+        </div>
         <div class="chips" role="group" aria-label="Filter by risk">
           <button class="chip risk-read" type="button" data-risk="read" aria-pressed="false">read-only</button>
           <button class="chip risk-write" type="button" data-risk="write" aria-pressed="false">writes</button>
@@ -894,8 +979,72 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
 
     <hr class="hr">
 
+    <section id="limits">
+      <span class="eyebrow">13 — Limits and roadmap</span>
+      <h2>What it will not do, and what is only deferred</h2>
+      <p class="lede">Three different things get confused with each other: a limit you must design around, a decision waiting on a condition, and a door deliberately closed. They are separated here, and the closed ones carry their reason — a refusal without one is indistinguishable from an oversight.</p>
+
+      <h3>Known limits</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Limit</th><th>What it means in practice</th></tr></thead>
+          <tbody>
+            <tr><td><b>Opaque access tokens are refused</b></td><td>Verification is JWKS only. Google is unusable — its access tokens are opaque and it publishes no introspection endpoint. Zitadel, Okta and Auth0 each issue opaque tokens until a provider-side setting is changed; see section 06.</td></tr>
+            <tr><td><b>Entra publishes no <code>code_challenge_methods_supported</code></b></td><td>Alone among ten providers measured, while supporting PKCE S256 in practice. The spec says a client MUST refuse to proceed when that field is absent, so whether it works is decided in the client and cannot be fixed here.</td></tr>
+            <tr><td><b>Entra cannot be exercised against a local server</b></td><td>It requires the <code>resource</code> to be a registered Application ID URI; a conforming client requires it to equal the endpoint. <code>http://localhost</code> satisfies neither, so Entra work starts at a public HTTPS name on a verified domain.</td></tr>
+            <tr><td><b>HTTP sessions live in memory</b></td><td>One replica unless the ingress hashes <code>Mcp-Session-Id</code> consistently. Scale without that and roughly half of every conversation's requests reach a pod that has never heard of the session — which presents as intermittent client bugs.</td></tr>
+            <tr><td><b>Protocol <code>2025-11-25</code></b></td><td>What the SDK implements. Requirements from a newer revision are not available here yet, whatever the specification says.</td></tr>
+            <tr><td><b>Attachments are capped at 2&nbsp;MB</b></td><td>Uploads travel as base64 in a tool call, so the bytes cross the model's context twice. A larger file is refused rather than silently truncated.</td></tr>
+            <tr><td><b>The tool manifest is nearly full</b></td><td><b>375 characters of headroom</b> against a 38,000 budget, and 2,000 per description. The next paragraph added fails the build on purpose — clients truncate silently from the end, so text past the cap never reaches the model and a bigger number would only hide that.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Deferred, with the condition that would change it</h3>
+      <p>Neither of these is abandoned. Each is written down with what would have to become true.</p>
+      <div class="note">
+        <p><strong>Token introspection (RFC 7662).</strong> Measured across ten providers: <code>jwks_uri</code> is universal, introspection is absent on four — Entra included — so it cannot be the general path and cannot rescue the majority. It would also cost a round trip to the identity provider on <em>every</em> request and make the server unusable whenever that provider is unreachable; caching fixes the latency and trades away instant revocation, which was the reason to want it.</p>
+        <p><strong>Revisit if</strong> a customer's provider issues opaque tokens and their policy forbids switching to JWT; or a provider appears with no <code>jwks_uri</code> at all; or instant revocation becomes a stated requirement rather than a preference. It is cheap when that happens — everything downstream depends on a single verifier type, so a second implementation is purely additive and enables itself from configuration.</p>
+      </div>
+      <div class="note calm">
+        <p><strong>How <code>enduser</code> answers “my records”.</strong> Today the pinned person comes from <code>act_as</code> and the provenance stays <em>asserted</em> unless a token vouched for it. Whether that becomes read-back scoped to the session, or a fully identity-backed query once OAuth is the normal door, is genuinely open. The safety argument does not depend on it: ownership is enforced on every read either way.</p>
+      </div>
+
+
+      <h3>A possible shape for the rest of the year</h3>
+      <div class="note warn">
+        <p><strong>This is an estimate, not a commitment.</strong> Durations are read off the code — how much has to change and what it touches — and the calendar assumes <b>one developer at roughly half time</b>. Change that assumption and every bar moves. Nothing here is promised to anyone.</p>
+      </div>
+      <figure class="gantt">
+        <svg viewBox="0 0 820 349" role="img" aria-label="A possible delivery order from mid September to the end of December: release hygiene first, then chart hardening and readiness, then the shared session store which unlocks multiple replicas, then metrics, with 0.2.0 at the end of October, 0.3.0 at the start of December and a 1.0 release candidate at the end of it." preserveAspectRatio="xMidYMid meet"><line x1="246.0" x2="246.0" y1="26" y2="315.0" class="gg"/><text x="246.0" y="20" class="gmon" text-anchor="start">15 Sep</text><line x1="329.5" x2="329.5" y1="26" y2="315.0" class="gg"/><text x="329.5" y="20" class="gmon" text-anchor="middle">Oct</text><line x1="490.7" x2="490.7" y1="26" y2="315.0" class="gg"/><text x="490.7" y="20" class="gmon" text-anchor="middle">Nov</text><line x1="647.2" x2="647.2" y1="26" y2="315.0" class="gg"/><text x="647.2" y="20" class="gmon" text-anchor="middle">Dec</text><line x1="804.0" x2="804.0" y1="26" y2="315.0" class="gg"/><text x="804.0" y="20" class="gmon" text-anchor="end">31 Dec</text><text x="234" y="55.1" class="gtask">ghcr package public, install verified</text><rect x="246.0" y="40.0" width="18.2" height="21.0" rx="4" class="gbar soft"><title>ghcr package public, install verified — about 0.5 weeks</title></rect><text x="234" y="80.1" class="gtask">Manifest budget relief → resources</text><rect x="246.0" y="65.0" width="36.5" height="21.0" rx="4" class="gbar"><title>Manifest budget relief → resources — about 1 week</title></rect><text x="234" y="105.1" class="gtask">CHANGELOG, drop unused source maps</text><rect x="282.5" y="90.0" width="18.2" height="21.0" rx="4" class="gbar"><title>CHANGELOG, drop unused source maps — about 0.5 weeks</title></rect><text x="234" y="130.1" class="gtask">Chart: PodDisruptionBudget, NetworkPolicy</text><rect x="318.9" y="115.0" width="72.9" height="21.0" rx="4" class="gbar"><title>Chart: PodDisruptionBudget, NetworkPolicy — about 2 weeks</title></rect><text x="234" y="155.1" class="gtask">Readiness that reflects the tenant</text><rect x="391.9" y="140.0" width="72.9" height="21.0" rx="4" class="gbar"><title>Readiness that reflects the tenant — about 2 weeks</title></rect><text x="234" y="180.1" class="gtask">Rate limiting, concurrency caps</text><rect x="464.8" y="165.0" width="72.9" height="21.0" rx="4" class="gbar"><title>Rate limiting, concurrency caps — about 2 weeks</title></rect><text x="234" y="205.1" class="gtask">Shared session store → real replicas</text><rect x="537.8" y="190.0" width="109.4" height="21.0" rx="4" class="gbar pivot"><title>Shared session store → real replicas — about 3 weeks</title></rect><text x="234" y="230.1" class="gtask">Authenticated metrics endpoint</text><rect x="647.2" y="215.0" width="72.9" height="21.0" rx="4" class="gbar"><title>Authenticated metrics endpoint — about 2 weeks</title></rect><text x="234" y="255.1" class="gtask">Metadata catalog cached across sessions</text><rect x="720.1" y="240.0" width="36.5" height="21.0" rx="4" class="gbar"><title>Metadata catalog cached across sessions — about 1 week</title></rect><text x="234" y="280.1" class="gtask">Clean blind-agent manifest re-run</text><rect x="756.6" y="265.0" width="54.7" height="21.0" rx="4" class="gbar"><title>Clean blind-agent manifest re-run — about 1.5 weeks</title></rect><text x="234" y="305.1" class="gtask muted">Token introspection</text><line x1="246.0" x2="266.0" y1="300.5" y2="300.5" class="ggate"/><text x="274.0" y="305.1" class="ggatelab">not scheduled — waits on a trigger, see above</text><line x1="464.8" x2="464.8" y1="36" y2="315.0" class="gmile"/><path d="M464.8 29 l5 5 -5 5 -5 -5z" class="gdia"/><text x="464.8" y="330.0" class="gmlab" text-anchor="middle">0.2.0</text><line x1="647.2" x2="647.2" y1="36" y2="315.0" class="gmile"/><path d="M647.2 29 l5 5 -5 5 -5 -5z" class="gdia"/><text x="647.2" y="330.0" class="gmlab" text-anchor="middle">0.3.0</text><line x1="804.0" x2="804.0" y1="36" y2="315.0" class="gmile"/><path d="M804.0 29 l5 5 -5 5 -5 -5z" class="gdia"/><text x="804.0" y="330.0" class="gmlab" text-anchor="middle">1.0.0-rc</text></svg>
+        <figcaption>Deliverable work only. The limits above are not work, and what was decided against is not a backlog. Token introspection stays off the schedule on purpose: dating it would contradict the reason it was deferred.</figcaption>
+      </figure>
+      <p>The order is not arbitrary. <strong>September is release hygiene</strong>, because the manifest is 375 characters from failing the build — moving material into reference resources is close to forced rather than optional. <strong>The shared session store is the pivot</strong>: it is the largest single item and it is what removes the one-replica guard, so metrics and rate limiting are worth less before it lands — you would be observing and throttling a single pod. <strong>December is deliberately light</strong>, and the clean re-run of the blind-agent exercise is budgeted in weeks rather than days because it needs a harness that does not inject this repository's own context into the agents; the previous attempt failed at exactly that.</p>
+      <p>Two items carry a constraint that makes them larger than they look. <strong>Readiness</strong> cannot be bolted onto <code>/health</code>: that endpoint is anonymous and always answers 200 by design, because a probe that flaps when a token expires would restart a healthy container. A real readiness signal is a second path. <strong>Metrics</strong> inherit the same rule — resource figures handed to an anonymous caller turn blind probing into a guided attack, so the endpoint has to be authenticated. And <strong>TypeScript 7 is absent</strong> from the chart because it is blocked on someone else's release: type-aware linting still declares a ceiling below it.</p>
+
+      <h3>Decided against</h3>
+      <p>These are not gaps. Each was considered, tested where testable, and turned down for a reason that still holds.</p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Not planned</th><th>Because</th></tr></thead>
+          <tbody>
+            <tr><td><b>Several tenants in one process</b></td><td>The process boundary is a better fence than code: a tenant cannot leak across a boundary that does not exist in the first place. It would also put a <code>tenant</code> argument on all forty tools, where forgetting it once is a silent write to the wrong tenant. Staging, UAT and production are three deployments. <span class="sub">Revisit if per-tenant deployments ever cost more than the isolation is worth — the opposite of the handful-of-environments case this was decided against.</span></td></tr>
+            <tr><td><b>Per-user Ivanti API keys</b></td><td>Not provisionable at tens of thousands of employees.</td></tr>
+            <tr><td><b>A read-only gate for production</b></td><td>Production is where the work happens. A switch that makes the useful deployment useless gets turned off.</td></tr>
+            <tr><td><b>A roles and permissions system in the server</b></td><td>Only <code>oauth</code> could feed it a real identity, and the MCP annotations plus the client's own approval flow already cover the ground.</td></tr>
+            <tr><td><b>Ivanti impersonation</b></td><td>Unnecessary once every operation runs as one account and the person it is <em>for</em> is recorded in the record's own Customer field.</td></tr>
+            <tr><td><b>Handing service-request staging ids to the caller</b></td><td>A staging id is one-shot, and submitting it twice <em>moves</em> the file off the first request rather than copying it. Staging happens inside the submit, so an id that never leaves the server cannot be misused — the footgun is designed out rather than documented.</td></tr>
+            <tr><td><b>Voting through “Approve My Vote”</b></td><td>Ivanti resolves “my” from the signed-in session, so it would record this server's service account as the decision-maker, and on an admin key its override sibling bypasses the real approver entirely. Votes are cast on the approver's own vote row instead.</td></tr>
+            <tr><td><b>Voting by setting a vote row's status</b></td><td>Measured: it stores the status, overwrites the recorded voter with the session account, and leaves the approval pending. The workflow never fires, so it is a vote that counts for nothing.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <hr class="hr">
+
     <section id="trouble">
-      <span class="eyebrow">13 — Troubleshooting</span>
+      <span class="eyebrow">14 — Troubleshooting</span>
       <h2>Symptom to cause</h2>
       <div class="tablewrap">
         <table>
@@ -929,12 +1078,15 @@ const ENV = [{"name": "Transport — how the server is reached", "vars": [{"name
 
 /* ── Mode ─────────────────────────────────────────────────────────────── */
 let mode = "full";
-const mFull = document.getElementById("mFull");
-const mEnd  = document.getElementById("mEnd");
+/* The audience control lives beside the things it changes — the tool list and the
+   configurator — rather than in the masthead, where a page-wide position implied a
+   page-wide effect and it kept being read as a theme toggle. Both copies stay in
+   step through setMode, so it does not matter which one you touch. */
+const modeButtons = [...document.querySelectorAll(".modebtn")];
 function setMode(next) {
   mode = next;
-  mFull.setAttribute("aria-pressed", String(next === "full"));
-  mEnd.setAttribute("aria-pressed", String(next === "enduser"));
+  for (const b of modeButtons)
+    b.setAttribute("aria-pressed", String(b.dataset.mode === next));
   // Keep the builder's radio in step. Setting `checked` fires no `change` event,
   // so this cannot loop back into setMode.
   const radio = document.querySelector('input[name="mode"][value="' + next + '"]');
@@ -945,8 +1097,8 @@ function setMode(next) {
   renderTools();
   renderEnv();
 }
-mFull.addEventListener("click", () => setMode("full"));
-mEnd.addEventListener("click", () => setMode("enduser"));
+for (const b of modeButtons)
+  b.addEventListener("click", () => { setMode(b.dataset.mode); });
 
 /* ── Copy ─────────────────────────────────────────────────────────────── */
 function wireCopy(btn) {
@@ -1412,6 +1564,40 @@ const spy = new IntersectionObserver((entries) => {
 sections.forEach((s) => spy.observe(s));
 
 /* ── Boot ─────────────────────────────────────────────────────────────── */
+/* ── Theme ────────────────────────────────────────────────────────────────
+   Three states, because "auto" is a real one: the page is normally rendered
+   inside a host that stamps data-theme itself, so auto restores whatever the
+   host had at boot rather than deleting it and falling through to the media
+   query — which would silently disagree with the host's own setting.        */
+const THEME_KEY = "ivanti-mcp-handbook-theme";
+const HOST_THEME = document.documentElement.getAttribute("data-theme");
+const themeButtons = [...document.querySelectorAll(".themebtn")];
+
+function applyTheme(choice) {
+  const root = document.documentElement;
+  if (choice === "auto") {
+    if (HOST_THEME === null) root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", HOST_THEME);
+  } else {
+    root.setAttribute("data-theme", choice);
+  }
+  for (const b of themeButtons)
+    b.setAttribute("aria-pressed", String(b.dataset.themeChoice === choice));
+  // A per-viewer convenience, so it may be absent or throw (private window,
+  // blocked site data). Never let that stop the page rendering.
+  try {
+    if (choice === "auto") localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, choice);
+  } catch { /* no persistence available; the choice still applies for this view */ }
+}
+
+for (const b of themeButtons)
+  b.addEventListener("click", () => { applyTheme(b.dataset.themeChoice); });
+
+let storedTheme = null;
+try { storedTheme = localStorage.getItem(THEME_KEY); } catch { /* see above */ }
+applyTheme(storedTheme === "light" || storedTheme === "dark" ? storedTheme : "auto");
+
 document.getElementById("verChip").textContent = "v" + (DATA.server?.version || VERSION);
 buildEnv();
 renderEnv();

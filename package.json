@@ -18,7 +18,8 @@
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "version:sync": "node scripts/check-version.mjs --sync",
-    "version:check": "node scripts/check-version.mjs --check"
+    "version:check": "node scripts/check-version.mjs --check",
+    "check:examples": "node scripts/check-example-envs.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
