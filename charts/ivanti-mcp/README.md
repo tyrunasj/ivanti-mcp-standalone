@@ -30,7 +30,10 @@ Full notes, including the secret-ownership and DNS traps, are in
 | `server.authMode` | `bearer` | `none`, `bearer`, `oauth`. |
 | `server.enduser.businessObjects` | `[]` | Required for `enduser`. A gate, not a hint. |
 | `ivanti.baseUrl` | — | **Required.** Tenant origin; the `/HEAT` prefix is probed. |
-| `secrets.existingSecret` | — | Keys `ivanti-api-key`, `bearer-token`. Mounted `0400`. |
+| `secrets.existingSecret` | — | Keys `ivanti-api-key`, `bearer-token`, and `ivanti-central-config-api-key` when `ivanti.configUrl` is set. Mounted `0400`. |
+| `ivanti.configUrl` | — | The ConfigDB tenant. With its key in the secret, `act_as` signs in to Ivanti AS the person and every surface follows them. |
+| `ivanti.impersonationRole` | — | `full` only. Pins the role an impersonated session opens under; refused when the person does not hold it. |
+| `server.enduser.role` | `SelfServiceMobile` | The self-service role an impersonated `enduser` session opens under. |
 | `replicaCount` | `1` | Above 1 needs `sessionAffinity.enabled=true`. |
 | `hostAliases` | `[]` | For tenants behind split-horizon DNS. |
 | `image.digest` | — | Pin this in production instead of a tag. |

@@ -65,6 +65,17 @@ spec:
             {{- if .Values.ivanti.maxTier }}
             - { name: IVANTI_MAX_TIER,    value: {{ .Values.ivanti.maxTier | quote }} }
             {{- end }}
+            {{- with .Values.ivanti.configUrl }}
+            - { name: IVANTI_CONFIG_URL,  value: {{ . | quote }} }
+            # Mounted as a file like the other keys: the environment is visible to `kubectl describe`.
+            - { name: IVANTI_CENTRAL_CONFIG_API_KEY_FILE, value: "{{ $.Values.secrets.mountPath }}/ivanti-central-config-api-key" }
+            {{- end }}
+            {{- with .Values.ivanti.impersonationRole }}
+            - { name: IVANTI_IMPERSONATION_ROLE, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.server.enduser.role }}
+            - { name: ENDUSER_ROLE,        value: {{ . | quote }} }
+            {{- end }}
             {{- if eq .Values.server.authMode "bearer" }}
             - { name: BEARER_TOKEN_FILE,  value: "{{ .Values.secrets.mountPath }}/bearer-token" }
             {{- end }}
