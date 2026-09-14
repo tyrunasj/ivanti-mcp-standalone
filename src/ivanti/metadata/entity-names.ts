@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 /**
  * Ivanti names one Business Object three ways, and every layer of the product prefers a
  * different one.

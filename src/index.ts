@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { ANONYMOUS } from './auth/identity.js';
 import { createOAuthSetup } from './auth/oauth/create-verifier.js';
 import type { TokenVerifier } from './auth/oauth/verify-token.js';

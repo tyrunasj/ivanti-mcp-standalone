@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { IncomingMessage } from 'node:http';
 
 export const MAX_BODY_BYTES = 4 * 1024 * 1024;

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { quoteOdataString } from '../../ivanti/odata/query.js';
 import type { PinnedPerson } from '../../auth/identity-pin.js';

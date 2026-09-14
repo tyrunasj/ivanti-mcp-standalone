@@ -54,11 +54,22 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Standard OCI metadata, so `docker inspect` answers what this is and on what
+# terms without anyone opening the repository.
+LABEL org.opencontainers.image.title="SYNERGY Ivanti MCP" \
+      org.opencontainers.image.vendor="SYNERGY" \
+      org.opencontainers.image.url="https://www.synergy.eu" \
+      org.opencontainers.image.source="https://github.com/tyrunasj/ivanti-mcp-standalone" \
+      org.opencontainers.image.licenses="LicenseRef-SYNERGY-Commercial"
+
 COPY --from=deps  /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 # `src/version.ts` reads ../package.json at startup and the server refuses to
 # start without it: an unidentifiable deployment is worse than one that fails.
 COPY package.json ./
+# Permissive licences require their notices to travel with the distribution, so
+# they travel inside the image rather than only in the repository.
+COPY LICENSE THIRD-PARTY-NOTICES.md ./
 COPY docker/healthcheck.mjs ./docker/healthcheck.mjs
 
 # Only meaningful with HTTP_TRANSPORT_ON=true; the stdio transport needs no port.

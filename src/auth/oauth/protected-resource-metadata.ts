@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 const WELL_KNOWN = '/.well-known/oauth-protected-resource';
 
 export interface ProtectedResourceMetadata {

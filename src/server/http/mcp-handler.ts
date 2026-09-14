@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { ANONYMOUS, verifiedIdentity, type CallerIdentity } from '../../auth/identity.js';

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { ALL_FIELDS, COMPACT_ROW_FIELDS } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRow } from '../../ivanti/odata/projection.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';

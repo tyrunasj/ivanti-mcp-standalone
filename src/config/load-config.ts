@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { Config } from './env-schema.js';
 import { envSchema } from './env-schema.js';
 import type { EnvRecord, FileReader } from './read-secret-file.js';

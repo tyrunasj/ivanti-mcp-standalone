@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 export type Route = 'health' | 'oauth-metadata' | 'mcp' | 'not-found';
 
 export const HEALTH_PATH = '/health';

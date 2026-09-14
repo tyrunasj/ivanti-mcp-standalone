@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { z } from 'zod';
 import { toEntitySet } from '../../ivanti/metadata/entity-names.js';
 import type { AdminBusinessObject } from '../../ivanti/session/admin-catalog.js';

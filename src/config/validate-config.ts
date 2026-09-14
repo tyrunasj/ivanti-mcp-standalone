@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { Config } from './env-schema.js';
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', 'localhost']);

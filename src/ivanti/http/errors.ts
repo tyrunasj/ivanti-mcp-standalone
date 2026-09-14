@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 /** Ivanti error bodies can be large and echo submitted values; cap what we keep. */
 const ERROR_BODY_MAX_BYTES = 1024;
 

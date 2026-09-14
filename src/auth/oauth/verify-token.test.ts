@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { SignJWT, generateKeyPair, type CryptoKey, type JWTVerifyGetKey } from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createTokenVerifier, extractScopes, looksLikeJwt } from './verify-token.js';

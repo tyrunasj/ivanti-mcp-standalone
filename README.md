@@ -217,7 +217,21 @@ tools/    tool-definition -> register-tools (which tools this mode exposes)
 | [`docs/notes.md`](docs/notes.md) | traps: things that pass locally and fail elsewhere |
 | [`charts/ivanti-mcp/README.md`](charts/ivanti-mcp/README.md) | the chart's values and what it refuses to render |
 | [`CLAUDE.md`](CLAUDE.md) | orientation for agents working in this repository |
+| [`LICENSE`](LICENSE) · [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) | the commercial terms, and the components distributed with it |
 
 `docs/initial-design.md` is the source of truth for design decisions; read it before proposing
 architectural changes, because several obvious-looking simplifications were already considered
 and turned down for stated reasons.
+
+## Licence
+
+Copyright © 2026 SYNERGY. All rights reserved. **This software is licensed, not sold** — see
+[`LICENSE`](LICENSE). No right to use it is granted except under a written commercial agreement
+with SYNERGY, save for a thirty-day internal evaluation, which is why the image and the chart are
+public to pull.
+
+The third-party components it is distributed with keep their own terms, which this licence does
+not affect; they are listed with their notices in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) — 99 components, all permissive. That file is
+generated from the production dependency tree with `pnpm licenses`, ships inside the image and
+the tarball, and CI fails if it drifts from what actually ships.

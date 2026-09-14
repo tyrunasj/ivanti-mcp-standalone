@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { describe, expect, it } from 'vitest';
 import { configFixture } from '../../config/config.fixture.js';
 import type { Config } from '../../config/env-schema.js';

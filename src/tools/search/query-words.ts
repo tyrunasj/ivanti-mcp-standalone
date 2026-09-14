@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 /**
  * What Ivanti's `$search` actually does with more than one word — all measured live against
  * `incidents` on 2026-09-12:

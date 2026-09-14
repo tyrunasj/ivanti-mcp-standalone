@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SessionStore } from './session-store.js';
 
