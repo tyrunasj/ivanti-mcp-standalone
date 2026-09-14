@@ -39,6 +39,12 @@ RUN npm install --global pnpm@10.20.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod --node-linker=hoisted --ignore-scripts
 
+# Nothing here is read by a running process: type declarations are a compile-time
+# artefact, source maps need --enable-source-maps (which this image does not pass),
+# and READMEs are documentation. ~10 MB of a 28 MB tree. LICENCE files stay — MIT
+# and friends require the notice to travel with the distribution.
+RUN find node_modules \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) -type f -delete
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Runtime: distroless. No shell, no package manager, no npm — nothing to exec
 # into and nothing to install from, which is the point. Runs as `nonroot`.

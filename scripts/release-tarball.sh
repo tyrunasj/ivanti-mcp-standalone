@@ -21,6 +21,10 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp "$ROOT/package.json" "$ROOT/pnpm-lock.yaml" "$ROOT/pnpm-workspace.yaml" "$STAGE/"
 ( cd "$STAGE" && pnpm install --prod --frozen-lockfile --node-linker=hoisted --ignore-scripts )
 
+# Same prune as the Dockerfile's deps stage, for the same reason: none of this is read
+# by a running process. LICENCE files stay — the notices have to travel with the copy.
+find "$STAGE/node_modules" \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) -type f -delete
+
 # The build output, and the manifest the server refuses to start without.
 cp -R "$ROOT/dist" "$STAGE/dist"
 cp -R "$ROOT/docker" "$STAGE/docker"          # healthcheck.mjs, for anyone who wants it

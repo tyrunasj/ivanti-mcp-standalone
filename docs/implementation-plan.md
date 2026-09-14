@@ -81,8 +81,8 @@ provider beside it.
 
 **The container landed 2026-09-12**, in `docker/` (`Dockerfile`, `compose.yaml`, `healthcheck.mjs`)
 with the build context at the repository root. Three stages — build, production dependencies, distroless
-runtime — ~240 MB, uid 65532, no shell. Verified on **two hosts**: Docker Desktop on macOS
-(arm64, 245 MB) and Ubuntu 26.04 with Docker 29.1.3 on x86_64 (238 MB), the latter on the same LAN
+runtime — uid 65532, no shell. Verified on **two hosts**: Docker Desktop on macOS
+(arm64) and Ubuntu 26.04 with Docker 29.1.3 on x86_64, the latter on the same LAN
 as the tenant VM it talks to. On both the image speaks MCP over stdio (initialize, tools/list, a
 live `list_records` returning incident 10244 of 545), serves HTTP with Docker reporting the
 container **healthy** through its own Node health check, and keeps running under

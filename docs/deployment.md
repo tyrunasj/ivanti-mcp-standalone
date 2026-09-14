@@ -66,7 +66,10 @@ pnpm install --frozen-lockfile && pnpm build && pnpm start
 docker pull tyrunas/ivanti-mcp:0.1.0
 ```
 
-Multi-arch (`linux/amd64`, `linux/arm64`), distroless, 245 MB, runs as uid 65532.
+Multi-arch (`linux/amd64`, `linux/arm64`), distroless, runs as uid 65532. **56.7 MB to pull** on
+amd64 and 56.3 MB on arm64, measured on the published manifest — 52.6 MB of that is the distroless
+Node base, so the server itself is the small part. The ~235 MB that `docker images` reports is the
+uncompressed on-disk size, not the download.
 There is no shell and no package manager in it — nothing to exec into and nothing to
 install from, which is the point.
 
