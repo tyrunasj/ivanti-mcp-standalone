@@ -219,6 +219,17 @@ export function createPersonDirectory(deps: PersonDirectoryDeps): PersonDirector
       for (const object of objects) {
         const rows = await read(object, buildQuery({ filter: exactFilter(trimmed), top: 10 }));
         for (const row of rows) {
+          // `exactFilter` takes the OUTERMOST tokens for its FirstName/LastName clause, so a
+          // middle name does not break the match — but that also means "Mary Jane Watson" matches
+          // **Mary Watson**, a different employee, exactly. An exact hit short-circuits the loose
+          // search below, so nothing else would ever have looked at the token it dropped.
+          //
+          // A key match (LoginID, PrimaryEmail) is decisive on its own. A NAME match has to
+          // account for every token the claim carried — which still matches "Katherine Joseph" to
+          // "Katherine M Joseph", because every token given is present, and still refuses "Mary
+          // Jane Watson" → "Mary Watson", because `jane` is not.
+          if (matchKey(trimmed, row) === 'name' && !claimMatchesRow(trimmed, row)) continue;
+
           const candidate = toCandidate(row, object, trimmed);
           if (candidate !== undefined) exact.push(candidate);
         }

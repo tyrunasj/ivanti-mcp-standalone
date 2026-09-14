@@ -199,3 +199,60 @@ describe('personObjects', () => {
     expect(asked).toBe(1);
   });
 });
+
+/**
+ * An exact hit on a name has to account for every token the claim carried.
+ *
+ * `exactFilter` builds its FirstName/LastName clause from the OUTERMOST tokens so a middle name
+ * does not break the match — which also means "Mary Jane Watson" matches **Mary Watson**, a
+ * different employee, exactly. An exact hit short-circuits the loose search, so nothing else would
+ * ever have looked at the token it dropped, and `act_as` pins a single candidate without
+ * confirmation. The mis-pin is worse than it sounds because it is indistinguishable from the
+ * middle-name mismatch the manifest teaches the model to EXPECT, seen in reverse.
+ */
+describe('an exact name match still has to account for every token', () => {
+  const MARY_WATSON = {
+    RecId: 'w1',
+    DisplayName: 'Mary Watson',
+    FirstName: 'Mary',
+    LastName: 'Watson',
+    LoginID: 'MWatson',
+    PrimaryEmail: 'mwatson@example.com',
+  };
+
+  it('refuses a claim carrying a token the record does not have', async () => {
+    const directory = directoryOf({ $filter: { value: [MARY_WATSON] } });
+
+    expect(await directory.find('Mary Jane Watson')).toEqual([]);
+  });
+
+  // The case the outermost-token rule exists for, and which must keep working.
+  it('still matches a claim the record expands with a middle name', async () => {
+    const directory = directoryOf({
+      $filter: {
+        value: [
+          {
+            RecId: 'k1',
+            DisplayName: 'Katherine M Joseph',
+            FirstName: 'Katherine',
+            MiddleName: 'M',
+            LastName: 'Joseph',
+            LoginID: 'KJoseph',
+          },
+        ],
+      },
+    });
+
+    expect(await directory.find('Katherine Joseph')).toHaveLength(1);
+  });
+
+  // A key match is decisive on its own — it is not a name, and has no tokens to account for.
+  it.each([
+    ['a login', 'MWatson'],
+    ['an email address', 'mwatson@example.com'],
+  ])('leaves %s alone', async (_label, claim) => {
+    const directory = directoryOf({ $filter: { value: [MARY_WATSON] } });
+
+    expect(await directory.find(claim)).toHaveLength(1);
+  });
+});
