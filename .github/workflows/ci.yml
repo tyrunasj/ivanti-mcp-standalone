@@ -52,6 +52,11 @@ jobs:
       - run: pnpm check:licenses
         if: ${{ !cancelled() }}
 
+      # A COPY whose source is .dockerignored fails only at build time, minutes
+      # later in the image job, with an error that reads like a missing file.
+      - run: pnpm check:docker
+        if: ${{ !cancelled() }}
+
       # The tarball is a release artefact, but building it here means a change that
       # breaks relocation is caught on the PR rather than at tag time.
       - run: ./scripts/release-tarball.sh "${RUNNER_TEMP}/release"
