@@ -203,3 +203,63 @@ describe('createTransport', () => {
   });
 });
 
+
+/**
+ * `asPerson` has to mean the same thing on every method.
+ *
+ * `requestBinary` is the only one that does not go through `send`, so it never saw the
+ * one-credential-or-the-other branch and always sent the tenant API key — fetching the file bytes
+ * as the service account while the row read and the DELETE of that same attachment used the
+ * person's SID. Nothing tested the SID branch at any level: `connection.fixture` replaces the
+ * whole transport, so no tool test could have seen it either.
+ */
+describe('which credential each method sends', () => {
+  /** Records the headers of every request a transport makes. */
+  function recording() {
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const fetchImpl = ((url: string, init?: { headers?: Record<string, string> }) => {
+      seen.push({ url, headers: init?.headers ?? {} });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('{"value":[]}'),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+        headers: { get: () => 'application/pdf' },
+      } as unknown as Response);
+    }) as unknown as FetchLike;
+    return { seen, fetchImpl };
+  }
+
+  it('sends the API key and no cookie when nobody is impersonated', async () => {
+    const { seen, fetchImpl } = recording();
+    const t = transport(fetchImpl);
+
+    await t.requestBinary('https://t/HEAT/api/rest/Attachment?ID=a1');
+
+    expect(seen[0]?.headers['Authorization']).toContain('rest_api_key=');
+    expect(seen[0]?.headers['Cookie']).toBeUndefined();
+  });
+
+  it('sends the SID and no API key on an impersonated transport', async () => {
+    const { seen, fetchImpl } = recording();
+    const t = transport(fetchImpl).asPerson('tenant#SID123#1');
+
+    await t.requestBinary('https://t/HEAT/api/rest/Attachment?ID=a1');
+
+    expect(seen[0]?.headers['Cookie']).toBe('SID=tenant#SID123#1');
+    expect(seen[0]?.headers['Authorization']).toBeUndefined();
+  });
+
+  // The rule the whole file rests on: one credential or the other, never both.
+  it('never sends both, on either method', async () => {
+    const { seen, fetchImpl } = recording();
+    const person = transport(fetchImpl).asPerson('tenant#SID123#1');
+
+    await person.request(person.routes.entitySet('Incidents'));
+    await person.requestBinary('https://t/HEAT/api/rest/Attachment?ID=a1');
+
+    for (const { headers } of seen) {
+      expect(headers['Authorization'] !== undefined && headers['Cookie'] !== undefined).toBe(false);
+    }
+  });
+});

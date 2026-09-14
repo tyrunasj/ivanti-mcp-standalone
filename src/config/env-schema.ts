@@ -137,9 +137,27 @@ export const envSchema = z.object({
    * object, and an allowlist that missed by dialect would fail open or closed for no reason a
    * reader could see.
    */
-  ENDUSER_BUSINESS_OBJECTS: commaSeparated
-    .default([])
-    .transform((objects) => objects.map((object) => toCsdlEntity(object).toLowerCase())),
+  ENDUSER_BUSINESS_OBJECTS: commaSeparated.default([]).transform((objects) =>
+    // BOTH spellings, not just the singularised guess. `toCsdlEntity` strips a trailing `s`,
+    // which is right for `Incidents` and wrong for every object whose own CSDL name ends in one —
+    // `journal__notes`, `address`, `nrn_roomreservations`, `frs_surveyresults` are all real here.
+    // Collapsing to the guess either exited 78 telling the operator to type the name they had
+    // just typed, or started with the object permanently unreachable while every refusal listed
+    // it as allowed. `catalog.ts` already fixed exactly this trap for `entity()`; keeping the raw
+    // form alongside the converted one is the same answer.
+    //
+    // The `#` dialect is dropped from the raw side: `toCsdlEntity` already resolves it, and
+    // `ENDUSER_BUSINESS_OBJECTS` is read back to the caller in every refusal, so the list should
+    // not carry spellings nothing will ever look up.
+    [
+      ...new Set(
+        objects.flatMap((object) => [
+          ...(object.includes('#') ? [] : [object.toLowerCase()]),
+          toCsdlEntity(object).toLowerCase(),
+        ]),
+      ),
+    ],
+  ),
 
   /**
    * The Ivanti role an impersonated `enduser` session opens under.

@@ -462,6 +462,20 @@ The reply is columns, not objects: the stored value is at the **lowest** index i
 `DisplayName` labels it, `RecId` identifies it, and an empty list with `SameAs` means "reuse that
 field's options". Measured live: Incident Status has 7 values, Priority 5, Source 13.
 
+**`/api/rest/Attachment?ID=` accepts a SID cookie, so file bytes can follow the person.**
+Measured live 2026-09-14. `requestBinary` was the one transport method that did not go through
+`send`, so it ignored the SID it was built with and always sent `Authorization: rest_api_key=` —
+fetching file BYTES as the service account while the attachment row read, and the DELETE of that
+same attachment, both used the person's SID. Routing it through the same credential branch was
+assumed to be safe on the strength of the DELETE; it is not an assumption any more. With the
+change in place, `act_as` followed by `download_attachment` returned the file on
+`Cookie: SID=<person>` with no `Authorization` header at all.
+
+→ The open question this closes was whether Ivanti's REST-by-id fetch is *stricter* than its OData
+row read, which would have meant a person could see an attachment row and not its bytes. It is not.
+The remaining honest limit is that both were measured as the same Admin account: a role that can
+read the row but not the file would still be invisible here.
+
 **A field on a validated list can still be *computed*, and the write is overridden without a word.**
 `Incident.Priority` is on the picklist — `get_pick_list_values` returns its five values, and a write
 passes every client-side check — but this tenant derives it from `Urgency` × `Impact` and overwrites

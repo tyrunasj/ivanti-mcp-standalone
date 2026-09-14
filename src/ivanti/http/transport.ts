@@ -247,7 +247,22 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     async requestBinary(url: string): Promise<{ bytes: Uint8Array; contentType: string }> {
       const response = await fetchImpl(url, {
         method: 'GET',
-        headers: { Authorization: `rest_api_key=${apiKey}`, Accept: '*/*' },
+        headers: {
+          // The same one-or-the-other rule `send` applies, and it has to be applied here too:
+          // this is the only method that does not go through `send`, so it ignored the `sid` it
+          // was built with and fetched the FILE BYTES on the service account while every other
+          // call on the same transport — including the OData DELETE of that same attachment —
+          // used the person's SID. It predates impersonation and was simply not revisited.
+          //
+          // Not a demonstrated cross-person leak: the caller reads the attachment row on the
+          // person's credential first, and in `enduser` re-checks the parent. What it did break
+          // is attribution — Ivanti logged the download as the service account — and it rested on
+          // an assumption where the rest of this codebase rests on a measurement.
+          ...(sid === undefined
+            ? { Authorization: `rest_api_key=${apiKey}` }
+            : { Cookie: `SID=${sid}` }),
+          Accept: '*/*',
+        },
         signal: AbortSignal.timeout(timeoutMs),
       });
 

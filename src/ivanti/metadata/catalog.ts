@@ -224,7 +224,16 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
        * in one — right for `Incidents`, wrong here — so both are tried. The second is fetched
        * only when the first missed, and a graph that does not exist is cached as a miss.
        */
-      const graphs = [...new Set([toGuessedEntitySet(ref), `${ref.toLowerCase()}s`])];
+      // `toGuessedEntitySet` already handles the `#` dialect, so for a `#`-form ref the second
+      // candidate can only ever be a name with a fragment in it — a pointless authenticated round
+      // trip to a path that is not `$metadata`.
+      const graphs = [
+        ...new Set(
+          ref.includes('#')
+            ? [toGuessedEntitySet(ref)]
+            : [toGuessedEntitySet(ref), `${ref.toLowerCase()}s`],
+        ),
+      ];
 
       // Either the seed graph does not name it, or it named it without relationships — which is
       // what every non-root entity looks like there.
