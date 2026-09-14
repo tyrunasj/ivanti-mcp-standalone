@@ -1,0 +1,109 @@
+# One release is ONE tenant and ONE audience. Staging, UAT and production are three
+# releases; `full` and `enduser` are two more. Never replicas, never one release
+# with a list of tenants.
+
+image:
+  repository: tyrunas/ivanti-mcp
+  # Defaults to the chart's appVersion. Pin a digest for production.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# HTTP sessions are held in memory, one server per Mcp-Session-Id. A second replica
+# answers half of every conversation's requests with "no such session", so this is
+# refused above 1 unless sessionAffinity.enabled is set — see the chart README.
+replicaCount: 1
+sessionAffinity:
+  enabled: false
+  # nginx: hash upstreams on the session header so a conversation keeps its pod.
+  ingressAnnotations:
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$http_mcp_session_id"
+
+server:
+  # REQUIRED. The externally visible URL, matched verbatim against the OAuth token
+  # audience and the RFC 9728 metadata document. No trailing slash.
+  publicUrl: ""
+  # REQUIRED. Origin validation is what stops DNS rebinding.
+  trustedOrigins: []
+
+  mode: full            # full | enduser
+  authMode: bearer      # none | bearer | oauth
+  port: 3000
+  maxSessions: 100
+  sessionIdleTtlSeconds: 1800
+  logLevel: info
+
+  # Required when mode is enduser. Technical Business Object names; the gate is
+  # resolved against the tenant at startup, so a misspelling exits 78.
+  enduser:
+    businessObjects: []
+    quickActions: []
+
+ivanti:
+  baseUrl: ""           # tenant origin, no path. The /HEAT prefix is probed.
+  maxTier: ""           # odata | session | admin. Empty = whatever the key can do.
+
+oauth:
+  issuer: ""
+  audience: ""
+  jwksUri: ""
+  scopesSupported: []
+  requiredScopes: []
+  identityClaim: ""
+
+# The API key and bearer token are mounted as FILES, never as environment
+# variables: `kubectl describe pod` and /proc/<pid>/environ both show the
+# environment, a projected secret shows a path.
+secrets:
+  # Recommended. Keys: ivanti-api-key, bearer-token (the latter only for authMode=bearer).
+  existingSecret: ""
+  # Development only — puts the values in the release, and therefore in Helm history.
+  create: false
+  ivantiApiKey: ""
+  bearerToken: ""
+  mountPath: /run/secrets
+
+# The tenant hostname must resolve INSIDE the pod, which is a different question
+# from whether it resolves on your workstation.
+hostAliases: []
+# - ip: 203.0.113.10
+#   hostnames: [your-tenant.example.com]
+
+service:
+  type: ClusterIP
+  port: 3000
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  # - host: mcp.example.com
+  #   paths: [{ path: /, pathType: Prefix }]
+  tls: []
+
+# ~100 KB per session plus the Node baseline, so maxSessions: 100 costs ~10 MB.
+resources:
+  requests: { cpu: 100m, memory: 192Mi }
+  limits: { memory: 512Mi }
+
+# The startup probe is generous because boot does real network work: it walks the
+# tenant's base paths against $metadata and opens the ASMX session.
+probes:
+  startup: { periodSeconds: 5, failureThreshold: 24, timeoutSeconds: 3 }
+  liveness: { periodSeconds: 30, failureThreshold: 3, timeoutSeconds: 3 }
+  readiness: { periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 3 }
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+extraEnv: []

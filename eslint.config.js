@@ -23,9 +23,17 @@ export default tseslint.config(
   {
     files: ['**/*.js', '**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked],
-    // The health check runs on Node inside the image, so it has Node's globals.
+    // The health check runs on Node inside the image, and the release scripts run on
+    // Node in CI, so both have Node's globals — including `console`, which is the
+    // only way a build script talks to anyone.
     languageOptions: {
-      globals: { process: 'readonly', fetch: 'readonly', AbortSignal: 'readonly' },
+      globals: {
+        process: 'readonly',
+        fetch: 'readonly',
+        AbortSignal: 'readonly',
+        console: 'readonly',
+        URL: 'readonly',
+      },
     },
     rules: { '@typescript-eslint/explicit-function-return-type': 'off' },
   },
