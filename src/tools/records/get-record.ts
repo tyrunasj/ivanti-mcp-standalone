@@ -15,6 +15,7 @@ import {
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { ALL_FIELDS } from '../../ivanti/odata/compact-fields.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createGetRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -59,13 +60,14 @@ export function createGetRecordTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('get_record', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const resolved = await resolveObject(deps, args.object);
         const { entitySet } = resolved;
-        const url = deps.connection.transport.routes.record(entitySet, args.recordId);
+        const url = transport.routes.record(entitySet, args.recordId);
 
         // A scoped caller must not be able to tell "gone" from "not yours" — the read fails
         // before any ownership check can run, so the two are collapsed here instead.
-        const record = await deps.connection.transport
+        const record = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => hideMissingRecord(deps, error));
         if (record === undefined) {

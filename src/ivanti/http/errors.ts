@@ -94,14 +94,28 @@ export function truncate(body: string, maxBytes: number = ERROR_BODY_MAX_BYTES):
  * leak survived a round of testing and was found again.
  */
 const SENSITIVE_FIELDS =
-  /\\?"(SessionId|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)\\?"\s*:\s*\\?"[^"\\]*\\?"/gi;
+  /\\?"(SessionId|SessionKey|ConnectionString|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)\\?"\s*:\s*\\?"[^"\\]*\\?"/gi;
+
+/**
+ * The same fields again, as XML elements.
+ *
+ * CentralConfig answers XML rather than JSON, and `ConnectionString` there carries the tenant's
+ * **database credentials, password included** — by a wide margin the most sensitive thing any
+ * Ivanti surface returns. A JSON-shaped pattern matches none of it.
+ */
+const SENSITIVE_ELEMENTS =
+  /<((?:DB)?ConnectionString|SessionId|SessionKey|PrimaryEncryptionKey|SecondaryKeyParams|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)>[^<]*<\/\1>/gi;
 
 export function scrubErrorBody(body: string, apiKey: string): string {
   const withoutKey = apiKey === '' ? body : body.split(apiKey).join('[REDACTED-API-KEY]');
   const withoutInternals = withoutKey.replace(SENSITIVE_FIELDS, (match, field: string) =>
     match.startsWith('\\') ? `\\"${field}\\":\\"[REDACTED]\\"` : `"${field}":"[REDACTED]"`,
   );
-  return truncate(withoutInternals);
+  const withoutElements = withoutInternals.replace(
+    SENSITIVE_ELEMENTS,
+    (_match, element: string) => `<${element}>[REDACTED]</${element}>`,
+  );
+  return truncate(withoutElements);
 }
 
 /**

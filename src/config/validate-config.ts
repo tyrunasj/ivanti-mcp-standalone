@@ -16,6 +16,20 @@ export function isIvantiConfigured(
   return config.IVANTI_BASE_URL !== undefined && config.IVANTI_API_KEY !== undefined;
 }
 
+/**
+ * Whether this deployment may impersonate — the same predicate shape, for the same reason.
+ *
+ * Configured is not the same as *able*: CentralConfig still has to answer, which the startup
+ * probe decides. This says only that the operator asked for it.
+ */
+export function isImpersonationConfigured(
+  config: Config,
+): config is Config & { IVANTI_CONFIG_URL: string; IVANTI_CENTRAL_CONFIG_API_KEY: string } {
+  return (
+    config.IVANTI_CONFIG_URL !== undefined && config.IVANTI_CENTRAL_CONFIG_API_KEY !== undefined
+  );
+}
+
 export function isHttpTransport(config: Config): boolean {
   return config.HTTP_TRANSPORT_ON;
 }
@@ -134,6 +148,37 @@ export function validateConfig(config: Config): string[] {
       hasBaseUrl
         ? 'IVANTI_BASE_URL is set without IVANTI_API_KEY (or IVANTI_API_KEY_FILE).'
         : 'IVANTI_API_KEY is set without IVANTI_BASE_URL.',
+    );
+  }
+
+  // The impersonation pair, on the same principle: half of it would start and then refuse every
+  // `act_as`, which reads as the feature being broken rather than unconfigured.
+  const hasConfigUrl = config.IVANTI_CONFIG_URL !== undefined;
+  const hasConfigKey = config.IVANTI_CENTRAL_CONFIG_API_KEY !== undefined;
+  if (hasConfigUrl !== hasConfigKey) {
+    problems.push(
+      hasConfigUrl
+        ? 'IVANTI_CONFIG_URL is set without IVANTI_CENTRAL_CONFIG_API_KEY (or ' +
+            'IVANTI_CENTRAL_CONFIG_API_KEY_FILE).'
+        : 'IVANTI_CENTRAL_CONFIG_API_KEY is set without IVANTI_CONFIG_URL.',
+    );
+  }
+
+  // Impersonation acts on the tenant. Without one there is nothing to impersonate against, and
+  // the setting would sit there looking as though it did something.
+  if (hasConfigUrl && hasConfigKey && !hasBaseUrl) {
+    problems.push(
+      'IVANTI_CONFIG_URL and IVANTI_CENTRAL_CONFIG_API_KEY configure impersonation against a ' +
+        'tenant, so IVANTI_BASE_URL and IVANTI_API_KEY must be set too.',
+    );
+  }
+
+  // `enduser` chooses a self-service role; pinning an arbitrary one is a `full` mode decision.
+  // Ignoring it silently would hand a deployment a different session than it asked for.
+  if (config.MCP_MODE === 'enduser' && config.IVANTI_IMPERSONATION_ROLE !== undefined) {
+    problems.push(
+      'IVANTI_IMPERSONATION_ROLE applies to MCP_MODE=full. In enduser mode the session opens ' +
+        'under ENDUSER_ROLE, which must name a self-service role.',
     );
   }
 

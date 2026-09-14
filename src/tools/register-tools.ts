@@ -47,6 +47,7 @@ import { createListBusinessObjectsTool } from './schema/list-business-objects.js
 import { createObjectGate } from './shared/object-gate.js';
 import { createActionGate } from './shared/action-gate.js';
 import { createActAsTool } from './identity/act-as.js';
+import { switchRoleTool } from './identity/switch-role.js';
 import { auditFields } from '../auth/identity.js';
 import { createSessionPin } from '../auth/identity-pin.js';
 import type { CallContext, ToolDefinition } from './tool-definition.js';
@@ -83,6 +84,11 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
   // Who the conversation is helping. First in both modes, and in `enduser` the gate every record
   // tool below stands behind.
   tools.push(createActAsTool(deps));
+
+  // `full` only. `enduser` opens the self-service role ENDUSER_ROLE names and stays there — a
+  // tool that could change it would undo the one thing that makes that mode end-user. Deciding
+  // it here rather than inside the handler means it never appears in `tools/list` at all.
+  if (!enduser) tools.push(switchRoleTool(deps));
 
   // Reads first: they need no session and work with any key role.
   tools.push(

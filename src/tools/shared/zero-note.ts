@@ -18,6 +18,11 @@
  *    on a service request — only the record's own fields.
  * 2. **A scoped zero is about one person**, not about the tenant.
  * 3. **A gated zero is about this deployment**, not about Ivanti.
+ * 4. **An impersonated zero is Ivanti's answer for that person**, and is the weakest of all: the
+ *    other three are narrowings this server applied and can describe, while this one is the
+ *    tenant's own access control, which hides the existence of a record rather than filtering a
+ *    known set. Measured: the same unfiltered query answered 571 under one role and 1 under
+ *    another, seconds apart, in one conversation.
  *
  * Kept out of the tool descriptions deliberately: this is response-side, so it costs nothing on
  * `tools/list` and cannot be truncated away by a client.
@@ -31,6 +36,13 @@ export interface ZeroContext {
   scopedTo?: string | undefined;
   /** The objects this deployment allows, when a gate narrowed the answer. */
   gated?: readonly string[] | undefined;
+  /**
+   * The person Ivanti is applying access for, when the conversation is impersonating.
+   *
+   * Separate from `scopedTo` because the two are different claims: that one is a filter this
+   * server composed and can explain, this one is the tenant deciding what may be seen at all.
+   */
+  impersonating?: string | undefined;
   /** Extra sentence for whatever is specific to this tool. */
   because?: string | undefined;
 }
@@ -60,6 +72,15 @@ export function zeroNote(context: ZeroContext): string {
     parts.push(
       `It is also narrowed to ${context.scopedTo}: a record belonging to someone else answers ` +
         'zero here too, so say you cannot see one rather than that none exists.',
+    );
+  }
+
+  if (context.impersonating !== undefined) {
+    parts.push(
+      `AND THIS IS NOT THE STRONG KIND OF ZERO AFTER ALL: Ivanti answered it as ` +
+        `${context.impersonating}, applying their own access. A record they may not see is ` +
+        'absent here exactly as though it did not exist. Say that nothing is visible to them ' +
+        'rather than that nothing exists, and do not report it as a fact about the tenant.',
     );
   }
 

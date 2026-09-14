@@ -20,9 +20,10 @@ decided, why, and — in §10 — which alternatives were rejected and for what 
 before proposing architectural changes; several obvious-looking simplifications were already
 considered and turned down for stated reasons.
 
-**Every stage is in.** **Forty tools in `full` mode, thirty-four in `enduser`**:
+**Every stage is in.** **Forty-one tools in `full` mode, thirty-four in `enduser`**:
 `get_version`, `act_as`, the read tier, the retrievable pair `search` / `fetch`, the writes, B5's
-session-gated workflow surface, and B6's service catalog and attachments. Six reference documents
+session-gated workflow surface, B6's service catalog and attachments, and `switch_role` where
+impersonation is configured. Six reference documents
 are served as MCP resources. What is left is A4's Entra row, which is a deployment prerequisite
 rather than code.
 
@@ -141,11 +142,12 @@ tools, and they cost nothing until something reads them.
 anything whose absence would **mislead** stays in the tool description that needs it — that
 `$filter` functions are silently dropped, that zero rows means zero records, that a compact field
 set was returned. Descriptions carry what is dangerous not to know; resources carry what is
-expensive to repeat. Measured on a live `full`/admin server: **37,625 characters of description**
-across 40 tools (plus 28,906 of argument schema, so `tools/list` is 76,817 characters of JSON)
-sent on every session, against 24,023 characters across the six reference documents, fetched
-only on demand. **The manifest budget has 375 characters of headroom** and the longest single
-description is 1,948 of a 2,000 cap, so the next addition fails the build by design.
+expensive to repeat. Measured on a live `full`/admin server: **37,991 characters of description**
+across 41 tools — the widest manifest, with impersonation on, since `act_as` says more when it
+can act as the person — sent on every session, against 24,023 characters across the six
+reference documents, fetched only on demand. **The manifest budget has 9 characters of
+headroom** and the longest single description is 1,948 of a 2,000 cap, so the next addition
+fails the build by design — which is now imminent rather than theoretical.
 
 **Resources narrow the way tools do**, and for the same reason: a document naming a tool this
 deployment does not register is worse than no document, because a model cannot tell "not

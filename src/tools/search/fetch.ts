@@ -15,6 +15,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { decodeRecordId, recordTitle } from './record-identity.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -41,6 +42,7 @@ export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('fetch', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const decoded = decodeRecordId(args.id);
         if (decoded === undefined) {
           return errorResult(
@@ -55,8 +57,8 @@ export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
           throw new ObjectNotAllowedError(decoded.entitySet, deps.gate.allowed);
         }
 
-        const url = deps.connection.transport.routes.record(decoded.entitySet, decoded.recId);
-        const record = await deps.connection.transport
+        const url = transport.routes.record(decoded.entitySet, decoded.recId);
+        const record = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => hideMissingRecord(deps, error));
 

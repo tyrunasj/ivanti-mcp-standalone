@@ -9,6 +9,7 @@ import type { OdataRecord } from '../odata/response.js';
 import { constrainedBy, type ResolvedForm } from '../session/form-context.js';
 import { readPickLists } from '../session/pick-lists.js';
 import type { IvantiConnection } from '../connect.js';
+import type { IvantiTransport } from '../http/transport.js';
 
 /**
  * Writing a validated field is the accepted-but-wrong failure this module exists to prevent.
@@ -257,18 +258,25 @@ export async function resolveValidatedWrite(
   return { companions, values, confirm };
 }
 
-/** Reads the record back and refuses to call the write done if it did not store. */
+/**
+ * Reads the record back and refuses to call the write done if it did not store.
+ *
+ * `transport` must be **the one the write used**. Verifying an impersonated write with the
+ * service account would read a row the writer may not be able to see — reporting success from a
+ * credential that did not do the writing, which is the one thing this function exists to prevent.
+ */
 export async function confirmWrite(
   connection: IvantiConnection,
   entitySet: string,
   recId: string,
   confirm: OdataRecord,
   companions: OdataRecord = {},
+  transport: IvantiTransport = connection.transport,
 ): Promise<void> {
   if (Object.keys(confirm).length === 0) return;
 
-  const url = withQuery(connection.transport.routes.record(entitySet, recId), buildQuery({}));
-  const stored = (await connection.transport.request<OdataRecord>(url)) ?? {};
+  const url = withQuery(transport.routes.record(entitySet, recId), buildQuery({}));
+  const stored = (await transport.request<OdataRecord>(url)) ?? {};
 
   const wrong: string[] = [];
   for (const [name, intended] of Object.entries(confirm)) {

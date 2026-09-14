@@ -6,6 +6,7 @@ import type { Logger } from '../../logger.js';
 import type { AdminCatalog } from './admin-catalog.js';
 import type { IvantiSession } from './asmx-session.js';
 import { probeCapability } from './capability.js';
+import type { CentralConfig } from './central-config.js';
 
 const admin = (list: AdminCatalog['list']): AdminCatalog => ({ list });
 const adminWorks = admin(() => Promise.resolve([]));
@@ -29,7 +30,12 @@ describe('probeCapability', () => {
       logger(),
     );
 
-    expect(capability).toEqual({ tier: 'admin', identity: { role: 'Admin' } });
+    expect(capability).toEqual({
+      tier: 'admin',
+      identity: { role: 'Admin' },
+      // The normal state for a deployment without the ConfigDB pair — not a degradation.
+      canImpersonate: false,
+    });
   });
 
   it('falls back to the session tier when the admin console refuses', async () => {
@@ -90,5 +96,79 @@ describe('IVANTI_MAX_TIER', () => {
 
     expect(capability).toMatchObject({ tier: 'session', reason: 'capped by IVANTI_MAX_TIER' });
     expect(adminCalls).toBe(0);
+  });
+});
+
+const centralConfig = (probe: CentralConfig['probe']): CentralConfig => ({
+  probe,
+  authenticate: () => Promise.reject(new Error('unused')),
+  release: () => Promise.resolve(),
+});
+
+describe('the impersonation probe', () => {
+  it('reports it unavailable, and says so at info, when it is not configured', async () => {
+    const info = vi.fn<Logger['info']>();
+    const warn = vi.fn<Logger['warn']>();
+
+    const capability = await probeCapability(
+      session(() => Promise.resolve({ role: 'Admin' })),
+      adminWorks,
+      { debug: vi.fn(), info, warn, error: vi.fn() },
+    );
+
+    expect(capability.canImpersonate).toBe(false);
+    expect(capability.impersonationReason).toBeUndefined();
+    expect(info.mock.calls.map(([message]) => message).join(' | ')).toContain(
+      'impersonation not configured',
+    );
+    // Not configured is a normal deployment, not a degradation to warn about.
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('reports it available when CentralConfig answers', async () => {
+    const capability = await probeCapability(
+      session(() => Promise.resolve({ role: 'Admin' })),
+      adminWorks,
+      logger(),
+      'admin',
+      centralConfig(() => Promise.resolve()),
+    );
+
+    expect(capability.canImpersonate).toBe(true);
+  });
+
+  // A ConfigDB that is down must not take the server with it: the deployment is still useful,
+  // and act_as falls back to deciding who "my" means.
+  it('warns and keeps serving when CentralConfig refuses', async () => {
+    const warn = vi.fn<Logger['warn']>();
+
+    const capability = await probeCapability(
+      session(() => Promise.resolve({ role: 'Admin' })),
+      adminWorks,
+      { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+      'admin',
+      centralConfig(() => Promise.reject(new Error('401 Unauthorized'))),
+    );
+
+    // The tier is untouched: a ConfigDB outage costs impersonation and nothing else.
+    expect(capability.tier).toBe('admin');
+    expect(capability.canImpersonate).toBe(false);
+    expect(capability.impersonationReason).toContain('401');
+    expect(warn.mock.calls[0]?.[0]).toContain('impersonation configured but unavailable');
+  });
+
+  // Impersonation drives OData, and every tier has OData — including one capped below the ASMX
+  // session. Tying it to the tier would refuse it for no reason.
+  it('is available at the odata tier, which is all it needs', async () => {
+    const capability = await probeCapability(
+      session(() => Promise.reject(new Error('no session'))),
+      adminRefuses,
+      logger(),
+      'odata',
+      centralConfig(() => Promise.resolve()),
+    );
+
+    expect(capability.tier).toBe('odata');
+    expect(capability.canImpersonate).toBe(true);
   });
 });

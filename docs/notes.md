@@ -878,6 +878,195 @@ so the throw escaped before the promise existed and any `.catch()` on the call n
 transport is async and always rejects. One whole error path (`uploadAttachment` unpacking Ivanti's
 300) passed its tests while being unreachable in production.
 
+### Impersonation via CentralConfig
+
+**A SID is `<tenantId>#<sessionId>#<n>`, and CentralConfig returns only the middle segment.**
+`AuthenticateTenantAPIKey` answers `<tenant-host>#H5IK…#1`, while CentralConfig's
+`AuthenticateAPI` answers a bare 32-char `SessionId`. Sent as-is the bare token is not a session:
+`InitializeSession` answers **500 `ArgumentNullException: ConnectionParams object is required`**,
+which reads like a broken endpoint and is really "no session by that id". Wrapping it as
+`<tenantId>#<SessionId>#1` makes the same call answer 200 — with the *impersonated* user's name
+and role (`UserName: HSanders`, `ActiveRole: ServiceDeskAnalyst`), not the service account's.
+That one string is the entire difference between the feature working and appearing impossible.
+*(Measured 2026-09-14.)*
+
+**The SID cookie authenticates OData and REST too — the API key is not required.**
+`GET /HEAT/api/odata/businessobject/incidents` with `Cookie: SID=…` and **no**
+`Authorization: rest_api_key=` header answers 200 with rows. So a session is a credential for
+every surface, not just the ASMX one, and an impersonated session can carry the whole tool set
+rather than only the form-and-workflow half. **What is not yet established is whether OData then
+*scopes* to that user** — an analyst's session returned the same 551 incidents the admin key
+sees, which is consistent with either "he may read them all" or "OData ignores role scoping".
+Do not describe the OData half as access-limited until that is measured. *(Measured 2026-09-14.)*
+
+**`AuthenticateAPI` requires `Disabled = 0`; `Status` is a different field and lies about it.**
+All six users read `Status = Active` throughout, while the call answered `AccessDenied` for the
+ones whose `Disabled` bit was set. Flipping `Disabled` on ACope and HSanders turned failure into
+success with nothing else changed. Its "can't find user name X" therefore means "no **enabled**
+user by that name" — a wording that sends you looking for a typo in the login. *(Measured 2026-09-14.)*
+
+**An impersonated session can start with no role, and the admin surface then refuses.**
+`InitializeSession` returned `ActiveRole` **empty** for a user holding three roles, and
+`AdminUI/services/AppDesign.asmx` answered `ValidateSessionException` (HTTP 551). That is a
+missing *selection*, not missing rights: `FRSHEATIntegration.asmx/GetRolesForUser`
+(`sessionKey` + `tenantId`) lists them and `SetRoleForUserSession` (+ `roleName`) picks one.
+`sessionKey` is the full `#`-delimited SID. A user with no admin role is refused the same way,
+so the two cases are indistinguishable from the response alone — read the role list first.
+*(Measured 2026-09-14.)*
+
+**The response carries the tenant's SQL connection string, password included.**
+`AuthenticateAPI` returns `ConnectionString` and `ProviderName` beside the session fields. Any
+code that logs this response, or echoes it into an error, leaks the database credential. It must
+be destructured at the transport boundary and never stored whole. *(Measured 2026-09-14.)*
+
+**A role's height is its *object* workspace count, and the total count ranks wrongly.**
+Ivanti publishes no role ordering anywhere reachable — `frs_def_role` has `ParentRole` but it is
+null on all 51 roles here, there is no permissions object in the 1324-object catalog, and
+`employee.ROLE_TO_LINK` is null. What does rank them is `GetRoleWorkspaces`, and it takes the role
+as an argument (`sRole`), so one session can measure a role without switching into it — **but only
+an admin one**. A `ServiceDeskAnalyst` session answers **551** for every role including its own,
+so ranking is an admin-tier capability and there is no non-admin path to it, lazy or otherwise.
+Count only the `ObjectWorkspace` rows: measured here, `ServiceOwner` has 12 workspaces to
+`ChangeManager`'s 11 but 2 object workspaces to its 7, and `SelfServiceIT` ties
+`ServiceDeskAnalyst` at 7 total while holding 1 against 3. The ladder measured by object
+workspaces: SelfService 0, SelfServiceMobile/SelfServiceIT/HR/FM/SecOps 1, ServiceOwner 2,
+ServiceDeskAnalyst 3, ServiceDeskManager 5, ChangeManager 7, Admin 24.
+
+**The two metrics disagree at the bottom, so neither is "the" ranking.** `SelfServiceMobile` has
+the fewest workspaces of any role (5) and yet carries 1 object workspace, while `SelfService` has
+6 and carries 0. Object count is the better proxy higher up the ladder and the total is the better
+one at the floor, which is why the least-privileged role is **named in configuration** rather than
+derived — a self-service role does *not* reliably carry zero object workspaces.
+
+A role can also simply fail: `Guests` and `CallLogSelfService` both answer **500**. An unrankable
+role must be skipped rather than treated as zero, which would otherwise make it the preferred
+choice wherever the lowest is wanted. *(Measured 2026-09-14.)*
+
+**Ivanti labels its own self-service roles — do not infer it from workspace counts or names.**
+`GetUserData` returns `userRoleList` (lower-case `u`, unlike its siblings), and each entry carries
+`SelfServiceRole` and `EnableMobileAnalystUI` alongside `Name`/`DisplayName`. That flag is the
+authoritative answer to "is this a portal role", and it arrives on a **non-admin** session:
+measured against an impersonated `ServiceDeskAnalyst`, `GetUserData` answered with the role list
+while `GetRoleWorkspaces` answered 551 for every role. So the workspace ranking is an admin-only
+enrichment, not the way to find a self-service role. *(Measured 2026-09-14.)*
+
+**`GetUserData` needs `tzoffset`, and fails when the session has no active role.**
+Called as `{_csrfToken, tzoffset: 0}` it answers; omitting `tzoffset` answers **500
+`InvalidOperationException`**, which reads like a broken session and is a missing argument. It
+also answers 500 when `InitializeSession` reported an empty `ActiveRole` — so the richer role list
+is unavailable in exactly the case that needs a role chosen. `FRSHEATIntegration.asmx/GetRolesForUser`
+(`sessionKey` + `tenantId`) is the way out: it carries only `Name`/`DisplayName`, no flags, but it
+answers for a session with no role at all. The two are complementary, not alternatives.
+*(Measured 2026-09-14.)*
+
+**The in-session role switch is `Session.asmx/SelectRole`, not `SetRoleForUserSession`.**
+It takes `sRole` — the same spelling `GetRoleWorkspaces` uses — and re-points the established
+session by rewriting Ivanti's `UserSettings` cookie, with no re-authentication and no credentials.
+`Account/SelectRole` is the sign-in-time MVC form and needs an anti-forgery token only available
+while signed out, so it is not the one to call. *(From `ivanti-mobile`, verified live there;
+not re-measured here.)*
+
+**An impersonated session reaches OData and `Session.asmx`, and nothing else.**
+Measured against a CentralConfig-minted session for a `ServiceDeskAnalyst`: `InitializeSession`,
+`GetUserData` and `SelectRole` all answer, and OData answers with rows — while **every**
+`Services/Workspace.asmx` method (`GetRoleWorkspaces`, `GetWorkspaceData`, `FindFormViewData`) and
+`AdminUI/services/AppDesign.asmx` answer **551 `ValidateSessionException`**. It is not a role
+permission: real analysts call those methods from Ivanti's own mobile client. A session minted by
+CentralConfig is simply not accepted by the workspace/form layer, while one from
+`AuthenticateTenantAPIKey` is. So anything built on forms — pick lists, validated fields, quick
+actions, service-request submit — must keep using the service-account session.
+*(Measured 2026-09-14.)*
+
+**OData scopes to the session's role, and a session with no role reads nothing.**
+Counts through the same OData path, varying only the session: service account (Admin) and an
+impersonated `ServiceDeskAnalyst` both read 551 incidents, 628 employees, 51 roles — but the same
+impersonated user with **no active role** reads **0 of everything**, and after
+`SelectRole('SelfService')` reads 0 incidents while still reading 628 employees and 51 roles. Two
+conclusions: the role is a real access boundary on OData, and an empty `ActiveRole` is a broken
+session rather than a restricted one. Selecting a role is therefore mandatory after impersonating,
+not a refinement. Note that admin and analyst coincide on these objects, so comparing those two
+alone would suggest — wrongly — that OData ignores the role. *(Measured 2026-09-14.)*
+
+**An impersonated session stamps `CreatedBy`, `LastModBy` and `Owner` with the impersonated person.**
+Measured by creating one incident through a CentralConfig session for `HSanders`: the create
+response came back `CreatedBy='HSanders'`, `LastModBy='HSanders'`, `Owner='HSanders'`. Ivanti
+fills all three from the session, so impersonation makes attribution real rather than asserted and
+the `CreatedBy` override `enduser` writes carry becomes redundant. `Owner` following the session
+was not anticipated — on a non-impersonated write it would be the service account.
+*(Measured 2026-09-14.)*
+
+**`LastModBy` is overwritten by whichever workflow runs, so it records nothing durable about who
+acted.** One incident read back moments later said `LastModBy='InternalServices'` rather than the
+person — the delete preview named the culprit, `Workflow Instance 'TSS Incident Trigger WF'`.
+Timing is not guaranteed and "within seconds" would be too strong: another incident, created the
+same way, still read the person across several later reads because no workflow had fired on it
+yet. What holds is that nothing stops one firing later.
+This matters beyond impersonation: the design's claim that `CreatedBy` (overridable) and
+`LastModBy` (not overridable) together say *their decision, this server's hands* holds only until
+the first workflow fires, which here is immediately. **`CreatedBy` is the only durable attribution
+field.** Do not build an audit argument on `LastModBy`; this server's own audit log is where
+provenance survives. *(Measured 2026-09-14.)*
+
+**An impersonated write is refused by ROLE, and Ivanti names the role when it refuses.**
+A `DELETE` that answered 400 under one role answered `deleted: true` under another on the same
+session, and the body says why in plain words: *"Role SelfService does not have rights to delete
+object Incident#."* So impersonated writes are not asymmetric or half-supported — the person's
+role simply governs them, which is the point. Read the message before assuming a transport
+problem: an earlier pass recorded this 400 as "cause not established" and it was a permission all
+along. *(Measured 2026-09-14.)*
+
+**`GetTenantTimeout` validates the CentralConfig key but NOT the tenant — it answers 200 for a
+tenant it has never heard of.** Measured: the real tenant answers `18000`, and
+`no-such-tenant.example.com` answers **`120`**, a default, with the same HTTP 200. A wrong key
+answers 401, so it is a good credential probe and a useless tenant probe. The startup check
+therefore proves "CentralConfig is reachable and the key works" and nothing more; a wrong tenant
+host passes it and fails at the first `act_as`.
+
+`FindActiveTenantRecord` *would* catch it — an unknown tenant answers an empty body — and is
+deliberately not used, because it returns the tenant's **`DBConnectionString` and
+`PrimaryEncryptionKey`**. Pulling the database credentials and the encryption key across the wire
+on every boot is not worth catching a typo. Note the field is `DBConnectionString` here and
+`ConnectionString` on `AuthenticateAPI`: a redaction pattern written for one misses the other,
+which is how the first version of the scrubber let it through. *(Measured 2026-09-14.)*
+
+**The manifest budget is spent: 9 characters of 38,000.**
+`full` now carries 41 tools and 37,991 characters of description with impersonation on — the
+widest manifest a caller can be sent, which is what `description-budget.test.ts` measures since
+descriptions vary with `canImpersonate`. `switch_role` cost 277 and the conditional `act_as` line
+89. The next paragraph added anywhere fails the build, which is the intended design but is no
+longer theoretical: the "manifest budget relief → resources" item already on the roadmap is now
+blocking rather than optional. Note which number may move — `DESCRIPTION_BUDGET` (2,000) tracks
+real client truncation and raising it buys nothing, while `MANIFEST_BUDGET` is a self-imposed
+cost ceiling and raising *that* is a decision to argue on cost. *(Measured 2026-09-14.)*
+
+**`GetUserData` can refuse for a person permanently, not just while their session has no role.**
+The obvious repair for a flagless role list is to select any role and ask again — the session then
+has one, and `GetUserData` carries `SelfServiceRole`. It works for most accounts. Measured against
+a live tenant it does **not** work for all: one account answers **500** from `GetUserData` both
+before and after `SelectRole` succeeded, so its flags are unobtainable rather than
+unavailable-yet. Do not treat "no active role" as the explanation for a `GetUserData` failure; it
+is one explanation.
+
+Where the flags cannot be had, the role can only come from the order `GetRolesForUser` listed them
+— alphabetical, so `Admin` sorts first and an account holding it opens under the most privileged
+role it has, by accident rather than policy. The server keeps that fallback (refusing would lock
+out the account entirely) but **says so in the response** and warns, and `IVANTI_IMPERSONATION_ROLE`
+is the way to decide it explicitly. *(Measured 2026-09-14.)*
+
+**Pinning a person before the work that can fail bricks the conversation.**
+`act_as` pinned the resolved person and then opened the Ivanti session. When the open failed it
+returned the error — and the pin had already stuck, one-way by design, so the conversation was
+bound to someone it could not act as and refused **every other person** for the rest of its life.
+One unlucky name ended the session's usefulness. Found on a live tenant, not in tests: the unit
+tests all pinned someone who could be impersonated.
+
+The fix is ordering, not a new escape hatch: `SessionPin.check()` asks the rules without applying
+them, so `act_as` gates the attempt, opens the session, and commits the pin only once nothing can
+still refuse. Checking *before* opening matters on its own — otherwise an injected second name
+would mint an Ivanti session for a person the conversation is about to refuse. Anything
+irreversible wants the same shape: ask, do the work that can fail, then commit.
+*(Measured 2026-09-14.)*
+
 ## Observability
 
 **`/health` must answer without a token, so everything it returns is public.**

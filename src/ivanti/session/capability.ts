@@ -4,6 +4,7 @@
 import type { Logger } from '../../logger.js';
 import type { AdminCatalog } from './admin-catalog.js';
 import type { IvantiSession, SessionIdentity } from './asmx-session.js';
+import type { CentralConfig } from './central-config.js';
 
 /**
  * What this credential can actually do, decided once at startup.
@@ -30,6 +31,18 @@ export interface Capability {
   identity?: SessionIdentity;
   /** Why the tier is not higher — the session failed, or the admin console refused. */
   reason?: string;
+  /**
+   * Whether `act_as` can open an Ivanti session **as** the person, rather than only deciding who
+   * "my" means.
+   *
+   * A second axis, not a higher tier. The tier says what the *service account* reaches; this says
+   * whether a *person's* own access can be applied instead — and it reaches OData only, since the
+   * form and admin surfaces refuse a CentralConfig session. False is the normal, fully supported
+   * state: it is what every deployment without the ConfigDB pair runs.
+   */
+  canImpersonate: boolean;
+  /** Why not, when it is configured and still unavailable. */
+  impersonationReason?: string;
 }
 
 /**
@@ -43,10 +56,15 @@ export async function probeCapability(
   admin: AdminCatalog,
   logger: Logger,
   maxTier: CapabilityTier = 'admin',
+  centralConfig?: CentralConfig,
 ): Promise<Capability> {
+  // Probed first, and independently of the tier: impersonation drives OData, which every tier
+  // has. A deployment capped to `odata` can still act as the person.
+  const impersonation = await probeImpersonation(centralConfig, logger);
+
   if (maxTier === 'odata') {
     logger.info('ivanti tier capped by configuration', { maxTier });
-    return { tier: 'odata', reason: 'capped by IVANTI_MAX_TIER' };
+    return { tier: 'odata', reason: 'capped by IVANTI_MAX_TIER', ...impersonation };
   }
 
   let identity: SessionIdentity;
@@ -57,25 +75,57 @@ export async function probeCapability(
     logger.warn('ivanti session unavailable; serving the OData tier only', {
       reason: reason.slice(0, 200),
     });
-    return { tier: 'odata', reason };
+    return { tier: 'odata', reason, ...impersonation };
   }
 
   if (maxTier === 'session') {
     logger.info('ivanti tier capped by configuration', { maxTier, role: identity.role });
-    return { tier: 'session', identity, reason: 'capped by IVANTI_MAX_TIER' };
+    return { tier: 'session', identity, reason: 'capped by IVANTI_MAX_TIER', ...impersonation };
   }
 
   // The admin console is tried, not assumed. The call doubles as the catalog fetch, so a tenant
   // that allows it pays one round trip and gets 1324 objects for it.
   try {
     await admin.list();
-    return { tier: 'admin', identity };
+    return { tier: 'admin', identity, ...impersonation };
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : 'unknown error';
     logger.info('ivanti admin console unavailable; using the role workspaces instead', {
       role: identity.role,
       reason: reason.slice(0, 200),
     });
-    return { tier: 'session', identity, reason };
+    return { tier: 'session', identity, reason, ...impersonation };
+  }
+}
+
+type ImpersonationCapability = Pick<Capability, 'canImpersonate' | 'impersonationReason'>;
+
+/**
+ * Three outcomes, three log lines, and **none of them stops the server**.
+ *
+ * A configured-but-unreachable ConfigDB is a `warn` rather than a startup failure for the same
+ * reason a refused admin console is: the deployment is still a useful server, and refusing to
+ * start would turn a transient outage at someone else's host into an outage here. The line says
+ * what was lost so the degradation is visible rather than silent.
+ */
+async function probeImpersonation(
+  centralConfig: CentralConfig | undefined,
+  logger: Logger,
+): Promise<ImpersonationCapability> {
+  if (centralConfig === undefined) {
+    logger.info('ivanti impersonation not configured; act_as decides who "my" means, no more');
+    return { canImpersonate: false };
+  }
+
+  try {
+    await centralConfig.probe();
+    logger.info('ivanti impersonation available; act_as will open a session as the person');
+    return { canImpersonate: true };
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : 'unknown error';
+    logger.warn('ivanti impersonation configured but unavailable; act_as decides scope only', {
+      reason: reason.slice(0, 200),
+    });
+    return { canImpersonate: false, impersonationReason: reason };
   }
 }

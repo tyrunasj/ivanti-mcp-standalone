@@ -4,7 +4,7 @@ A standalone [MCP](https://modelcontextprotocol.io) server for **Ivanti Neurons 
 It gives a model the tenant's own surface — reading records, filing tickets, running the
 tenant's own quick actions, reading approvals — over stdio or authenticated HTTP.
 
-**Forty tools in `full` mode, thirty-four in `enduser`**, plus six reference documents served
+**Forty-one tools in `full` mode, thirty-four in `enduser`**, plus six reference documents served
 as MCP resources. Ships as a container image, a Helm chart and a self-contained tarball, all
 built from one commit.
 
@@ -26,10 +26,18 @@ built from one commit.
 
 ## What it talks to
 
-The server signs in to Ivanti as **one API user**, and everything it does executes as that
-account — like a call-centre operator working on someone's behalf. Anything Ivanti resolves
+The server signs in to Ivanti as **one API user**, and by default everything it does executes as
+that account — like a call-centre operator working on someone's behalf. Anything Ivanti resolves
 "for the current user" therefore answers for the service account, not for whoever is chatting;
 `act_as` is how a conversation says who it is helping.
+
+**Given a ConfigDB key it goes further and signs in *as* them.** With `IVANTI_CONFIG_URL` and
+`IVANTI_CENTRAL_CONFIG_API_KEY` set, `act_as` opens a real Ivanti session for that person, and
+Ivanti applies their own access to it — a self-service role reads none of the incidents an analyst
+reads, and tickets they raise carry their name rather than the service account's. It covers the
+record surface only: forms, pick lists, quick actions and the admin catalog keep using the service
+account, because Ivanti refuses a session minted that way on those. Set neither and the server
+behaves exactly as described above. See [`docs/impersonation-plan.md`](docs/impersonation-plan.md).
 
 Three Ivanti surfaces, and the authentication is not uniform — which is why the connection is
 *probed* at startup rather than configured:
@@ -94,10 +102,10 @@ products, and mixing them is how an employee ends up holding an analyst's tool s
 and a symptom→cause table. Secrets take a `_FILE` suffix (`IVANTI_API_KEY_FILE`,
 `BEARER_TOKEN_FILE`); setting both forms is an error rather than a precedence question.
 
-**To start from something that runs, not from a blank file**, copy one of the eight in
+**To start from something that runs, not from a blank file**, copy one of the nine in
 [`examples/env/`](examples/env) — stdio, loopback HTTP, shared bearer, `enduser`, OAuth against
-Entra or Keycloak, both transports at once, and a tier-capped one for reproducing what a
-customer without admin rights gets:
+Entra or Keycloak, both transports at once, a tier-capped one for reproducing what a customer
+without admin rights gets, and one where Ivanti itself decides what each person may see:
 
 ```bash
 cp examples/env/shared-bearer.env .env
@@ -120,11 +128,12 @@ in `tools/list`, so the model cannot call it at all.
 | | `full` | `enduser` |
 |---|---|---|
 | Audience | IT staff | employees |
-| Tools | 40 | 34 |
+| Tools | 41 | 34 |
 | Business Objects | all the credential can see | `ENDUSER_BUSINESS_OBJECTS` — a gate, not a hint; empty means none |
 | `act_as` | a preference: decides who "my" means | a gate: nothing returns a record until it resolves |
 | Records | anyone's — an analyst works other people's tickets | own records only |
 | Quick actions | everything the role offers | `ENDUSER_QUICK_ACTIONS`, by name, on own open records |
+| Ivanti role, when impersonating | whichever Ivanti made active, or `IVANTI_IMPERSONATION_ROLE`; `switch_role` can change it | `ENDUSER_ROLE` (default `SelfServiceMobile`), and no way out of it |
 
 ### Capability tiers
 
@@ -210,7 +219,7 @@ tools/    tool-definition -> register-tools (which tools this mode exposes)
 | | |
 |---|---|
 | [`docs/handbook.html`](docs/handbook.html) | the Handbook — interactive reference and configurator; open it in a browser, start here |
-| [`examples/env/`](examples/env) | eight working configurations, one per deployment shape — CI proves they load |
+| [`examples/env/`](examples/env) | nine working configurations, one per deployment shape — CI proves they load |
 | [`docs/deployment.md`](docs/deployment.md) | the three shapes, the Helm chart's guards, cutting a release |
 | [`docs/configuration.md`](docs/configuration.md) | configuring against a real IdP, per provider, with a symptom→cause table |
 | [`docs/initial-design.md`](docs/initial-design.md) | decisions and why — including, in §10, what was rejected and for what reason |

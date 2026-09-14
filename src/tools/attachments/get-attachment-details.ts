@@ -11,6 +11,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { missingRecordMessage } from '../shared/own-records.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /** Ivanti's own names, kept as they are so a caller can filter on them elsewhere. */
 const DETAIL_FIELDS = [
@@ -59,15 +60,16 @@ export function createGetAttachmentDetailsTool(deps: IvantiToolDeps): ToolDefini
     },
     handler: (args, context) =>
       runTool('get_attachment_details', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         // Read through the Business Object rather than `/rest/Attachment?ID=`: that endpoint
         // streams the file itself, so metadata would have to be sniffed from response headers,
         // and it carries neither the parent link nor the description.
         const url = withQuery(
-          deps.connection.transport.routes.entitySet('attachments'),
+          transport.routes.entitySet('attachments'),
           buildQuery({ filter: `RecId eq ${quoteOdataString(args.attachmentId)}`, top: 1 }),
         );
 
-        const payload = await deps.connection.transport.request<OdataRecord>(url);
+        const payload = await transport.request<OdataRecord>(url);
         const [row] = readCollection<OdataRecord>(payload, url);
 
         if (row === undefined) {

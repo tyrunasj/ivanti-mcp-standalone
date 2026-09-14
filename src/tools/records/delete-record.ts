@@ -10,6 +10,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { assertRecordWritable } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -48,15 +49,16 @@ export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('delete_record', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const target = await resolveObject(deps, args.object);
         const { entitySet } = target;
-        const url = deps.connection.transport.routes.record(entitySet, args.recordId);
+        const url = transport.routes.record(entitySet, args.recordId);
 
         await assertRecordWritable(deps, context, target, args.recordId);
 
         // Ivanti has no 404: asking first turns "already gone" into a clear answer rather than a
         // 400 that reads like a malformed request.
-        const existing = await deps.connection.transport
+        const existing = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => {
             if (isIvantiNotFound(error)) return undefined;
@@ -69,9 +71,9 @@ export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        await deps.connection.transport.request(url, { method: 'DELETE' });
+        await transport.request(url, { method: 'DELETE' });
 
-        const stillThere = await deps.connection.transport
+        const stillThere = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => {
             if (isIvantiNotFound(error)) return undefined;

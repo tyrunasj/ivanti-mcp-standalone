@@ -83,6 +83,17 @@ export interface SessionPin {
    * @throws IdentityConflictError when a different person is already pinned.
    */
   pin: (person: PinnedPerson) => void;
+  /**
+   * The same rules, asked rather than applied.
+   *
+   * Exists because pinning is one-way by design, and a caller may have work to do between
+   * deciding on a person and being able to commit to them — opening an Ivanti session as them,
+   * which can fail. Pinning first left a conversation bound to someone it had then failed to act
+   * as, refusing everyone else for the rest of its life. Ask here, do the work, pin after.
+   *
+   * @throws the same errors `pin` would, so the two cannot drift apart.
+   */
+  check: (person: PinnedPerson) => void;
 }
 
 export function createSessionPin(sessionIdentity: CallerIdentity): SessionPin {
@@ -93,7 +104,7 @@ export function createSessionPin(sessionIdentity: CallerIdentity): SessionPin {
     identity: () => identity,
     person: () => person,
 
-    pin(next): void {
+    check(next): void {
       // Rule 1: a verified session refuses claims outright.
       if (sessionIdentity.provenance === 'verified' && next.provenance !== 'verified') {
         throw new VerifiedSessionError(sessionIdentity.subject ?? 'a verified user');
@@ -103,6 +114,11 @@ export function createSessionPin(sessionIdentity: CallerIdentity): SessionPin {
       if (person !== undefined && person.recId !== next.recId) {
         throw new IdentityConflictError(person.displayName, next.displayName);
       }
+    },
+
+    pin(next): void {
+      // The rules live in one place; this is the same gate, then the commit.
+      this.check(next);
 
       // Rule 2: the first one sticks.
       person ??= next;

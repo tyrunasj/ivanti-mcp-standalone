@@ -12,6 +12,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { answersForSignedInAccount } from './list-saved-searches.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -43,8 +44,9 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
       top: z.number().int().min(1).max(MAX_TOP).optional().describe('Rows to return. Default 25.'),
       skip: z.number().int().min(0).optional().describe('Rows to skip, for paging.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('saved_search', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const { entity, entitySet } = await resolveObject(deps, args.object);
 
         // `$select` is useless here in a way that looks like it worked: Ivanti keeps every key
@@ -57,8 +59,8 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
         });
         if (args.skip !== undefined && args.skip > 0) query.set('$skip', String(args.skip));
 
-        const url = `${deps.connection.transport.routes.savedSearch(entitySet, args.name)}?${query.toString()}`;
-        const payload = await deps.connection.transport.request<OdataRecord>(url);
+        const url = `${transport.routes.savedSearch(entitySet, args.name)}?${query.toString()}`;
+        const payload = await transport.request<OdataRecord>(url);
         // A saved search matching nothing answers 204 with an empty body.
         const rows = readCollection<OdataRecord>(payload, url);
         const total = payload?.['@odata.count'];

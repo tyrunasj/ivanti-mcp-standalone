@@ -8,6 +8,7 @@ import type { CallContext } from '../tool-definition.js';
 import type { IvantiToolDeps } from './deps.js';
 import type { ResolvedObject } from './resolve-object.js';
 import { isIvantiNotFound } from '../../ivanti/http/errors.js';
+import { transportFor } from './transport-for.js';
 
 /**
  * "Own records", which is the whole of what `enduser` mode means.
@@ -241,8 +242,11 @@ export async function assertOwnRecordById(
   // whatever the record says, and there is no reason to go and look at it.
   requirePerson(context);
 
-  const url = deps.connection.transport.routes.record(resolved.entitySet, recordId);
-  const record = await deps.connection.transport
+  // The caller's own credential: a record Ivanti will not show them must read as absent
+  // here too, or the guard would be checking something the caller cannot actually reach.
+  const transport = transportFor(deps.connection.transport, context);
+  const url = transport.routes.record(resolved.entitySet, recordId);
+  const record = await transport
     .request<OdataRecord>(url)
     // Ivanti reports a missing record as 400 "Invalid key", and this must not distinguish
     // "gone" from "not yours" any more than the message does.
@@ -290,8 +294,11 @@ export async function assertRecordWritable(
 ): Promise<OdataRecord | undefined> {
   if (deps.ownRecordsOnly) requirePerson(context);
 
-  const url = deps.connection.transport.routes.record(resolved.entitySet, recordId);
-  const record = await deps.connection.transport
+  // The caller's own credential: a record Ivanti will not show them must read as absent
+  // here too, or the guard would be checking something the caller cannot actually reach.
+  const transport = transportFor(deps.connection.transport, context);
+  const url = transport.routes.record(resolved.entitySet, recordId);
+  const record = await transport
     .request<OdataRecord>(url)
     .catch(() => undefined);
 

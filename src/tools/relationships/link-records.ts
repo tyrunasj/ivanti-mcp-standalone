@@ -9,6 +9,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /** Ivanti's "it worked" code on the relationship endpoints. Anything else is a failure in a 200. */
 export const RELATIONSHIP_OK = 'ISM_2000';
@@ -62,8 +63,9 @@ export function createLinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
       relationship: z.string().describe('Relationship name, e.g. `IncidentContainsTask`.'),
       targetId: z.string().describe('RecId of the record to link to.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('link_records', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const { entity, entitySet } = await resolveObject(deps, args.object);
 
         const relationship = resolveRelationship(entity.relationships, args.relationship);
@@ -73,13 +75,13 @@ export function createLinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        const url = deps.connection.transport.routes.ref(
+        const url = transport.routes.ref(
           entitySet,
           args.recordId,
           relationship,
           args.targetId,
         );
-        const answer = await deps.connection.transport.request<OdataRecord>(url, {
+        const answer = await transport.request<OdataRecord>(url, {
           method: 'PATCH',
         });
 

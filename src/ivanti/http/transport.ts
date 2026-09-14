@@ -33,6 +33,14 @@ export interface TransportOptions {
   logger: Logger;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
+  /**
+   * Authenticate as an impersonated session instead of with the API key.
+   *
+   * Measured: OData accepts a `SID` cookie with **no** `Authorization` header at all, and then
+   * applies that person's own access — a self-service role reads none of the incidents an analyst
+   * reads. So this is not a second way of saying the same thing; it changes what comes back.
+   */
+  sid?: string;
 }
 
 export interface RequestInit {
@@ -65,6 +73,13 @@ export interface IvantiTransport {
    * back what Ivanti said it was.
    */
   requestBinary: (url: string) => Promise<{ bytes: Uint8Array; contentType: string }>;
+  /**
+   * The same surface, authenticating as an impersonated session.
+   *
+   * OData and REST only — which is the whole of this module. The form and admin surfaces refuse a
+   * CentralConfig session whatever role it holds, and they are not reachable from here anyway.
+   */
+  asPerson: (sid: string) => IvantiTransport;
 }
 
 /**
@@ -92,6 +107,7 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     logger,
     fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    sid,
   } = options;
 
   const send = async (
@@ -108,8 +124,12 @@ export function createTransport(options: TransportOptions): IvantiTransport {
       response = await fetchImpl(url, {
         method,
         headers: {
-          // The header Ivanti wants: `rest_api_key=<key>`, with an equals sign.
-          Authorization: `rest_api_key=${apiKey}`,
+          // One credential or the other, never both: sending the key as well would have Ivanti
+          // answer for the service account and quietly undo the impersonation.
+          ...(sid === undefined
+            ? // The header Ivanti wants: `rest_api_key=<key>`, with an equals sign.
+              { Authorization: `rest_api_key=${apiKey}` }
+            : { Cookie: `SID=${sid}` }),
           Accept: 'application/json',
           ...(init.body === undefined || raw ? {} : { 'Content-Type': 'application/json' }),
           ...init.headers,
@@ -171,6 +191,10 @@ export function createTransport(options: TransportOptions): IvantiTransport {
 
   return {
     routes: createIvantiRoutes(baseUrl, basePath),
+
+    // Same everything, one credential swapped. Callers memoise per session rather than per call
+    // — see `transportFor` — so this is not a per-request allocation.
+    asPerson: (nextSid: string): IvantiTransport => createTransport({ ...options, sid: nextSid }),
 
     async request<T>(url: string, init: RequestInit = {}): Promise<T | undefined> {
       const { status, text } = await send(url, init);

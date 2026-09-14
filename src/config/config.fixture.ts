@@ -27,8 +27,14 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   IVANTI_BASE_URL: undefined,
   IVANTI_API_KEY: undefined,
   IVANTI_MAX_TIER: undefined,
+  IVANTI_CONFIG_URL: undefined,
+  IVANTI_CENTRAL_CONFIG_API_KEY: undefined,
+  IVANTI_IMPERSONATION_ROLE: undefined,
   ENDUSER_BUSINESS_OBJECTS: [],
   ENDUSER_QUICK_ACTIONS: [],
+  // Mirrors the schema default, so a test that does not care about the role still gets the one a
+  // real enduser deployment would run under.
+  ENDUSER_ROLE: 'SelfServiceMobile',
   LOG_LEVEL: 'info',
   ...overrides,
 });

@@ -9,6 +9,7 @@ import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /**
  * Casting a vote, which is only safe because of where it is cast.
@@ -80,7 +81,8 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        const { transport, session } = deps.connection;
+        const transport = transportFor(deps.connection.transport, context);
+        const { session } = deps.connection;
         const url = withQuery(
           transport.routes.entitySet(VOTES),
           buildQuery({ filter: `RecId eq ${quoteOdataString(args.approvalId)}`, top: 1 }),

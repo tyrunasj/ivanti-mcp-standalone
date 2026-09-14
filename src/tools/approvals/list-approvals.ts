@@ -12,6 +12,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { zeroNote } from '../shared/zero-note.js';
 import { findPerson } from '../shared/find-person.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /**
  * Whose approvals are waiting.
@@ -67,6 +68,7 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('list_approvals', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const pinned = context.pin?.person();
         // Refuses in `enduser` both when nobody is pinned and when the name is somebody else's.
         const login = resolveSubject(deps, context, args.person, (person) => person.loginId);
@@ -129,7 +131,7 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
         if (args.includeDecided !== true) conditions.push("Status eq 'Pending'");
 
         const url = withQuery(
-          deps.connection.transport.routes.entitySet(VOTES),
+          transport.routes.entitySet(VOTES),
           buildQuery({
             filter: conditions.join(' and '),
             orderBy: 'DueDateTime asc',
@@ -138,7 +140,7 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
           }),
         );
 
-        const payload = await deps.connection.transport.request<OdataRecord>(url);
+        const payload = await transport.request<OdataRecord>(url);
         const rows = readCollection<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
 
@@ -160,9 +162,9 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
           const entity = await deps.connection.metadata.entity(object).catch(() => undefined);
           if (entity === undefined) return {};
 
-          const record = await deps.connection.transport
+          const record = await transport
             .request<OdataRecord>(
-              deps.connection.transport.routes.record(toEntitySet(`${entity.name}#`), recId),
+              transport.routes.record(toEntitySet(`${entity.name}#`), recId),
             )
             .catch(() => undefined);
           if (record === undefined) return {};
@@ -232,6 +234,8 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
           ...(approvals.length === 0
             ? {
                 note: zeroNote({
+                  // Ivanti's own answer for this person, which hides rather than filters.
+                  impersonating: context.impersonation?.session()?.loginId,
                   // Safe to assert now: the person was resolved above and a miss was refused,
                   // so an empty answer really is a fact about their queue.
                   looked: `approvals owned by ${who.displayName ?? lookupLogin} (matched on ${who.matchedOn})`,
