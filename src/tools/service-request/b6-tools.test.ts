@@ -167,6 +167,35 @@ describe('submit_service_request', () => {
     ]);
   });
 
+  /**
+   * A failed read-back is not a passed one.
+   *
+   * `verifyStoredAnswers` is wrapped in a `.catch` — correctly, because the request EXISTS by then
+   * and turning a filed request into a reported failure would be worse. But its result used to be
+   * indistinguishable from "nothing mismatched": `undefined` rendered as `answersVerified: true`,
+   * beside an `answerNote` promising the comparison had confirmed the answers individually. Per
+   * this module's own measurements, a wrong offset sign stores a datetime as `0001-01-01` while
+   * Ivanti still reports success — precisely the case the read-back exists to catch.
+   */
+  it('says the verification is unknown when the read-back fails', async () => {
+    const { deps: d } = deps({
+      ...SUBMITTED,
+      ServiceReqContainsServiceReqParam: new Error('Ivanti 500 while reading the request back'),
+    });
+
+    const result = body(
+      await createSubmitServiceRequestTool(d).handler(
+        { subscriptionId: 'sub-1', answers: { P1: true } },
+        pinned(),
+      ),
+    );
+
+    expect(result['answersVerified']).toBe('unknown');
+    expect(String(result['verifyWarning'])).toContain('NOT a confirmation');
+    // The request itself was still filed, and its number still reported.
+    expect(result['requestNumber']).toBeDefined();
+  });
+
   it('refuses to file in someone else’s name in enduser mode', async () => {
     const { deps: d } = deps(SUBMITTED, true);
 

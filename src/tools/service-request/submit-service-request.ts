@@ -19,6 +19,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { connectionFor } from '../shared/connection-for.js';
+import { ObjectNotAllowedError } from '../shared/object-gate.js';
 
 /** An answer is either a plain value or a chosen option carrying its identifier. */
 const ANSWER = z.union([
@@ -129,6 +130,15 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
     },
     handler: (args, context) =>
       runTool('submit_service_request', deps.logger, async () => {
+        // The same gate its sibling parameter tools apply, and for the same reason: this writes a
+        // `ServiceReq` and then reads two of them back — `servicereqs('<id>')` and its parameter
+        // relationship — surfacing `ProfileFullName` and `CreatedBy` from a gated object. Every
+        // other object-taking tool passes through `createObjectGate`; this one did not, so an
+        // enduser deployment whose allowlist omits ServiceReq could still create one.
+        if (!deps.gate.allows('ServiceReq')) {
+          throw new ObjectNotAllowedError('ServiceReq', deps.gate.allowed);
+        }
+
         const connection = connectionFor(deps, context);
         const personRecId = resolveSubject(deps, context, args.person, (person) => person.recId);
 
@@ -233,12 +243,22 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
           typeof filed?.['ProfileFullName'] === 'string' ? filed['ProfileFullName'] : undefined;
 
         // Ivanti reports a submit as successful without checking that the answers stored.
+        // The `.catch` itself is right and stays: the request EXISTS by now, and letting a
+        // failed read-back turn a filed request into a reported failure would be worse than not
+        // checking. What was wrong is that its result was indistinguishable from "nothing
+        // mismatched" — `check === undefined` rendered as `answersVerified: true`, next to an
+        // `answerNote` promising "the comparison below does" confirm the answers individually.
+        // A 500, a 10 s timeout, an expired impersonated SID or unrecognised prose in `value` all
+        // produced an unearned claim of verification.
         const check = await verifyStoredAnswers(
           connection.transport,
           submitted.recId,
           answers,
           localOffset,
-        ).catch(() => undefined);
+        ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+
+        const verification = check instanceof Error ? undefined : check;
+        const verifyFailed = check instanceof Error ? check : undefined;
 
         return jsonResult({
           requestNumber: submitted.requestNumber,
@@ -269,16 +289,31 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
               }
             : {}),
           ...(offsetNote === undefined ? {} : { offsetWarning: offsetNote }),
-          ...(check === undefined || (check.mismatches.length === 0 && check.missing.length === 0)
-            ? { answersVerified: true }
-            : {
-                answersVerified: false,
-                ...(check.mismatches.length > 0 ? { storedDifferently: check.mismatches } : {}),
-                ...(check.missing.length > 0 ? { notStored: check.missing } : {}),
-                warning:
-                  'The request exists, but what Ivanti stored is not what was sent. This was ' +
-                  'found by reading the request back — Ivanti reported the submit as clean.',
-              }),
+          ...(verifyFailed !== undefined
+            ? {
+                // Three states, not two. The request was filed; whether it stored correctly is
+                // unknown, and saying so is the only honest answer.
+                answersVerified: 'unknown',
+                verifyWarning:
+                  'The request was created, but reading it back to check the answers failed: ' +
+                  `${verifyFailed.message.slice(0, 200)}. Ivanti reports a submit as clean ` +
+                  'without checking that the answers stored, so this is NOT a confirmation that ' +
+                  'they did. Read the request in Ivanti, or call get_service_request_parameters ' +
+                  'with its requestId.',
+              }
+            : verification === undefined ||
+                (verification.mismatches.length === 0 && verification.missing.length === 0)
+              ? { answersVerified: true }
+              : {
+                  answersVerified: false,
+                  ...(verification.mismatches.length > 0
+                    ? { storedDifferently: verification.mismatches }
+                    : {}),
+                  ...(verification.missing.length > 0 ? { notStored: verification.missing } : {}),
+                  warning:
+                    'The request exists, but what Ivanti stored is not what was sent. This was ' +
+                    'found by reading the request back — Ivanti reported the submit as clean.',
+                }),
         });
       }),
   });
