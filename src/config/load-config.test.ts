@@ -93,4 +93,59 @@ describe('loadConfig', () => {
   it('still refuses a value that is wrong rather than empty', () => {
     expect(() => loadConfig({ AUTH_MODE: 'nonsense' })).toThrow(/Invalid option/);
   });
+
+  // The secrets resolve in their own loop, and it used to read the RAW record — so the rule above
+  // stopped at their doorstep. Clearing the inline form is the documented way to move to a mounted
+  // file, and it reported the opposite of what the operator had just done.
+  describe('a secret set to nothing is unset too', () => {
+    it('lets an emptied inline token hand over to its _FILE partner', () => {
+      const config = loadConfig(
+        {
+          AUTH_MODE: 'bearer',
+          HTTP_TRANSPORT_ON: 'true',
+          MCP_PUBLIC_URL: 'https://mcp.example.com',
+          TRUSTED_ORIGINS: 'https://mcp.example.com',
+          BEARER_TOKEN: '',
+          BEARER_TOKEN_FILE: '/run/secrets/bearer-token',
+        },
+        () => 'token-from-file',
+      );
+
+      expect(config.BEARER_TOKEN).toBe('token-from-file');
+    });
+
+    it('lets an emptied _FILE path hand back to the inline form', () => {
+      const config = loadConfig({
+        IVANTI_BASE_URL: 'https://t.ivanticloud.com',
+        IVANTI_API_KEY: 'inline-key',
+        IVANTI_API_KEY_FILE: '',
+      });
+
+      expect(config.IVANTI_API_KEY).toBe('inline-key');
+    });
+
+    // The one direction this failed OPEN: without the normalisation a whitespace-only token was a
+    // token, and `bearer` mode started with it.
+    it('refuses to start on a whitespace-only bearer token', () => {
+      expect(() =>
+        loadConfig({
+          AUTH_MODE: 'bearer',
+          HTTP_TRANSPORT_ON: 'true',
+          MCP_PUBLIC_URL: 'https://mcp.example.com',
+          TRUSTED_ORIGINS: 'https://mcp.example.com',
+          BEARER_TOKEN: '   ',
+        }),
+      ).toThrow(/BEARER_TOKEN/);
+    });
+
+    // Narrowing check: a genuine both-set collision must still be refused.
+    it('still refuses a token that really is set both ways', () => {
+      expect(() =>
+        loadConfig(
+          { BEARER_TOKEN: 'inline', BEARER_TOKEN_FILE: '/run/secrets/bearer-token' },
+          () => 'from-file',
+        ),
+      ).toThrow(/provide exactly one/);
+    });
+  });
 });

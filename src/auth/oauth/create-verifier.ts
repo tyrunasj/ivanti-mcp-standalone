@@ -20,7 +20,16 @@ export interface OAuthSetup {
   jwksUri: string;
 }
 
-const defaultFetch: FetchLike = (url) => fetch(url);
+/**
+ * Discovery runs before the listener opens, so an IdP that accepts the connection and never
+ * answers holds the whole startup — undici bounds a bodyless fetch only by its 300 s
+ * `headersTimeout`, and Entra's issuer yields three candidates to try in turn. The Ivanti probe
+ * already learned this (`PROBE_TIMEOUT_MS`); this is the same bound for the same reason.
+ */
+export const DISCOVERY_TIMEOUT_MS = 10_000;
+
+const defaultFetch: FetchLike = (url) =>
+  fetch(url, { signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) });
 
 /**
  * Resolves the signing keys and builds the verifier.
