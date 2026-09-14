@@ -43,7 +43,13 @@ RUN pnpm install --frozen-lockfile --prod --node-linker=hoisted --ignore-scripts
 # artefact, source maps need --enable-source-maps (which this image does not pass),
 # and READMEs are documentation. ~10 MB of a 28 MB tree. LICENCE files stay — MIT
 # and friends require the notice to travel with the distribution.
-RUN find node_modules \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) -type f -delete
+# `-not -iname 'licen[cs]e*'` is load-bearing: four production packages (jose, ms, qs,
+# json-schema-typed) ship their licence ONLY as a .md file, and `-name '*.md'` deleted it —
+# leaving the MIT permission notice and the BSD conditions in neither the image nor
+# THIRD-PARTY-NOTICES.md. The comment below was true for 94 of 99 packages and false for
+# exactly the ones that needed it.
+RUN find node_modules \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) \
+      -not -iname 'licen[cs]e*' -not -iname 'copying*' -type f -delete
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Runtime: distroless. No shell, no package manager, no npm — nothing to exec

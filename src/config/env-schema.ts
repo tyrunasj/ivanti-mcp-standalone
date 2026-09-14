@@ -162,9 +162,13 @@ export const envSchema = z.object({
   /**
    * The Ivanti role an impersonated `enduser` session opens under.
    *
-   * A tenant renames roles, so this is a setting rather than a constant, and it is resolved
-   * against the tenant's own roles at startup. The default is the role Ivanti ships for the
-   * mobile self-service portal.
+   * A tenant renames roles, so this is a setting rather than a constant. It is resolved against
+   * the person's OWN roles when `act_as` opens their session — per call, not at startup: a name
+   * this tenant does not use is reported in that call's `roleNote` and the session keeps whichever
+   * role Ivanti made active. `ENDUSER_BUSINESS_OBJECTS` is the one setting checked against the
+   * tenant at boot, and the asymmetry is deliberate: a wrong object silently narrows what an end
+   * user may do, where a wrong role says so on the first call. The default is the role Ivanti
+   * ships for the mobile self-service portal.
    *
    * It is named rather than derived on purpose. Ivanti flags its self-service roles
    * (`SelfServiceRole` on `GetUserData.userRoleList`), but several qualify and they are not

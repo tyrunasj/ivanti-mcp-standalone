@@ -49,10 +49,12 @@ try {
         break;
       }
     }
-    // The copyright line is the part that must travel; the permission text is
-    // identical across every copy of a given licence and is included once below.
+    // The copyright line is the part that varies per component; the permission text is identical
+    // across every copy of a given licence and IS included once below — which it was not, for a
+    // release. `hasText` was computed and never read, the document ended at the component table,
+    // and the two size prunes deleted the per-package LICENSE.md that was the only other copy.
     const copyright = (text.match(/^.*copyright.*$/im) ?? [''])[0].trim();
-    pkgs.push({ name: m.name ?? d, version: m.version ?? '', licence, copyright, hasText: text !== '' });
+    pkgs.push({ name: m.name ?? d, version: m.version ?? '', licence, copyright, text });
   }
 
   const byLicence = new Map();
@@ -82,6 +84,7 @@ try {
     '|---|---|---|---|',
     ...pkgs.map((p) => `| \`${p.name}\` | ${p.version} | ${p.licence} | ${p.copyright.replace(/\|/g, '\\|') || '—'} |`),
     '',
+    ...licenceTexts(pkgs),
   ];
   const body = lines.join('\n');
 
@@ -98,4 +101,27 @@ try {
   }
 } finally {
   rmSync(stage, { recursive: true, force: true });
+}
+
+/**
+ * The permission text of each licence, once.
+ *
+ * MIT requires "this permission notice shall be included in all copies"; the BSD licences require
+ * their conditions and disclaimer. Neither is satisfied by a copyright line alone. One
+ * representative copy per licence id keeps the file readable — the texts are identical across
+ * components, which is the whole reason the header said "included once below".
+ */
+function licenceTexts(pkgs) {
+  const chosen = new Map();
+  for (const p of pkgs) {
+    if (p.text === '' || chosen.has(p.licence)) continue;
+    chosen.set(p.licence, p);
+  }
+  if (chosen.size === 0) return [];
+
+  const lines = ['## Licence texts', '', 'One copy of each licence below, as its terms require.', ''];
+  for (const [licence, p] of [...chosen.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    lines.push(`### ${licence}`, '', `As distributed with \`${p.name}\`.`, '', '```', p.text, '```', '');
+  }
+  return lines;
 }

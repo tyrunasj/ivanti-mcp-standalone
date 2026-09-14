@@ -40,7 +40,9 @@ server:
     businessObjects: []
     quickActions: []
     # The self-service role an impersonated enduser session opens under.
-    # Empty = the server default, SelfServiceMobile. Checked against the tenant.
+    # Empty = the server default, SelfServiceMobile. Resolved per person when
+    # act_as runs, not at startup: a name this tenant does not use is reported
+    # in that call's roleNote rather than refusing the boot.
     role: ""
 
 ivanti:

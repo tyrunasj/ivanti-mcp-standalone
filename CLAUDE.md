@@ -22,8 +22,10 @@ considered and turned down for stated reasons.
 
 **Every stage is in.** **Forty-one tools in `full` mode, thirty-four in `enduser`**:
 `get_version`, `act_as`, the read tier, the retrievable pair `search` / `fetch`, the writes, B5's
-session-gated workflow surface, B6's service catalog and attachments, and `switch_role` where
-impersonation is configured. Six reference documents
+session-gated workflow surface, B6's service catalog and attachments, and `switch_role` in `full`
+mode — registered there unconditionally, with a refusal that distinguishes "this deployment does
+not open Ivanti sessions" from "nobody is being acted for yet", which is why both shapes register
+it. Six reference documents
 are served as MCP resources. What is left is A4's Entra row, which is a deployment prerequisite
 rather than code.
 
@@ -142,12 +144,24 @@ tools, and they cost nothing until something reads them.
 anything whose absence would **mislead** stays in the tool description that needs it — that
 `$filter` functions are silently dropped, that zero rows means zero records, that a compact field
 set was returned. Descriptions carry what is dangerous not to know; resources carry what is
-expensive to repeat. Measured on a live `full`/admin server: **37,991 characters of description**
-across 41 tools — the widest manifest, with impersonation on, since `act_as` says more when it
-can act as the person — sent on every session, against 24,023 characters across the six
-reference documents, fetched only on demand. **The manifest budget has 98 characters of
-headroom** (117 with impersonation on, whose descriptions are shorter) and the longest single description is 1,948 of a 2,000 cap, so the next addition
-fails the build by design — which is now imminent rather than theoretical.
+expensive to repeat.
+
+**The figures, measured rather than restated.** `src/tools/description-budget.test.ts` reports
+them in the message of an assertion that cannot fail, across mode × impersonation — read them
+from there rather than from here, which is how this paragraph came to have them backwards:
+
+| deployment | total | tools | longest description |
+|---|---|---|---|
+| `full`, no impersonation | **37,902** | 41 | `run_quick_action` at **1,948** |
+| `full`, impersonating | 37,693 | 41 | `search` at 1,882 |
+| `enduser`, no impersonation | 33,975 | 34 | `run_quick_action` at 1,948 |
+| `enduser`, impersonating | 33,785 | 34 | `search` at 1,882 |
+
+So the widest manifest is the one WITHOUT impersonation — `act_as` and `run_quick_action` both say
+*less* when Ivanti stamps the person — leaving **98 characters** of the 38,000 budget and **52** of
+`run_quick_action`'s 2,000 cap. Against that, 24,023 characters across the six reference documents,
+fetched only on demand. The next addition fails the build by design, which is imminent rather than
+theoretical.
 
 **Resources narrow the way tools do**, and for the same reason: a document naming a tool this
 deployment does not register is worse than no document, because a model cannot tell "not
