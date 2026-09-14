@@ -94,6 +94,20 @@ products, and mixing them is how an employee ends up holding an analyst's tool s
 and a symptom→cause table. Secrets take a `_FILE` suffix (`IVANTI_API_KEY_FILE`,
 `BEARER_TOKEN_FILE`); setting both forms is an error rather than a precedence question.
 
+**To start from something that runs, not from a blank file**, copy one of the eight in
+[`examples/env/`](examples/env) — stdio, loopback HTTP, shared bearer, `enduser`, OAuth against
+Entra or Keycloak, both transports at once, and a tier-capped one for reproducing what a
+customer without admin rights gets:
+
+```bash
+cp examples/env/shared-bearer.env .env
+```
+
+They are checked rather than merely written: `pnpm check:examples` drives every one through the
+real `loadConfig`, the same code path the server runs at boot, and CI fails if any would exit
+`78`. An example that does not load is worse than no example, because it gets copied before it
+gets read.
+
 **Transport and access are separate axes.** `STDIO_TRANSPORT_ON` and `HTTP_TRANSPORT_ON` are
 independent toggles and both may be on; `AUTH_MODE` (`none` | `bearer` | `oauth`) applies only
 to HTTP. An `AUTH_MODE` set while HTTP is off is an error rather than a no-op.
@@ -196,6 +210,7 @@ tools/    tool-definition -> register-tools (which tools this mode exposes)
 | | |
 |---|---|
 | [`docs/handbook.html`](docs/handbook.html) | the Handbook — interactive reference and configurator; open it in a browser, start here |
+| [`examples/env/`](examples/env) | eight working configurations, one per deployment shape — CI proves they load |
 | [`docs/deployment.md`](docs/deployment.md) | the three shapes, the Helm chart's guards, cutting a release |
 | [`docs/configuration.md`](docs/configuration.md) | configuring against a real IdP, per provider, with a symptom→cause table |
 | [`docs/initial-design.md`](docs/initial-design.md) | decisions and why — including, in §10, what was rejected and for what reason |

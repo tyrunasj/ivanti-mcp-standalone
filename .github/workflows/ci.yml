@@ -42,6 +42,11 @@ jobs:
       - run: pnpm build
         if: ${{ !cancelled() }}
 
+      # Examples get copied before they get read, so one that exits 78 is worse
+      # than none. Drives the real loadConfig; needs dist/, hence after build.
+      - run: pnpm check:examples
+        if: ${{ !cancelled() }}
+
       # The tarball is a release artefact, but building it here means a change that
       # breaks relocation is caught on the PR rather than at tag time.
       - run: ./scripts/release-tarball.sh "${RUNNER_TEMP}/release"
