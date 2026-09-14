@@ -63,7 +63,15 @@ export function field(name: string, overrides: Partial<EntityField> = {}): Entit
 }
 
 export function entityFixture(name: string, overrides: Partial<EntityMetadata> = {}): EntityMetadata {
-  return { name, fields: [field('RecId'), field('Subject')], relationships: [], ...overrides };
+  // RecId, Subject and Status are on every Business Object a tool is likely to be driven
+  // against here, so a narrow fixture still resembles a tenant rather than refusing field names
+  // a real object would have.
+  return {
+    name,
+    fields: [field('RecId'), field('Subject'), field('Status')],
+    relationships: [],
+    ...overrides,
+  };
 }
 
 const fixtureLogger = createLogger('error', () => undefined);
