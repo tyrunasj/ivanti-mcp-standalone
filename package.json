@@ -1,6 +1,6 @@
 {
   "name": "SYNERGY | Ivanti MCP",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,7 +16,9 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest watch",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "version:sync": "node scripts/check-version.mjs --sync",
+    "version:check": "node scripts/check-version.mjs --check"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

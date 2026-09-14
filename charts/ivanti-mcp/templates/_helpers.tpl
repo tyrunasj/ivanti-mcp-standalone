@@ -2,11 +2,22 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+Resource name. A release whose name already carries the chart name is used as-is,
+so `helm install ivanti-mcp` yields `ivanti-mcp` rather than `ivanti-mcp-ivanti-mcp`
+and `ivanti-mcp-selfservice` stays itself — one release is one audience, and the
+audience belongs in the release name. Anything else is prefixed as usual.
+*/}}
 {{- define "ivanti-mcp.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s" .Release.Name (include "ivanti-mcp.name" .) | trunc 63 | trimSuffix "-" -}}
+{{- $name := include "ivanti-mcp.name" . -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

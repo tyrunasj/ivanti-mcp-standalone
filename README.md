@@ -152,7 +152,7 @@ docker compose -f docker/compose.yaml up --build
 
 Three stages: build → production dependencies → a distroless runtime
 (`gcr.io/distroless/nodejs22-debian12`, uid 65532, no shell, no package manager).
-**56.7 MB to pull** on amd64, 56.3 MB on arm64 — measured on the published manifest, of which
+**55.4 MB to pull** on amd64, 55.0 MB on arm64 — measured on the published manifest, of which
 52.6 MB is the distroless Node base and the rest is ours. `docker images` reports ~235 MB, which is
 the uncompressed size on disk, not the download.
 
