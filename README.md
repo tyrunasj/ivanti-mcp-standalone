@@ -8,12 +8,19 @@ tenant's own quick actions, reading approvals — over stdio or authenticated HT
 as MCP resources. Ships as a container image, a Helm chart and a self-contained tarball, all
 built from one commit.
 
-> ### 📘 [Field guide →](https://claude.ai/code/artifact/9fe31c50-b01a-4b3f-8a6d-49c520e181c9)
+> ### 📘 The Handbook — [`docs/handbook.html`](docs/handbook.html)
 >
-> Interactive: every setting, every tool with its real description and annotations, the
-> capability tiers, the Ivanti traps — and a **configurator** that answers six questions and
-> writes the `.env`, the `docker run`, the `compose.yaml`, the Helm `values.yaml` and the
-> systemd unit for you.
+> A single self-contained page: every setting, every tool with its real description and
+> annotations, the capability tiers, the Ivanti traps — and a **configurator** that answers six
+> questions and writes the `.env`, the `docker run`, the `compose.yaml`, the Helm `values.yaml`
+> and the systemd unit for you.
+>
+> It is one file with no build step and no network dependency beyond web fonts, so **open it
+> from a clone** — `open docs/handbook.html`, or serve the directory — rather than from
+> GitHub's file view, which shows the source instead of rendering it.
+>
+> It covers *running* the server from a published build. Everything about working on the source —
+> the toolchain, the tests, building the image yourself — is in this file instead.
 
 ---
 
@@ -33,7 +40,7 @@ Three Ivanti surfaces, and the authentication is not uniform — which is why th
 | ASMX services | SID cookie + CSRF token | forms, picklists, quick actions, service requests |
 | `/HEAT/AdminUI/` | an admin-rights key | the complete Business Object catalog — **optional**, and everything built on it degrades instead of breaking |
 
-## Quick start
+## Quick start, from source
 
 Needs Node 22 and pnpm. A desktop client over stdio needs no authentication at all — the
 credential is the ability to run the process.
@@ -46,6 +53,8 @@ pnpm build && pnpm start
 
 The server **fails closed**: an incomplete configuration exits `78` (`EX_CONFIG`) and prints
 every problem at once rather than the first.
+
+To run it without a clone at all, take a published build — see below.
 
 ## Deploy
 
@@ -131,6 +140,39 @@ pnpm build        # -> dist/
 `typecheck` is not redundant with `build`: the build config excludes tests, so `typecheck` is
 the only thing that type-checks the suite.
 
+### Building the image yourself
+
+Everything container-related lives in `docker/`, but **the build context is the repository
+root** — `.dockerignore` is at the root because that is where the classic builder looks for it.
+
+```bash
+docker build -f docker/Dockerfile -t ivanti-mcp .
+docker compose -f docker/compose.yaml up --build
+```
+
+Three stages: build → production dependencies → a distroless runtime
+(`gcr.io/distroless/nodejs22-debian12`, uid 65532, no shell, no package manager).
+**56.7 MB to pull** on amd64, 56.3 MB on arm64 — measured on the published manifest, of which
+52.6 MB is the distroless Node base and the rest is ours. `docker images` reports ~235 MB, which is
+the uncompressed size on disk, not the download.
+
+Alpine is not smaller: `node:22-alpine` is 57.7 MB compressed, and it brings a shell and a package
+manager with it. The deps stage deletes `*.d.ts`, `*.md` and `*.map` from `node_modules` — 10 MB of
+28, none of it read by a running process, since source maps need `--enable-source-maps` and the
+image does not pass it. LICENCE files stay, because the notices have to travel with the copy.
+
+- **pnpm's symlinked `node_modules` does not survive a `COPY` between stages.** The dependency
+  stage installs with `--node-linker=hoisted` so the layout is real directories. The release
+  tarball (`scripts/release-tarball.sh`) mirrors that stage for the same reason.
+- **`package.json` ships next to `dist/`.** `src/version.ts` reads it at startup and the server
+  refuses to start without it, rather than reporting a placeholder version.
+- **The health check is a Node script** (`docker/healthcheck.mjs`) — a distroless image has no
+  shell and no curl.
+
+`docker/compose.yaml` builds from source and is for working on the server. To *run* a published
+build with compose, use the Handbook's configurator, which emits a compose file pinned to the
+published image instead of a build context.
+
 Composition runs one way — `index.ts` loads config, builds the server, then picks a transport.
 Nothing lower in the stack reads `process.env`.
 
@@ -153,7 +195,7 @@ tools/    tool-definition -> register-tools (which tools this mode exposes)
 
 | | |
 |---|---|
-| [Field guide](https://claude.ai/code/artifact/9fe31c50-b01a-4b3f-8a6d-49c520e181c9) | interactive reference and configurator — start here |
+| [`docs/handbook.html`](docs/handbook.html) | the Handbook — interactive reference and configurator; open it in a browser, start here |
 | [`docs/deployment.md`](docs/deployment.md) | the three shapes, the Helm chart's guards, cutting a release |
 | [`docs/configuration.md`](docs/configuration.md) | configuring against a real IdP, per provider, with a symptom→cause table |
 | [`docs/initial-design.md`](docs/initial-design.md) | decisions and why — including, in §10, what was rejected and for what reason |

@@ -141,8 +141,11 @@ tools, and they cost nothing until something reads them.
 anything whose absence would **mislead** stays in the tool description that needs it — that
 `$filter` functions are silently dropped, that zero rows means zero records, that a compact field
 set was returned. Descriptions carry what is dangerous not to know; resources carry what is
-expensive to repeat. Today that is ~19k characters of description sent on every `tools/list`
-against ~19k of reference fetched on demand.
+expensive to repeat. Measured on a live `full`/admin server: **37,625 characters of description**
+across 40 tools (plus 28,906 of argument schema, so `tools/list` is 76,817 characters of JSON)
+sent on every session, against 24,023 characters across the six reference documents, fetched
+only on demand. **The manifest budget has 375 characters of headroom** and the longest single
+description is 1,948 of a 2,000 cap, so the next addition fails the build by design.
 
 **Resources narrow the way tools do**, and for the same reason: a document naming a tool this
 deployment does not register is worse than no document, because a model cannot tell "not
@@ -167,7 +170,11 @@ docker compose -f docker/compose.yaml up
 `.dockerignore` stays at the root: that is where the context is and where the classic builder
 looks for it. Three stages:
 build → production dependencies → **distroless** runtime (`gcr.io/distroless/nodejs22-debian12`,
-uid 65532, no shell, no package manager). 245 MB.
+uid 65532, no shell, no package manager). **~56 MB pulled** — 52.6 MB of which is the base —
+against ~235 MB uncompressed on disk, which is the number `docker images` prints. The deps stage
+deletes `*.d.ts`, `*.md` and `*.map` from `node_modules` (10 MB of 28): none is read by a running
+process, since source maps need `--enable-source-maps` and this image does not pass it. LICENCE
+files stay. `scripts/release-tarball.sh` mirrors the prune, which is why the tarball is 3.1 MB.
 
 - **pnpm's symlinked `node_modules` does not survive a `COPY` between stages.** The dependency
   stage installs with `--node-linker=hoisted` so the layout is real directories.
