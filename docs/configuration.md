@@ -29,7 +29,7 @@ the token was issued for them. A reasonable reading is that `aud` will contain y
 
 | IdP | What lands in `aud` |
 |---|---|
-| Entra ID | the Application ID URI, e.g. `api://<app-guid>` |
+| Entra ID | **depends on the token version.** v2.0: the API's client id, a bare GUID. v1.0: the Application ID URI, e.g. `api://<app-guid>`. `requestedAccessTokenVersion` on the app registration decides which |
 | Zitadel | a numeric project or client id |
 | Okta | the authorization server's audience setting |
 | Keycloak | typically the client id |
@@ -101,8 +101,10 @@ decide whether it works, and three of them default wrong for this use.
 > **This is not optional and cannot be worked around.** Two requirements meet:
 >
 > - the **client** validates that the RFC 9728 `resource` equals the endpoint it connected to;
-> - **Entra** requires `resource` to be a registered Application ID URI, and permits only
->   `api://<appId>` or HTTPS on a domain in the tenant's verified list.
+> - **Entra** requires `resource` to be a registered Application ID URI. Under the `api://`
+>   scheme a GUID must match the app id or the tenant id, and an arbitrary string must sit on a
+>   verified custom domain or the tenant's initial domain; `api://<appId>` is the recommended
+>   form. HTTPS is permitted on a domain in the tenant's verified list.
 >
 > So the MCP server's own URL must *be* the Application ID URI. `http://localhost:3000/mcp` can
 > never be one, which means **Entra cannot be tested against a local server** — no override

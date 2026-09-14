@@ -357,13 +357,14 @@ img  { max-width: 100%; }
       <li><a href="#deploy"><span class="n">03</span>Deploy</a></li>
       <li><a href="#config"><span class="n">04</span>Configure</a></li>
       <li><a href="#env"><span class="n">05</span>Every setting</a></li>
-      <li><a href="#tiers"><span class="n">06</span>Capability tiers</a></li>
-      <li><a href="#modes"><span class="n">07</span>Audience modes</a></li>
-      <li><a href="#tools"><span class="n">08</span>Tool reference</a></li>
-      <li><a href="#resources"><span class="n">09</span>Reference docs</a></li>
-      <li><a href="#traps"><span class="n">10</span>Ivanti traps</a></li>
-      <li><a href="#tokens"><span class="n">11</span>What a session costs</a></li>
-      <li><a href="#trouble"><span class="n">12</span>Troubleshooting</a></li>
+      <li><a href="#oauth"><span class="n">06</span>OAuth providers</a></li>
+      <li><a href="#tiers"><span class="n">07</span>Capability tiers</a></li>
+      <li><a href="#modes"><span class="n">08</span>Audience modes</a></li>
+      <li><a href="#tools"><span class="n">09</span>Tool reference</a></li>
+      <li><a href="#resources"><span class="n">10</span>Reference docs</a></li>
+      <li><a href="#traps"><span class="n">11</span>Ivanti traps</a></li>
+      <li><a href="#tokens"><span class="n">12</span>What a session costs</a></li>
+      <li><a href="#trouble"><span class="n">13</span>Troubleshooting</a></li>
     </ol>
   </nav>
 
@@ -486,7 +487,7 @@ sudo systemctl enable --now ivanti-mcp</code></pre></div>
 
       <h3>B. A container</h3>
       <div class="codewrap"><pre><code>docker pull tyrunas/ivanti-mcp:0.1.0</code></pre></div>
-      <p>Multi-arch (<code>linux/amd64</code>, <code>linux/arm64</code>), <strong>56.7 MB to pull</strong> on amd64 and 56.3 MB on arm64 — measured on the published manifest, of which 52.6 MB is the distroless Node base — uid 65532. Three stages: build → production dependencies → a distroless runtime (<code>gcr.io/distroless/nodejs22-debian12</code>) with no shell and no package manager — nothing to exec into and nothing to install from, which is the point. It runs under <code>--read-only</code> with all capabilities dropped and writes nothing to disk.</p>
+      <p>Multi-arch (<code>linux/amd64</code>, <code>linux/arm64</code>), <strong>55.4 MB to pull</strong> on amd64 and 55.0 MB on arm64 — measured on the published manifest, of which 52.6 MB is the distroless Node base — uid 65532. Three stages: build → production dependencies → a distroless runtime (<code>gcr.io/distroless/nodejs22-debian12</code>) with no shell and no package manager — nothing to exec into and nothing to install from, which is the point. It runs under <code>--read-only</code> with all capabilities dropped and writes nothing to disk.</p>
       <p><b>Tags:</b> <code>1.2.3</code>, <code>1.2</code>, <code>1</code> and <code>latest</code> for a final release; a prerelease publishes its exact version only, so nobody pulls a release candidate by accident. Every <code>main</code> build also pushes <code>main</code> and <code>sha-&lt;short&gt;</code>. Pin a digest in production.</p>
       <p>Images are signed with cosign, keylessly — there is no key to rotate or leak:</p>
       <div class="codewrap"><pre><code>cosign verify tyrunas/ivanti-mcp:0.1.0 \
@@ -497,7 +498,7 @@ sudo systemctl enable --now ivanti-mcp</code></pre></div>
       <div class="codewrap"><pre><code>helm install ivanti-mcp oci://registry-1.docker.io/tyrunas/ivanti-mcp \
   --version 0.1.0 --namespace ivanti --create-namespace \
   --set server.publicUrl=https://mcp.example.com/mcp \
-  --set 'server.trustedOrigins={https://claude.ai}' \
+  --set 'server.trustedOrigins={https://mcp-client.example.com}' \
   --set ivanti.baseUrl=https://your-tenant.example.com \
   --set secrets.existingSecret=ivanti-mcp-secrets</code></pre></div>
       <p>The chart forces <code>STDIO_TRANSPORT_ON=false</code>, <code>HTTP_TRANSPORT_ON=true</code> and <code>MCP_BIND=0.0.0.0</code>. None of those is a choice in a pod, so none of them is a value you can set.</p>
@@ -628,6 +629,7 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
             <button type="button" class="tab" data-tab="run" role="tab" aria-selected="false">docker run</button>
             <button type="button" class="tab" data-tab="compose" role="tab" aria-selected="false">compose.yaml</button>
             <button type="button" class="tab" data-tab="values" role="tab" aria-selected="false">values.yaml</button>
+            <button type="button" class="tab" data-tab="helm" role="tab" aria-selected="false">helm install</button>
             <button type="button" class="tab" data-tab="systemd" role="tab" aria-selected="false">systemd</button>
           </div>
           <p class="tabnote" id="tabNote"></p>
@@ -651,8 +653,73 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
 
     <hr class="hr">
 
+    <section id="oauth">
+      <span class="eyebrow">06 — OAuth providers</span>
+      <h2>The only door that carries a verified identity</h2>
+      <p class="lede">Under <code>bearer</code>, everyone holding the token is the same anonymous caller. Under <code>oauth</code> the token says <em>who</em>, and the person a conversation is helping stops being a claim it makes about itself. Three settings usually do it; the difficulty is entirely in what each provider decides to put in the token.</p>
+
+      <div class="note">
+        <p><strong>The audience is not your URL, and this is the commonest reason OAuth “doesn’t work” here.</strong> The spec has clients send <code>resource=&lt;your MCP URL&gt;</code>, which reads as though <code>aud</code> will then contain that URL. <b>No mainstream provider works that way.</b> So <code>OAUTH_AUDIENCE</code> is set <em>independently</em> of <code>MCP_PUBLIC_URL</code>: it is a comma-separated list, the token's own <code>aud</code> may itself be an array, and a token is accepted when the two sets intersect. A verifier written to the spec's literal wording rejects every real token.</p>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Provider</th><th>What actually lands in <code>aud</code></th><th>The thing that will catch you</th></tr></thead>
+          <tbody>
+            <tr><td><b>Entra ID</b></td><td class="mono">depends on the token version<span class="sub">v2: the API's client-id GUID · v1: the App ID URI</span></td><td>Cannot be tested against localhost at all — see below</td></tr>
+            <tr><td><b>Zitadel</b></td><td class="mono">the client id</td><td><b>Token type defaults to Bearer</b>, which is opaque. Set <i>Auth Token Type: JWT</i> on the application</td></tr>
+            <tr><td><b>Okta</b></td><td class="mono">the authorization server's Audience</td><td>Use a <b>custom</b> authorization server — the org one issues opaque tokens</td></tr>
+            <tr><td><b>Keycloak</b></td><td class="mono">the client id</td><td>Default <code>aud</code> is <code>account</code>. Add an <b>Audience mapper</b> on the dedicated client scope</td></tr>
+            <tr><td><b>Auth0</b></td><td class="mono">the API identifier</td><td>Opaque unless a <b>Default Audience</b> is set tenant-side; its issuer ends in a <b>trailing slash</b></td></tr>
+            <tr><td><b>JumpCloud</b></td><td class="mono">the client id</td><td>No dynamic registration — pre-register and pin the client id</td></tr>
+            <tr><td><b>Google</b></td><td class="mono">—</td><td><b>Not usable.</b> Access tokens are opaque and there is no introspection endpoint</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Nearly every failure is one of two shapes. <strong>An opaque token</strong> — the server answers <i>“Access token is opaque, not a JWT”</i>, and a JWKS verifier genuinely cannot inspect one: there is no header and no signature to check. That is always a provider setting, never a server one. Or <strong>the wrong audience</strong>, where the token is perfectly valid and simply was not minted for you. Decode it and read its real <code>aud</code> before changing anything else.</p>
+
+      <h3>Entra is the exception, in four separate ways</h3>
+      <p>It is the majority deployment and the one that behaves least like the others. None of these is something you can configure your way around.</p>
+      <ul class="plain">
+        <li><strong>Its audience depends on the token version you asked for.</strong> With <code>requestedAccessTokenVersion: 2</code> the <code>aud</code> is the API's <em>client id</em> — a bare GUID. On v1.0 tokens it is the Application ID URI, <code>api://&lt;appId&gt;</code>. Both are correct; they are different strings, and putting the wrong one in <code>OAUTH_AUDIENCE</code> produces a valid token that this server refuses. Check the registration before assuming which you have.</li>
+        <li><strong>It cannot be tested against a local server.</strong> Entra requires the <code>resource</code> to be a registered Application ID URI, and a conforming client separately insists the <code>resource</code> equals the endpoint it connected to. <code>http://localhost:3000/mcp</code> can never satisfy both — <b>deploy to a public HTTPS name on a verified domain first</b>, and then the App ID URI, <code>MCP_PUBLIC_URL</code> and the endpoint are one identical string. The <code>api://</code> scheme takes a GUID that must match the app or tenant id, or an arbitrary string that must sit on a verified custom domain or the tenant's initial domain; <code>api://&lt;appId&gt;</code> is the recommended form.</li>
+        <li><strong>Discovery only resolves on the third probe.</strong> Its issuer carries a path (<code>…/{tenant}/v2.0</code>), and the two path-insertion forms answer 404 — only appending <code>/.well-known/openid-configuration</code> to the issuer works. An implementation that tries fewer candidates cannot reach Entra at all.</li>
+        <li><strong>It publishes no <code>code_challenge_methods_supported</code></strong> — alone among ten providers measured here — while supporting PKCE S256 in practice. The spec says a client MUST refuse to proceed when that field is absent, so whether a given client tolerates it is decided on the client side and cannot be fixed from this end.</li>
+      </ul>
+      <div class="note calm">
+        <p>One app registration is enough: it can expose the API and act as the client. And if <i>Custom domain names</i> refuses to verify while your DNS is demonstrably correct, the domain is almost certainly claimed by another Microsoft tenant — often an unmanaged one created when somebody signed up for a free service using an address at that domain. That is a takeover case, not a DNS problem.</p>
+      </div>
+
+      <h3>What to set</h3>
+      <p>Discovery is the default: give it the issuer and the authorization-server metadata is fetched at startup, in the spec's probe order.</p>
+      <div class="codewrap"><pre><code><span class="key">AUTH_MODE</span>=oauth
+<span class="key">OAUTH_ISSUER</span>=https://login.microsoftonline.com/&lt;tenant-id&gt;/v2.0
+<span class="key">OAUTH_AUDIENCE</span>=&lt;the API's client id, for a v2.0 token&gt;
+
+<span class="cmt"># Optional. Setting it skips discovery entirely — which is what you want when a</span>
+<span class="cmt"># provider publishes its metadata somewhere the spec's probe order does not look.</span>
+<span class="key">OAUTH_JWKS_URI</span>=https://login.microsoftonline.com/&lt;tenant-id&gt;/discovery/v2.0/keys
+
+<span class="cmt"># Which claim names the person. Entra sends preferred_username or upn, most</span>
+<span class="cmt"># others send email, and sub is opaque. Unset, a probe order is used.</span>
+<span class="key">OAUTH_IDENTITY_CLAIM</span>=preferred_username</code></pre></div>
+
+      <div class="note warn">
+        <p><strong>Assume the provider does not support dynamic client registration.</strong> Half of those surveyed do not, so a pre-registered client with a pinned client id is the documented path. Pinning also closes a Zitadel-specific trap: registration there creates a fresh application each time, which inherits the instance default of <b>Bearer</b> — so flipping one application to JWT lasts exactly until the next re-authentication makes another.</p>
+      </div>
+
+      <p><strong>The redirect URI is not ours.</strong> It is where the provider sends the user back after login, so it belongs to the client application; this server neither hosts one nor ever sees it. <code>MCP_PUBLIC_URL</code> is always this server's own externally visible address. Confusing the two is the second-commonest setup failure — and a loopback redirect is not a “dev mode”, it is simply what a client running on somebody's own machine legitimately uses.</p>
+
+      <div class="note calm">
+        <p>This server verifies tokens with JWKS and nothing else. It never mints a token, serves no registration endpoint and hosts no client metadata document: registration is strictly between the client and the authorization server. Token introspection is deliberately deferred rather than forgotten — across ten providers measured, <code>jwks_uri</code> was universal while introspection was absent on four, Entra included.</p>
+      </div>
+    </section>
+
+    <hr class="hr">
+
     <section id="tiers">
-      <span class="eyebrow">06 — Capability tiers</span>
+      <span class="eyebrow">07 — Capability tiers</span>
       <h2>What the credential can reach</h2>
       <p>Probed once at startup, because tools are selected once. Each rung only ever <em>adds</em> — a lower tier is not a failure, and refusing to start would punish exactly the customers who cannot hand an MCP server an admin key.</p>
       <div class="ladder">
@@ -681,7 +748,7 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
     <hr class="hr">
 
     <section id="modes">
-      <span class="eyebrow">07 — Audience modes</span>
+      <span class="eyebrow">08 — Audience modes</span>
       <h2>full and enduser are different products</h2>
       <p>Chosen at startup; never mix audiences in one instance. Tool narrowing happens at registration, never inside a handler — an unregistered tool never appears in <code>tools/list</code>, so the model cannot call it at all.</p>
       <div class="tablewrap">
@@ -709,7 +776,7 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
     <hr class="hr">
 
     <section id="tools">
-      <span class="eyebrow">08 — Tool reference</span>
+      <span class="eyebrow">09 — Tool reference</span>
       <h2>The surface, tool by tool</h2>
       <p>Read from the running server. Descriptions are what the model actually receives; the badges are the MCP annotations that tell a client how much care a call deserves.</p>
       <div class="toolbar">
@@ -727,7 +794,7 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
     <hr class="hr">
 
     <section id="resources">
-      <span class="eyebrow">09 — Reference docs</span>
+      <span class="eyebrow">10 — Reference docs</span>
       <h2>Six documents, fetched on demand</h2>
       <p>Served as MCP resources rather than baked into tool descriptions. Descriptions carry what is <em>dangerous not to know</em>; resources carry what is <em>expensive to repeat</em> — and cost nothing until something reads them.</p>
       <div class="reslist" id="resList"></div>
@@ -737,7 +804,7 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
     <hr class="hr">
 
     <section id="traps">
-      <span class="eyebrow">10 — Ivanti traps</span>
+      <span class="eyebrow">11 — Ivanti traps</span>
       <h2>Behaviours the server absorbs for you</h2>
       <p>Ivanti has a habit of answering successfully while doing nothing. These are handled inside the server — they are here so that a surprising answer is recognisable rather than alarming.</p>
       <div class="tablewrap">
@@ -762,7 +829,7 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
     <hr class="hr">
 
     <section id="tokens">
-      <span class="eyebrow">11 — What a session costs</span>
+      <span class="eyebrow">12 — What a session costs</span>
       <h2>Where the context window goes</h2>
       <p class="lede">Every figure below is a character count read off this running server, not an estimate. Token columns divide by four, which is the usual rough ratio for English and a little pessimistic for JSON — treat the characters as exact and the tokens as indicative.</p>
 
@@ -821,14 +888,14 @@ git tag v0.2.0 &amp;&amp; git push origin v0.2.0</code></pre></div>
       </div>
       <p>Two thirds of the calls disappeared. A wasted call costs twice — the request and a useless response that stays in the window — so manifest quality is a token concern before it is a correctness one. The exercise found two access holes, a wrong error gloss two agents hit independently, and the most dangerous sentence in the manifest: “an empty result genuinely means no match”, disproved by a keyword search that found none of 344 matching files.</p>
       <div class="note calm">
-        <p><strong>One honest caveat about those runs.</strong> The agents were meant to see nothing but the tool manifest, and the harness injected the repository's own <code>CLAUDE.md</code> into each of them regardless. The defects they found are real — they were reproduced and fixed — but the waste percentages are a floor, not a clean measurement.</p>
+        <p><strong>One honest caveat about those runs.</strong> The agents were meant to see nothing but the tool manifest, and the harness injected the repository's own agent-orientation document into each of them regardless. The defects they found are real — they were reproduced and fixed — but the waste percentages are a floor, not a clean measurement.</p>
       </div>
     </section>
 
     <hr class="hr">
 
     <section id="trouble">
-      <span class="eyebrow">12 — Troubleshooting</span>
+      <span class="eyebrow">13 — Troubleshooting</span>
       <h2>Symptom to cause</h2>
       <div class="tablewrap">
         <table>
@@ -927,7 +994,7 @@ function buildEnvText(s) {
            "MCP_BIND=" + (s.bind === "all" ? "0.0.0.0" : "127.0.0.1"),
            "MCP_PORT=3000",
            "MCP_PUBLIC_URL=" + (s.bind === "all" ? "https://mcp.example.com/mcp" : "http://127.0.0.1:3000/mcp"),
-           "TRUSTED_ORIGINS=https://claude.ai");
+           "TRUSTED_ORIGINS=https://mcp-client.example.com");
     if (s.auth === "bearer")
       L.push("", s.files ? "BEARER_TOKEN_FILE=/run/secrets/bearer-token" : "BEARER_TOKEN=change-me");
     if (s.auth === "oauth")
@@ -1016,7 +1083,7 @@ function buildValuesText(s) {
   L.push("", "image:", "  repository: tyrunas/ivanti-mcp", '  tag: "0.1.0"', "",
          "server:",
          "  publicUrl: " + (s.bind === "all" ? "https://mcp.example.com/mcp" : "http://127.0.0.1:3000/mcp"),
-         "  trustedOrigins:", "    - https://claude.ai",
+         "  trustedOrigins:", "    - https://mcp-client.example.com",
          "  mode: " + s.mode,
          "  authMode: " + s.auth);
   if (s.mode === "enduser")
@@ -1056,6 +1123,61 @@ function buildValuesText(s) {
   return L.join("\n");
 }
 
+/* ── helm install — the command that applies the values above ─────────── */
+const CHART = "oci://registry-1.docker.io/tyrunas/ivanti-mcp";
+const CHART_VERSION = "0.1.0";
+
+function buildHelmText(s) {
+  // One release is one tenant AND one audience, so the audience is in the name:
+  // a cluster running both ends up with two releases, not one with a flag.
+  const rel = s.mode === "enduser" ? "ivanti-mcp-selfservice" : "ivanti-mcp";
+  const ns = "ivanti";
+  const L = [];
+
+  if (s.transport === "stdio")
+    L.push("# Kubernetes is HTTP-only — a pod has nobody to hold the other end of a",
+           "# pipe. The chart sets the transport itself, so the stdio answer above",
+           "# does not reach it. Everything else does.", "");
+  if (s.auth === "none" && s.bind === "all")
+    L.push("# This WILL be refused. The chart will not render authMode=none with an",
+           "# ingress enabled: it would publish the whole tool surface unauthenticated.", "");
+
+  L.push("kubectl create namespace " + ns, "");
+
+  if (s.files) {
+    L.push("# Mounted at /run/secrets, mode 0400, with fsGroup 65532 so the image's",
+           "# own user can read them. Never --set the key: that puts it in Helm history.",
+           "kubectl -n " + ns + " create secret generic ivanti-mcp-secrets \\",
+           "  --from-file=ivanti-api-key=./secrets/ivanti-api-key"
+             + (s.auth === "bearer" ? " \\" : ""));
+    if (s.auth === "bearer") L.push("  --from-file=bearer-token=./secrets/bearer-token");
+    L.push("");
+  }
+
+  L.push("# The chart and the image come out of the same tagged release, so the",
+         "# two cannot drift apart.",
+         "helm install " + rel + " " + CHART + " \\",
+         "  --version " + CHART_VERSION + " \\",
+         "  --namespace " + ns + " \\",
+         "  -f values.yaml",
+         "",
+         "# Did it come up?",
+         "kubectl -n " + ns + " rollout status deploy/" + rel,
+         "kubectl -n " + ns + " logs deploy/" + rel + " | head -20   # lists every tool this key reaches");
+
+  if (s.bind === "all")
+    L.push("curl -sf https://mcp.example.com/health");
+  else
+    L.push("kubectl -n " + ns + " port-forward svc/" + rel + " 3000:3000 &",
+           "curl -sf localhost:3000/health");
+
+  L.push("",
+         "# Later, same command with the same values file.",
+         "helm upgrade " + rel + " " + CHART + " \\",
+         "  --version " + CHART_VERSION + " --namespace " + ns + " -f values.yaml");
+  return L.join("\n");
+}
+
 /* ── systemd — a service on a plain Node host ─────────────────────────── */
 const UNIT = "# Ivanti MCP as a system service on a plain Node 22 host.\n#\n#   sudo useradd --system --home /opt/ivanti-mcp --shell /usr/sbin/nologin ivanti-mcp\n#   sudo install -d -o ivanti-mcp -g ivanti-mcp /opt/ivanti-mcp /etc/ivanti-mcp\n#   sudo tar xzf ivanti-mcp-<version>.tar.gz --strip-components=1 -C /opt/ivanti-mcp\n#   sudo chown -R ivanti-mcp:ivanti-mcp /opt/ivanti-mcp\n#   sudo install -m 0640 -o root -g ivanti-mcp .env /etc/ivanti-mcp/env\n#   sudo systemctl enable --now ivanti-mcp\n#\n# The unit mirrors the container's posture: unprivileged, read-only filesystem,\n# no capabilities, nothing written to disk.\n\n[Unit]\nDescription=Ivanti MCP server\nDocumentation=https://github.com/tyrunasj/ivanti-mcp-standalone\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=ivanti-mcp\nGroup=ivanti-mcp\nWorkingDirectory=/opt/ivanti-mcp\n\n# Secrets live here, not in the unit: a unit file is world-readable and shows up\n# in `systemctl cat`. Mode 0640 root:ivanti-mcp keeps it out of everyone else's\n# reach. Set STDIO_TRANSPORT_ON=false in it \u2014 see the note below.\nEnvironmentFile=/etc/ivanti-mcp/env\n\nExecStart=/usr/bin/node /opt/ivanti-mcp/dist/index.js\n\nRestart=on-failure\nRestartSec=5s\n# Exit 78 is EX_CONFIG: the configuration is wrong and will be wrong again on the\n# next start, so restarting is just noise in the journal.\nRestartPreventExitStatus=78\n\n# Structured JSON on stderr. stdout carries the JSON-RPC stream under the stdio\n# transport and the application never writes to it.\nStandardOutput=journal\nStandardError=journal\nSyslogIdentifier=ivanti-mcp\n\n# \u2500\u2500 Hardening \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nNoNewPrivileges=yes\nPrivateTmp=yes\nPrivateDevices=yes\nProtectSystem=strict\nProtectHome=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectKernelLogs=yes\nProtectControlGroups=yes\nProtectClock=yes\nProtectHostname=yes\nProtectProc=invisible\nRestrictNamespaces=yes\nRestrictRealtime=yes\nRestrictSUIDSGID=yes\nRestrictAddressFamilies=AF_INET AF_INET6\nLockPersonality=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nSystemCallFilter=@system-service\nSystemCallErrorNumber=EPERM\nUMask=0077\n\n# Deliberately NOT set: MemoryDenyWriteExecute=yes. Node's JIT maps pages\n# writable and then executable, so it refuses to start under that directive \u2014\n# the failure looks like a segfault rather than a policy denial.\n\n# Nothing is written to disk, so ProtectSystem=strict above needs no exception.\n# Add ReadWritePaths only if you later give it somewhere to write.\n\n[Install]\nWantedBy=multi-user.target";
 function buildUnitText(s) {
@@ -1076,6 +1198,9 @@ const NOTES = {
   values: (s) => s.transport === "stdio"
     ? "A pod has nobody to hold the other end of a pipe, so Kubernetes is HTTP-only and the chart sets the transport itself — your stdio answer does not reach it. Everything else below does."
     : "helm install … -f values.yaml. The chart refuses to render a configuration the server would reject at boot; the six guards are listed in section 03.",
+  helm: (s) => s.auth === "none" && s.bind === "all"
+    ? "As configured this is refused before anything reaches the cluster — see the comment at the top. Either put authentication in front of it, or leave the ingress off."
+    : "Run these beside the values.yaml from the previous tab. The release name carries the audience, because one release is one tenant and one audience.",
   systemd: (s) => s.transport === "http"
     ? "Install as /etc/systemd/system/ivanti-mcp.service. The configuration is not in here: it goes in /etc/ivanti-mcp/env — the .env tab — at mode 0640, root:ivanti-mcp, because systemctl cat shows a unit to everyone."
     : "Install as /etc/systemd/system/ivanti-mcp.service — but read the warning at the top first.",
@@ -1133,6 +1258,7 @@ const TABS = {
   run: (s) => [buildRunText(s), "sh"],
   compose: (s) => [buildComposeText(s), "yaml"],
   values: (s) => [buildValuesText(s), "yaml"],
+  helm: (s) => [buildHelmText(s), "sh"],
   systemd: (s) => [buildUnitText(s), "ini"],
 };
 function buildEnv() {

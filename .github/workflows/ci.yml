@@ -28,6 +28,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Catch a half-finished bump here rather than at release time: package.json,
+      # Chart.yaml version and Chart.yaml appVersion must already agree on main.
+      - run: node scripts/check-version.mjs --check
+
       # All four, and all of them even when an earlier one fails: one round trip
       # beats four. `typecheck` is not redundant with `build` — the build config
       # excludes tests and fixtures, so this is the only thing that types them.

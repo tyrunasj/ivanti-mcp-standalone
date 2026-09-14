@@ -66,8 +66,8 @@ pnpm install --frozen-lockfile && pnpm build && pnpm start
 docker pull tyrunas/ivanti-mcp:0.1.0
 ```
 
-Multi-arch (`linux/amd64`, `linux/arm64`), distroless, runs as uid 65532. **56.7 MB to pull** on
-amd64 and 56.3 MB on arm64, measured on the published manifest — 52.6 MB of that is the distroless
+Multi-arch (`linux/amd64`, `linux/arm64`), distroless, runs as uid 65532. **55.4 MB to pull** on
+amd64 and 55.0 MB on arm64, measured on the published manifest — 52.6 MB of that is the distroless
 Node base, so the server itself is the small part. The ~235 MB that `docker images` reports is the
 uncompressed on-disk size, not the download.
 There is no shell and no package manager in it — nothing to exec into and nothing to
@@ -176,9 +176,26 @@ the server reports its version from the manifest — a mismatch would ship an im
 misreports what it is.
 
 ```bash
-# bump package.json first, then:
-git tag v0.2.0 && git push origin v0.2.0
+# One version, three files. Bump package.json, then sync the chart:
+npm pkg set version=0.2.0
+pnpm version:sync                      # writes Chart.yaml version + appVersion
+git commit -am "Release 0.2.0" && git tag v0.2.0 && git push origin main v0.2.0
 ```
+
+`pnpm version:check` runs on every CI build and fails if the three disagree, so a
+half-finished bump is caught on `main` rather than at release time. The release job
+runs the same guard against the tag itself.
+
+The tag publishes, all from the one commit:
+
+| | Version comes from |
+|---|---|
+| `tyrunas/ivanti-mcp:0.2.0` (+ `0.2`, `0`, `latest`) | the tag |
+| `ivanti-mcp-0.2.0.tgz`, the Helm chart, pushed OCI | `--version`/`--app-version` from the tag |
+| `ivanti-mcp-0.2.0.tar.gz`, attached to the GitHub release | `package.json`, via `release-tarball.sh` |
+
+A prerelease tag (`v0.2.0-rc.1`) publishes its exact version only — no `latest`, no
+moving major/minor tags — so nobody pulls a release candidate by accident.
 
 Repository secrets required: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (a Docker Hub
 access token with Read/Write on `tyrunas/ivanti-mcp`).
