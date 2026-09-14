@@ -995,20 +995,25 @@ the `CreatedBy` override `enduser` writes carry becomes redundant. `Owner` follo
 was not anticipated — on a non-impersonated write it would be the service account.
 *(Measured 2026-09-14.)*
 
-**`LastModBy` is overwritten by Ivanti's own workflow within seconds, so it records nothing about
-who acted.** The same incident read back moments later said `LastModBy='InternalServices'`, not
-`HSanders` — the delete preview named the culprit, `Workflow Instance 'TSS Incident Trigger WF'`.
+**`LastModBy` is overwritten by whichever workflow runs, so it records nothing durable about who
+acted.** One incident read back moments later said `LastModBy='InternalServices'` rather than the
+person — the delete preview named the culprit, `Workflow Instance 'TSS Incident Trigger WF'`.
+Timing is not guaranteed and "within seconds" would be too strong: another incident, created the
+same way, still read the person across several later reads because no workflow had fired on it
+yet. What holds is that nothing stops one firing later.
 This matters beyond impersonation: the design's claim that `CreatedBy` (overridable) and
 `LastModBy` (not overridable) together say *their decision, this server's hands* holds only until
 the first workflow fires, which here is immediately. **`CreatedBy` is the only durable attribution
 field.** Do not build an audit argument on `LastModBy`; this server's own audit log is where
 provenance survives. *(Measured 2026-09-14.)*
 
-**A record created through an impersonated session could not be deleted through it.**
-`DELETE` on the OData entity set answered **400** where the create had answered 200, and the same
-record deleted cleanly through the service account. The cause was not established — it may be the
-role, or the request shape — so do not assume impersonated writes are symmetric: a path that
-creates is not proven to delete. *(Measured 2026-09-14.)*
+**An impersonated write is refused by ROLE, and Ivanti names the role when it refuses.**
+A `DELETE` that answered 400 under one role answered `deleted: true` under another on the same
+session, and the body says why in plain words: *"Role SelfService does not have rights to delete
+object Incident#."* So impersonated writes are not asymmetric or half-supported — the person's
+role simply governs them, which is the point. Read the message before assuming a transport
+problem: an earlier pass recorded this 400 as "cause not established" and it was a permission all
+along. *(Measured 2026-09-14.)*
 
 **`GetTenantTimeout` validates the CentralConfig key but NOT the tenant — it answers 200 for a
 tenant it has never heard of.** Measured: the real tenant answers `18000`, and

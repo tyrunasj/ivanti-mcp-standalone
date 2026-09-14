@@ -170,6 +170,8 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           ...(rows.length === 0 && (args.search !== undefined || scoped.scopedTo === undefined)
             ? {
                 note: zeroNote({
+                  // Ivanti's own answer for this person, which hides rather than filters.
+                  impersonating: context.impersonation?.session()?.loginId,
                   looked: entitySet,
                   ...(args.search === undefined ? {} : { keyword: args.search }),
                   ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),

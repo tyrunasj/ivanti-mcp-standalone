@@ -234,6 +234,8 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
           ...(approvals.length === 0
             ? {
                 note: zeroNote({
+                  // Ivanti's own answer for this person, which hides rather than filters.
+                  impersonating: context.impersonation?.session()?.loginId,
                   // Safe to assert now: the person was resolved above and a miss was refused,
                   // so an empty answer really is a fact about their queue.
                   looked: `approvals owned by ${who.displayName ?? lookupLogin} (matched on ${who.matchedOn})`,

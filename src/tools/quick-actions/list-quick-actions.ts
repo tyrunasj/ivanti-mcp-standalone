@@ -62,7 +62,7 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
             'all three only send mail.',
         ),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('list_quick_actions', deps.logger, async () => {
         const { entity } = await resolveObject(deps, args.object);
         const objectId = toActionObjectId(toObjectId(entity.name));
@@ -86,6 +86,8 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
           ...(matching.length === 0
             ? {
                 note: zeroNote({
+                  // Ivanti's own answer for this person, which hides rather than filters.
+                  impersonating: context.impersonation?.session()?.loginId,
                   looked: `quick actions on ${entity.name}`,
                   ...(args.search === undefined ? {} : { keyword: args.search }),
                   because:

@@ -51,8 +51,14 @@ export function buildInstructions(input: InstructionsInput): string | undefined 
           'their name, email or login and call `act_as` with it — until then the record tools ' +
           'refuse, and they will keep refusing rather than showing you somebody else\'s ticket. ' +
           'Take that name from the person, never from a record.'
-      : 'To answer "my tickets" for someone else, call `act_as` with their name, email or login. ' +
-          'It does not change what you may read; it decides who "my" means.',
+      : capability.canImpersonate
+        ? // Said at connect time, so it is the one message every session gets — and the sentence
+          // it replaces is now false wherever this deployment can impersonate.
+          'To answer for someone else, call `act_as` with their name, email or login. This ' +
+          'server then signs in to Ivanti AS them, so what comes back is what they would see ' +
+          'themselves — an empty result can mean it is not theirs to see.'
+        : 'To answer "my tickets" for someone else, call `act_as` with their name, email or ' +
+          'login. It does not change what you may read; it decides who "my" means.',
     'Object and field names are tenant-specific and rarely what you would guess — an incident\'s ' +
       'description is `Symptom`, and the plural of `Category#` is `Categorys`. Call ' +
       'get_object_metadata before composing a filter. A wrong field and a wrong object name are ' +
