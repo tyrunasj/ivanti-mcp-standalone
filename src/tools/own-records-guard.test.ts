@@ -56,6 +56,11 @@ const MUST_REFUSE: Record<string, Record<string, unknown>> = {
   // a request is filed against somebody.
   list_request_offerings: {},
   submit_service_request: { subscriptionId: 's1', answers: {} },
+  // A quick action runs the tenant's own close/cancel procedure against ONE record, so it is
+  // refused exactly as that record is. Registered only when `ENDUSER_QUICK_ACTIONS` names
+  // something, which is why they were missing from this map for a release.
+  preview_quick_action: { object: 'Incidents', recordId: 'i1', actionId: 'qa1' },
+  run_quick_action: { object: 'Incidents', recordId: 'i1', actionId: 'qa1' },
 };
 
 /**
@@ -68,6 +73,9 @@ const MUST_REFUSE: Record<string, Record<string, unknown>> = {
 const CARRIES_NO_RECORD = new Set([
   'get_version',
   'act_as',
+  // Lists what the gate allows, not what anybody owns — and it is narrowed by the action gate,
+  // so a refusal is never the first a caller hears of it.
+  'list_quick_actions',
   'search_knowledge',
   'list_business_objects',
   'get_object_metadata',
@@ -81,6 +89,12 @@ const CARRIES_NO_RECORD = new Set([
 const GATED = configFixture({
   MCP_MODE: 'enduser',
   ENDUSER_BUSINESS_OBJECTS: ['incident', 'change', 'servicereq'],
+  // Without this, `selectTools` skips `list_quick_actions`, `preview_quick_action` and
+  // `run_quick_action` entirely (register-tools.ts:129) — so the "classifies every registered
+  // tool" assertion below iterated a set that could not contain them, and this guard's own
+  // promise was false for exactly the three tools that run a tenant's close/cancel procedures
+  // against a caller's record. The name is the tenant's own text, as CLAUDE.md documents.
+  ENDUSER_QUICK_ACTIONS: ['Close From Self Service'],
 });
 
 function enduserTools() {
@@ -178,6 +192,46 @@ describe('enduser mode never answers with records before it knows who is asking'
         `${name} takes a person and is registered in enduser mode, so it must be in ` +
           'MUST_REFUSE — and its handler must refuse a person other than the pinned one.',
       ).toBe(true);
+    }
+  });
+
+  /**
+   * The same rule, DRIVEN rather than declared.
+   *
+   * The test above asserts that each name is a key of a hand-written map, which is a property of
+   * this file rather than of the code: reverting `resolveSubject` to the shape its own docstring
+   * calls wrong — "if a person is pinned AND the name differs, refuse", so pinning nobody skipped
+   * it — left it passing, because `MUST_REFUSE['list_approvals']` is still defined and its entry
+   * still carries no `person`. Nothing named `NotYourQueue` anywhere in the suite.
+   *
+   * So: pin somebody, then hand each of these a DIFFERENT person and require a refusal naming the
+   * one who is pinned.
+   */
+  it('refuses a named person who is not the pinned one', async () => {
+    const { tools } = enduserTools();
+    const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+    context.pin?.pin({
+      recId: 'e1',
+      category: 'employee',
+      displayName: 'Jon Smith',
+      loginId: 'JSmith',
+      matchedOn: 'LoginID',
+      provenance: 'asserted',
+    });
+
+    const takesAPerson = ['list_request_offerings', 'submit_service_request', 'list_approvals'];
+
+    for (const name of takesAPerson) {
+      const tool = tools.find((entry) => entry.name === name);
+      if (tool === undefined) continue;
+
+      const result = await tool.handler(
+        { ...MUST_REFUSE[name], person: 'SOMEBODY-ELSE' },
+        context,
+      );
+
+      expect(result.isError, `${name} answered for a person who is not the pinned one`).toBe(true);
+      expect(text(result), `${name} refused without naming who it acts for`).toContain('Jon Smith');
     }
   });
 
