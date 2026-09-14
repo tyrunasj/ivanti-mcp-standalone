@@ -6,7 +6,7 @@ states the commit it was run against.
 
 | | Against | Raised | Refuted | Distinct defects |
 |---|---|---|---|---|
-| [`2026-09-14-full-review.md`](./2026-09-14-full-review.md) | `b17be17` (v0.2.0) | 86 | 24 | 38 — 9 high, 23 medium, 6 low |
+| [`2026-09-14-full-review.md`](./2026-09-14-full-review.md) | `b17be17` (v0.2.0) | 86 | 24 | 38 — 9 high, 23 medium, 6 low · **all fixed**, see [`STATUS.md`](./STATUS.md) |
 
 ## How these are produced
 

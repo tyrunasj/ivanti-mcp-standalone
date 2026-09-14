@@ -1,7 +1,10 @@
 # Full code review — 14 September 2026
 
-Against `b17be17` (v0.2.0, the release that added impersonation). **Nothing in this document has
-been fixed.** It is a findings list, not a changelog.
+Against `b17be17` (v0.2.0, the release that added impersonation).
+
+> **Status: all 38 are fixed**, on `review/findings-2026-09-14`. The findings below are left as
+> they were written — a report edited to match the fix stops being evidence of what was wrong.
+> Read [`STATUS.md`](./STATUS.md) for what each fix was and where it landed.
 
 ## What was run
 
