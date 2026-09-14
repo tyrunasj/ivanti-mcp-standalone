@@ -129,11 +129,33 @@ jobs:
           helm push "${RUNNER_TEMP}/chart/ivanti-mcp-${version}.tgz" \
             "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
 
+      # GitHub's own generator: the PR titles merged since the previous tag, the
+      # contributors, and a full-changelog link. Fetched explicitly rather than via
+      # `generate_release_notes: true`, because that APPENDS its block after the body
+      # — which buries what changed under the install instructions. Here it leads.
+      - id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          changed="$(gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${GITHUB_REF_NAME}" --jq .body)"
+          # A heredoc delimiter that cannot occur in generated markdown.
+          {
+            echo "body<<__RELEASE_NOTES_EOF__"
+            echo "${changed}"
+            echo "__RELEASE_NOTES_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.tarball.outputs.path }}
-          generate_release_notes: true
           body: |
+            ${{ steps.notes.outputs.body }}
+
+            ---
+
             ## Deploy
 
             **Container** — `docker pull ${{ env.IMAGE }}:${{ github.ref_name }}`
