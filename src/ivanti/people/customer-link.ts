@@ -38,6 +38,13 @@ export interface CustomerLink {
   readonly categoriesSeen: readonly string[];
   /** More than one link field points at people, and the runner-up was not empty. */
   readonly ambiguous: boolean;
+  /**
+   * Whether the sample this was derived from FAILED, as opposed to coming back empty.
+   *
+   * The two are the same shape — no rows — and lead to the same fallback, but only one of them is
+   * a fact about the tenant. `forEntity` refuses to remember the other.
+   */
+  readonly sampleFailed?: boolean;
 }
 
 export interface CustomerLinks {
@@ -111,6 +118,10 @@ export function createCustomerLinks(deps: CustomerLinksDeps): CustomerLinks {
     const candidates = candidatesOf(entity);
     if (candidates.length === 0) return undefined;
 
+    // Set by the `.catch` below, and read by `forEntity` to decide whether the answer is worth
+    // remembering.
+    let sampleFailed = false;
+
     const people = new Set((await personObjects()).map((name) => name.toLowerCase()));
 
     const url = withQuery(transport.routes.entitySet(entitySet), buildQuery({ top: SAMPLE_ROWS }));
@@ -118,11 +129,15 @@ export function createCustomerLinks(deps: CustomerLinksDeps): CustomerLinks {
       .request<OdataRecord>(url)
       .then((payload) => readCollection<OdataRecord>(payload, url))
       // A sampling failure must not take the tool down with it: fall through to the name ladder.
+      // But it must be distinguishable from a genuine empty set, because the answer derived from
+      // it gets CACHED for the process lifetime — see `forEntity`. Warn, not debug: the default
+      // LOG_LEVEL is `info`, so the old line was invisible in every stock deployment.
       .catch((error: unknown) => {
-        logger.debug('customer link sampling failed', {
+        logger.warn('customer link sampling failed; falling back to the name ladder', {
           entity: entity.name,
           error: error instanceof Error ? error.message : 'unknown error',
         });
+        sampleFailed = true;
         return [] as OdataRecord[];
       });
 
@@ -163,17 +178,31 @@ export function createCustomerLinks(deps: CustomerLinksDeps): CustomerLinks {
       foundBy: 'name',
       ambiguous: false,
       categoriesSeen: [],
+      ...(sampleFailed ? { sampleFailed: true } : {}),
     };
   };
 
   return {
     forEntity(entity, entitySet): Promise<CustomerLink | undefined> {
       const key = entity.name.toLowerCase();
-      let found = cache.get(key);
-      if (found === undefined) {
-        found = discover(entity, entitySet);
-        cache.set(key, found);
-      }
+      const cached = cache.get(key);
+      if (cached !== undefined) return cached;
+
+      // Cached before it settles, so concurrent callers share one discovery — but dropped again
+      // if the discovery either threw or had to guess because its SAMPLE failed. A link chosen
+      // from the name ladder because Ivanti had a bad second is not a fact about the tenant, and
+      // remembering it for the life of the process makes one transient error permanent.
+      const found = discover(entity, entitySet).then(
+        (link) => {
+          if (link?.foundBy === 'name' && link.sampleFailed === true) cache.delete(key);
+          return link;
+        },
+        (error: unknown) => {
+          cache.delete(key);
+          throw error;
+        },
+      );
+      cache.set(key, found);
       return found;
     },
   };

@@ -284,6 +284,10 @@ export async function openImpersonatedSession(
     // unavailable-yet but unobtainable. When that happens the choice stands on list order, and the
     // caller is told so rather than left to assume it was informed.
     if (!flagsKnown(roles)) {
+      // `chooseRole` returns no note when a CONFIGURED role name matched one the person holds —
+      // that is the one branch where the absent flags changed nothing, because the role was named
+      // rather than inferred.
+      const chosenByConfiguration = choice.note === undefined;
       let why: string | undefined;
       const flagged = await userData()
         .then(parseUserRoles)
@@ -316,12 +320,26 @@ export async function openImpersonatedSession(
           currentRole = await selectRole({ call }, confirmed.role);
         }
         note = confirmed.note ?? note;
+      } else if (chosenByConfiguration) {
+        // The flags never arrived, but the role was not guessed: a configured name matched one
+        // this person holds, which is a decision. Saying it "was taken from the order Ivanti
+        // listed them" would be false, and the old code said it unconditionally.
+        logger.debug('role flags unavailable, but the configured role matched', {
+          login: opened.loginId,
+          role: currentRole,
+        });
       } else {
         // Say it plainly. A role picked from an arbitrary order should not read as a decision.
+        //
+        // The remedy has to name the setting THIS mode accepts: `validateConfig` refuses
+        // `IVANTI_IMPERSONATION_ROLE` in `enduser` and exits 78, so the old text sent an operator
+        // to a setting that would stop their server from starting — in the mode where this note
+        // matters most.
+        const setting = mode === 'enduser' ? 'ENDUSER_ROLE' : 'IVANTI_IMPERSONATION_ROLE';
         const blind =
           `Ivanti would not report which of this person's roles are self-service, so ${currentRole} ` +
           `was taken from the order it listed them (${roles.map((role) => role.name).join(', ')}) ` +
-          `rather than chosen. Set IVANTI_IMPERSONATION_ROLE to decide it explicitly.`;
+          `rather than chosen. Set ${setting} to decide it explicitly.`;
         note = note === undefined ? blind : `${note} ${blind}`;
         logger.warn('role chosen without Ivanti reporting which are self-service', {
           login: opened.loginId,
