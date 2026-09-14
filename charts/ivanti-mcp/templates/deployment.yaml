@@ -1,0 +1,131 @@
+{{- include "ivanti-mcp.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ivanti-mcp.fullname" . }}
+  labels: {{- include "ivanti-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "ivanti-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll the pods when the configuration changes, not only the image.
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+      labels:
+        {{- include "ivanti-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ include "ivanti-mcp.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      # The tenant hostname must resolve inside the pod.
+      hostAliases: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # The projected secret inherits this, which is what makes it readable by
+        # the image's own user. Root-owned secret files are the usual default and
+        # surface as EACCES at startup — which reads like a missing file.
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: ivanti-mcp
+          image: "{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+          env:
+            # stdio is meaningless in a pod, and loopback inside a container is the
+            # container's own — neither is a choice, so neither is a value.
+            - { name: STDIO_TRANSPORT_ON, value: "false" }
+            - { name: HTTP_TRANSPORT_ON,  value: "true" }
+            - { name: MCP_BIND,           value: "0.0.0.0" }
+            - { name: MCP_PORT,           value: {{ .Values.server.port | quote }} }
+            - { name: MCP_PUBLIC_URL,     value: {{ .Values.server.publicUrl | quote }} }
+            - { name: TRUSTED_ORIGINS,    value: {{ join "," .Values.server.trustedOrigins | quote }} }
+            - { name: AUTH_MODE,          value: {{ .Values.server.authMode | quote }} }
+            - { name: MCP_MODE,           value: {{ .Values.server.mode | quote }} }
+            - { name: MCP_MAX_SESSIONS,   value: {{ .Values.server.maxSessions | quote }} }
+            - { name: MCP_SESSION_IDLE_TTL_SECONDS, value: {{ .Values.server.sessionIdleTtlSeconds | quote }} }
+            - { name: LOG_LEVEL,          value: {{ .Values.server.logLevel | quote }} }
+            - { name: IVANTI_BASE_URL,    value: {{ .Values.ivanti.baseUrl | quote }} }
+            - { name: IVANTI_API_KEY_FILE, value: "{{ .Values.secrets.mountPath }}/ivanti-api-key" }
+            {{- if .Values.ivanti.maxTier }}
+            - { name: IVANTI_MAX_TIER,    value: {{ .Values.ivanti.maxTier | quote }} }
+            {{- end }}
+            {{- if eq .Values.server.authMode "bearer" }}
+            - { name: BEARER_TOKEN_FILE,  value: "{{ .Values.secrets.mountPath }}/bearer-token" }
+            {{- end }}
+            {{- if eq .Values.server.mode "enduser" }}
+            - { name: ENDUSER_BUSINESS_OBJECTS, value: {{ join "," .Values.server.enduser.businessObjects | quote }} }
+            {{- if .Values.server.enduser.quickActions }}
+            - { name: ENDUSER_QUICK_ACTIONS, value: {{ join "," .Values.server.enduser.quickActions | quote }} }
+            {{- end }}
+            {{- end }}
+            {{- if eq .Values.server.authMode "oauth" }}
+            - { name: OAUTH_ISSUER, value: {{ .Values.oauth.issuer | quote }} }
+            {{- with .Values.oauth.audience }}
+            - { name: OAUTH_AUDIENCE, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.oauth.jwksUri }}
+            - { name: OAUTH_JWKS_URI, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.oauth.scopesSupported }}
+            - { name: OAUTH_SCOPES_SUPPORTED, value: {{ join "," . | quote }} }
+            {{- end }}
+            {{- with .Values.oauth.requiredScopes }}
+            - { name: OAUTH_REQUIRED_SCOPES, value: {{ join "," . | quote }} }
+            {{- end }}
+            {{- with .Values.oauth.identityClaim }}
+            - { name: OAUTH_IDENTITY_CLAIM, value: {{ . | quote }} }
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}{{- toYaml . | nindent 12 }}{{- end }}
+          volumeMounts:
+            - name: secrets
+              mountPath: {{ .Values.secrets.mountPath }}
+              readOnly: true
+          # /health is unauthenticated and always 200 — and the image is distroless,
+          # so an httpGet probe is the only option: there is no shell and no curl.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ include "ivanti-mcp.secretName" . }}
+            defaultMode: 0400
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

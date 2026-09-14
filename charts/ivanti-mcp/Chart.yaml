@@ -1,0 +1,12 @@
+apiVersion: v2
+name: ivanti-mcp
+description: MCP server for Ivanti Neurons for ITSM — one release serves one tenant and one audience.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/tyrunasj/ivanti-mcp-standalone
+sources:
+  - https://github.com/tyrunasj/ivanti-mcp-standalone
+keywords: [mcp, ivanti, itsm]
+maintainers:
+  - name: tyrunasj

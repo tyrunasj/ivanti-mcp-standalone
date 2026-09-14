@@ -1,0 +1,36 @@
+{{ include "ivanti-mcp.fullname" . }} is installed — {{ .Values.server.mode }} mode, {{ .Values.replicaCount }} replica(s).
+
+  Tenant   {{ .Values.ivanti.baseUrl }}
+  Public   {{ .Values.server.publicUrl }}
+  Auth     {{ .Values.server.authMode }}
+
+Check it came up:
+
+  kubectl --namespace {{ .Release.Namespace }} rollout status deploy/{{ include "ivanti-mcp.fullname" . }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "ivanti-mcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -s localhost:{{ .Values.service.port }}/health
+
+The startup log lists every tool this credential reaches. A shorter list than you
+expect means the API key's tier is lower than you think, not that a tool is broken:
+
+  kubectl --namespace {{ .Release.Namespace }} logs deploy/{{ include "ivanti-mcp.fullname" . }} | head -20
+{{- if eq .Values.server.mode "enduser" }}
+
+This release is gated to: {{ join ", " .Values.server.enduser.businessObjects }}
+Every name is resolved against the tenant at startup — a misspelling exits 78
+rather than quietly narrowing what an end user may do.
+{{- end }}
+{{- if eq .Values.server.authMode "none" }}
+
+⚠  AUTH_MODE=none. Anything that can reach the Service gets the whole tool
+   surface. Put authentication in front of it, or use a NetworkPolicy.
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+
+⚠  {{ .Values.replicaCount }} replicas with in-memory sessions. Confirm your ingress really
+   honours the Mcp-Session-Id hash — if it does not, conversations will break
+   intermittently and look like client bugs.
+{{- end }}
+
+One release is one tenant and one audience. Another tenant, or the other
+audience, is another release.

@@ -1,0 +1,144 @@
+name: Release
+
+# A tag is the trigger, and the tag is the version. `scripts/check-version.mjs`
+# refuses the release when it disagrees with package.json, because the server
+# reports its version from the manifest rather than from the tag.
+on:
+  push:
+    tags: ['v*']
+
+env:
+  IMAGE: tyrunas/ivanti-mcp
+
+jobs:
+  verify:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-version.mjs "${{ github.ref_name }}"
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    needs: verify
+    permissions:
+      contents: write   # create the GitHub release
+      id-token: write   # keyless signing, no key to store or rotate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # `helm push` keeps its own credential store — logging Docker in does not log
+      # Helm in, and the failure is a 401 at the very end of an otherwise good release.
+      - name: Log Helm in to the same registry
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | helm registry login registry-1.docker.io \
+            --username "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      # `latest` moves only for a final release. A prerelease tag (v1.2.3-rc.1)
+      # publishes its exact version and nothing else, so nobody pulls an rc by
+      # accident.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+          labels: |
+            org.opencontainers.image.title=Ivanti MCP
+            org.opencontainers.image.description=MCP server for Ivanti Neurons for ITSM
+            org.opencontainers.image.licenses=UNLICENSED
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+
+      # Sign the digest, not a tag: a tag can be moved, a digest cannot.
+      - name: Sign the image
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      # The same commit, as a tree that runs on a plain Node host.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - id: tarball
+        run: |
+          path="$(./scripts/release-tarball.sh "${RUNNER_TEMP}/release" | head -1)"
+          echo "path=${path}" >> "$GITHUB_OUTPUT"
+
+      # The chart ships to the same namespace as an OCI artifact, so it reuses the
+      # Docker Hub credentials and needs no gh-pages branch. Chart version and
+      # appVersion both follow the tag: this chart serves exactly one application.
+      - name: Package and push the Helm chart
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          helm package charts/ivanti-mcp \
+            --version "$version" --app-version "$version" \
+            --destination "${RUNNER_TEMP}/chart"
+          helm push "${RUNNER_TEMP}/chart/ivanti-mcp-${version}.tgz" \
+            "oci://registry-1.docker.io/${IMAGE%%/*}"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.tarball.outputs.path }}
+          generate_release_notes: true
+          body: |
+            ## Deploy
+
+            **Container** — `docker pull ${{ env.IMAGE }}:${{ github.ref_name }}`
+            Multi-arch (amd64, arm64), distroless, runs as uid 65532.
+            Signed with cosign; verify with:
+            ```
+            cosign verify ${{ env.IMAGE }}:${{ github.ref_name }} \
+              --certificate-identity-regexp='^https://github.com/${{ github.repository }}/' \
+              --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+            ```
+
+            **Kubernetes** — `helm install ivanti-mcp oci://registry-1.docker.io/tyrunas/ivanti-mcp --version ${{ github.ref_name }}`
+            One release is one tenant and one audience. See `charts/ivanti-mcp/README.md`.
+
+            **Plain Node host** — download the tarball below, unpack it, and run
+            `node dist/index.js`. It carries its own production dependencies and
+            needs no toolchain. See `docs/deployment.md` for the systemd unit.
+
+            Configuration is documented in `.env.example`. The server fails closed:
+            an incomplete configuration exits 78 and prints every problem at once.

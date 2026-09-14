@@ -1,0 +1,76 @@
+# Ivanti MCP as a system service on a plain Node 22 host.
+#
+#   sudo useradd --system --home /opt/ivanti-mcp --shell /usr/sbin/nologin ivanti-mcp
+#   sudo install -d -o ivanti-mcp -g ivanti-mcp /opt/ivanti-mcp /etc/ivanti-mcp
+#   sudo tar xzf ivanti-mcp-<version>.tar.gz --strip-components=1 -C /opt/ivanti-mcp
+#   sudo chown -R ivanti-mcp:ivanti-mcp /opt/ivanti-mcp
+#   sudo install -m 0640 -o root -g ivanti-mcp .env /etc/ivanti-mcp/env
+#   sudo systemctl enable --now ivanti-mcp
+#
+# The unit mirrors the container's posture: unprivileged, read-only filesystem,
+# no capabilities, nothing written to disk.
+
+[Unit]
+Description=Ivanti MCP server
+Documentation=https://github.com/tyrunasj/ivanti-mcp-standalone
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ivanti-mcp
+Group=ivanti-mcp
+WorkingDirectory=/opt/ivanti-mcp
+
+# Secrets live here, not in the unit: a unit file is world-readable and shows up
+# in `systemctl cat`. Mode 0640 root:ivanti-mcp keeps it out of everyone else's
+# reach. Set STDIO_TRANSPORT_ON=false in it — see the note below.
+EnvironmentFile=/etc/ivanti-mcp/env
+
+ExecStart=/usr/bin/node /opt/ivanti-mcp/dist/index.js
+
+Restart=on-failure
+RestartSec=5s
+# Exit 78 is EX_CONFIG: the configuration is wrong and will be wrong again on the
+# next start, so restarting is just noise in the journal.
+RestartPreventExitStatus=78
+
+# Structured JSON on stderr. stdout carries the JSON-RPC stream under the stdio
+# transport and the application never writes to it.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ivanti-mcp
+
+# ── Hardening ────────────────────────────────────────────────────────────────
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+# Deliberately NOT set: MemoryDenyWriteExecute=yes. Node's JIT maps pages
+# writable and then executable, so it refuses to start under that directive —
+# the failure looks like a segfault rather than a policy denial.
+
+# Nothing is written to disk, so ProtectSystem=strict above needs no exception.
+# Add ReadWritePaths only if you later give it somewhere to write.
+
+[Install]
+WantedBy=multi-user.target
