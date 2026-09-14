@@ -15,6 +15,15 @@ import { readSdkVersion } from './version.js';
 import { startHttp } from './server/start-http.js';
 import { startStdio } from './server/start-stdio.js';
 
+/**
+ * How long a graceful shutdown gets before the process exits regardless.
+ *
+ * Docker's default SIGTERM grace is 10 s and Kubernetes' `terminationGracePeriodSeconds` is 30, so
+ * this sits under the smaller of the two: a shutdown that overruns it is going to be SIGKILLed
+ * anyway, and exiting on our own terms at least logs why.
+ */
+const SHUTDOWN_GRACE_MS = 8_000;
+
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
   const logger = createLogger(config.LOG_LEVEL);
@@ -114,11 +123,30 @@ async function main(): Promise<void> {
     sdkVersion: readSdkVersion(),
   });
 
-  // Containers are killed, not asked politely: let in-flight requests finish and close
-  // every live session rather than dropping them on the floor.
+  // Containers are killed, not asked politely: close every live session — which is what hands
+  // each person's Ivanti session back — and only then stop listening. Bounded, because a shutdown
+  // that hangs is indistinguishable from one that crashed and ends in SIGKILL either way.
+  let stopping = false;
   const shutdown = (signal: string): void => {
+    if (stopping) return;
+    stopping = true;
     logger.info('shutting down', { signal });
-    http.close(() => process.exit(0));
+
+    const deadline = setTimeout(() => {
+      logger.warn('shutdown timed out; exiting anyway', { afterMs: SHUTDOWN_GRACE_MS });
+      process.exit(0);
+    }, SHUTDOWN_GRACE_MS);
+    deadline.unref();
+
+    void http.close().then(
+      () => process.exit(0),
+      (error: unknown) => {
+        logger.error('shutdown failed', {
+          reason: error instanceof Error ? error.message : 'unknown',
+        });
+        process.exit(0);
+      },
+    );
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

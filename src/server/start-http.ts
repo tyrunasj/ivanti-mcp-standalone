@@ -47,7 +47,22 @@ interface Session extends McpSession {
  * socket: `resolveRoute` for dispatch, `authorizeRequest` for the door, `SessionManager` for
  * admission and expiry, `readJsonBody` and `describeRpc` for the payload.
  */
-export function startHttp(config: Config, logger: Logger, deps: HttpDeps): Server {
+/**
+ * The listener, plus the teardown that has to happen before it stops listening.
+ *
+ * `close()` is not `http.close()`: that waits for every in-flight response, and the standalone
+ * `GET /mcp` SSE stream IS an in-flight response held open for the life of the client — measured
+ * at 131 s in notes.md, i.e. the ordinary state rather than an edge. With one client attached the
+ * callback and the `'close'` event never fired, so nothing that hung off them ever ran and the
+ * process waited for SIGKILL.
+ */
+export interface HttpServer {
+  server: Server;
+  /** Closes every session (which releases its Ivanti session), then stops the listener. */
+  close: () => Promise<void>;
+}
+
+export function startHttp(config: Config, logger: Logger, deps: HttpDeps): HttpServer {
   const sessions = new SessionManager<Session>({
     maxSessions: config.MCP_MAX_SESSIONS,
     idleTtlMs: config.MCP_SESSION_IDLE_TTL_SECONDS * 1000,
@@ -187,11 +202,21 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): Serve
 
   const stopSweeping = sessions.startSweeping(SWEEP_INTERVAL_MS);
 
-  http.on('close', () => {
-    stopSweeping();
-    sessions.closeAll();
-  });
-
   http.listen(config.MCP_PORT, config.MCP_BIND);
-  return http;
+
+  return {
+    server: http,
+    async close(): Promise<void> {
+      // Order matters. Closing the sessions ends their SSE streams, which is what lets
+      // `http.close()` finish at all; doing it the other way round waits forever on the stream it
+      // is trying to drain. Awaited, because closing a session is what releases the person's
+      // Ivanti session and the process must not exit before that request leaves.
+      stopSweeping();
+      await sessions.closeAll();
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+      // Anything still holding a socket after that — a client that never read its response — is
+      // not worth the grace period.
+      http.closeAllConnections();
+    },
+  };
 }

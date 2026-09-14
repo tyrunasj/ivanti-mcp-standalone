@@ -100,3 +100,73 @@ describe('createImpersonationSlot', () => {
     expect(slot.session()?.loginId).toBe('ACope');
   });
 });
+
+/**
+ * Two `act_as` calls in flight at once.
+ *
+ * MCP does not serialise tool calls, and the SDK's `_onrequest` does not await the handler — so a
+ * model handed two names, or ticket text asking the conversation to become someone else, can put
+ * two opens in flight. The different-person guard sat behind `current !== undefined`, which is
+ * only assigned after a handshake RESOLVES, so it could not fire while the first was running, and
+ * `pending ??= open(login)` joined the second caller without comparing the login.
+ *
+ * No data crossed — the pin commits in registration order and refuses the loser — but the slot was
+ * left recording the REFUSED person as its owner, after which a later `act_as` for the person who
+ * actually is pinned was refused by the slot, naming somebody else.
+ */
+describe('two opens in flight', () => {
+  it('refuses the second login instead of handing it the first person’s session', async () => {
+    let release: ((session: ImpersonatedSession) => void) | undefined;
+    const opened: string[] = [];
+    const slot = createImpersonationSlot((login) => {
+      opened.push(login);
+      return new Promise<ImpersonatedSession>((resolve) => {
+        release = resolve;
+      });
+    });
+
+    const first = slot.open('ACope');
+    const second = slot.open('BReed');
+
+    release?.(impersonatedSessionFixture({ loginId: 'ACope' }));
+
+    await expect(first).resolves.toMatchObject({ loginId: 'ACope' });
+    await expect(second).rejects.toThrow(/already acts as ACope/);
+    // Only one handshake ran, which is what sharing the pending promise is for.
+    expect(opened).toEqual(['ACope']);
+  });
+
+  it('still treats a repeat of the same login as a no-op', async () => {
+    let release: ((session: ImpersonatedSession) => void) | undefined;
+    const opened: string[] = [];
+    const slot = createImpersonationSlot((login) => {
+      opened.push(login);
+      return new Promise<ImpersonatedSession>((resolve) => {
+        release = resolve;
+      });
+    });
+
+    const first = slot.open('ACope');
+    const again = slot.open('acope');
+    release?.(impersonatedSessionFixture({ loginId: 'ACope' }));
+
+    await expect(first).resolves.toBeDefined();
+    await expect(again).resolves.toBeDefined();
+    expect(opened).toEqual(['ACope']);
+  });
+
+  // A handshake that fails must leave nothing behind: the conversation is not bound to someone it
+  // could not open a session as.
+  it('lets another login through after a failed handshake', async () => {
+    let attempt = 0;
+    const slot = createImpersonationSlot((login) => {
+      attempt += 1;
+      return attempt === 1
+        ? Promise.reject(new Error('Ivanti refused'))
+        : Promise.resolve(impersonatedSessionFixture({ loginId: login }));
+    });
+
+    await expect(slot.open('ACope')).rejects.toThrow('Ivanti refused');
+    await expect(slot.open('BReed')).resolves.toMatchObject({ loginId: 'BReed' });
+  });
+});

@@ -87,3 +87,72 @@ describe('connectionFor', () => {
     expect(d.connection.transport.asPerson).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * A role switch has to invalidate what the role decided.
+ *
+ * `switchTo` mutates the role inside the session's own closure and returns the same object, so a
+ * memo keyed on the session alone survived it — and `workspaces` and `forms` are both built from
+ * the role. Every form-derived answer for the rest of the conversation then described the role the
+ * conversation had just left, including a cached `undefined` meaning "no form this role can
+ * reach", while `switch_role` reported "what records are visible follows this role, from the next
+ * call onwards".
+ */
+describe('connectionFor follows a role switch', () => {
+  /** A session whose role changes the way `switchTo` changes it: in place, same object. */
+  async function switchable(role = 'ServiceDeskAnalyst') {
+    let current = role;
+    const base = impersonatedSessionFixture({
+      sid: 'tenant#S#1',
+      call: vi.fn(() => Promise.resolve({ Workspaces: [] })) as never,
+    });
+    const session = Object.create(base, {
+      role: { get: (): string => current, enumerable: true },
+    }) as typeof base;
+    const slot = createImpersonationSlot(() => Promise.resolve(session));
+    await slot.open('HSanders');
+    const context: CallContext = {
+      identity: ANONYMOUS,
+      pin: createSessionPin(ANONYMOUS),
+      impersonation: slot,
+    };
+    return {
+      context,
+      switchTo: (next: string): void => {
+        current = next;
+      },
+    };
+  }
+
+  it('rebuilds the view when the role changes', async () => {
+    const { context, switchTo } = await switchable();
+    const d = deps();
+
+    const before = connectionFor(d, context);
+    switchTo('ChangeManager');
+    const after = connectionFor(d, context);
+
+    expect(after).not.toBe(before);
+    expect(after.forms).not.toBe(before.forms);
+    expect(after.workspaces).not.toBe(before.workspaces);
+  });
+
+  // Still once per role, not once per call: a conversation makes many requests.
+  it('keeps returning the same view while the role is unchanged', async () => {
+    const { context } = await switchable();
+    const d = deps();
+
+    expect(connectionFor(d, context)).toBe(connectionFor(d, context));
+  });
+
+  // The SID does not change across a switch, so the transport must not be rebuilt around a new one.
+  it('keeps the same SID on the transport across a switch', async () => {
+    const { context, switchTo } = await switchable();
+    const d = deps();
+
+    connectionFor(d, context);
+    switchTo('ChangeManager');
+
+    expect(context.impersonation?.session()?.sid).toBe('tenant#S#1');
+  });
+});

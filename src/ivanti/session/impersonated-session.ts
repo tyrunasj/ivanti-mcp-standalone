@@ -95,265 +95,276 @@ export async function openImpersonatedSession(
 
   const opened = await centralConfig.authenticate(login);
 
-  const post = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {
-    let response: Awaited<ReturnType<FetchLike>>;
-    try {
-      response = await fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json; charset=UTF-8',
-          Accept: 'application/json',
-          ...(sid === undefined ? {} : { Cookie: `SID=${sid}` }),
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error: unknown) {
-      throw new IvantiApiError(
-        { status: 0, method: 'POST', url, body: '' },
-        `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
-      );
-    }
+  // Everything from here on can throw, and until the session is handed back to the caller
+  // nobody else can release it. Three paths released explicitly and the rest did not:
+  // `InitializeSession` failing, `GetRolesForUser` failing and either `SelectRole` failing all
+  // threw straight out with the session still open on the tenant. `act_as` then reports "could
+  // not open an Ivanti session as them", the model retries with the person's email instead of
+  // their login, and each attempt mints another session that survives until the tenant timeout
+  // — measured at 18,000 s here. One wrapper covers every exit rather than three of them.
+  try {
 
-    const text = await response.text();
-    if (!response.ok) {
-      // The SID is a live credential and Ivanti echoes submitted values into failures.
-      throw new IvantiApiError({
-        status: response.status,
-        method: 'POST',
-        url,
-        body: scrubErrorBody(text, opened.sid),
-      });
-    }
-
-    const parsed: unknown = text === '' ? {} : JSON.parse(text);
-    return (parsed as { d?: T }).d ?? (parsed as T);
-  };
-
-  const initialize = (): Promise<SessionStatus> =>
-    post<SessionStatus>(
-      routes.service('Services/Session.asmx/InitializeSession'),
-      { _csrfToken: null },
-      opened.sid,
-    );
-
-  const status = await initialize();
-  const csrf = status.SessionCsrfToken ?? '';
-  if (csrf === '') {
-    await centralConfig.release(opened.sid);
-    throw new Error(
-      `Ivanti opened a session for ${opened.loginId} but issued no CSRF token, so it cannot be used.`,
-    );
-  }
-
-  const call = async <T>(
-    servicePath: string,
-    method: string,
-    args: Record<string, unknown> = {},
-  ): Promise<T> =>
-    // `.asmx` wants the token in the BODY — the `.ashx` handlers want it as a header, which is why
-    // they do not share this path. (They are unreachable here in any case.)
-    post<T>(routes.service(`${servicePath}/${method}`), { _csrfToken: csrf, ...args }, opened.sid);
-
-  // The form-urlencoded handlers: `handlers/<path>`, the token as a LOWERCASE header.
-  const callHandler = async (handlerPath: string, form: Record<string, string>): Promise<string> => {
-    const url = routes.service(`handlers/${handlerPath}`);
-    let response: Awaited<ReturnType<FetchLike>>;
-    try {
-      response = await fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Cookie: `SID=${opened.sid}`,
-          _csrftoken: csrf,
-        },
-        body: new URLSearchParams(form).toString(),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error: unknown) {
-      throw new IvantiApiError(
-        { status: 0, method: 'POST', url, body: '' },
-        `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
-      );
-    }
-    const text = await response.text();
-    if (!response.ok) {
-      throw new IvantiApiError({
-        status: response.status,
-        method: 'POST',
-        url,
-        body: scrubErrorBody(text, opened.sid),
-      });
-    }
-    return text;
-  };
-
-  // The multipart upload: the token as a MIXED-case header, and no Content-Type — only fetch
-  // knows the boundary it generated, and naming the type without it makes Ivanti read the body
-  // as empty. Three spellings of one token, one session.
-  const uploadToHandler = async (handlerPath: string, form: FormData): Promise<string> => {
-    const url = routes.service(handlerPath);
-    let response: Awaited<ReturnType<FetchLike>>;
-    try {
-      response = await fetchImpl(url, {
-        method: 'POST',
-        headers: { Cookie: `SID=${opened.sid}`, _csrfToken: csrf },
-        body: form,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error: unknown) {
-      throw new IvantiApiError(
-        { status: 0, method: 'POST', url, body: '' },
-        `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
-      );
-    }
-    const text = await response.text();
-    if (!response.ok) {
-      throw new IvantiApiError({
-        status: response.status,
-        method: 'POST',
-        url,
-        body: scrubErrorBody(text, opened.sid),
-      });
-    }
-    return text;
-  };
-
-  // `tzoffset` is required: without it this answers 500, which reads as a broken session.
-  const userData = (): Promise<Record<string, unknown>> =>
-    call('Services/Session.asmx', 'GetUserData', { tzoffset: 0 });
-
-  let roles = await readRoles(
-    {
-      userData,
-      // A different convention: body only, no cookie and no CSRF, on the integration service.
-      rolesForUser: () =>
-        post(routes.service('ServiceAPI/FRSHEATIntegration.asmx/GetRolesForUser'), {
-          sessionKey: opened.sid,
-          tenantId: tenantHost,
-        }),
-    },
-    logger,
-  );
-
-  const decision = {
-    mode,
-    enduserRole,
-    ...(pinnedRole === undefined ? {} : { pinnedRole }),
-  };
-  const choice = chooseRole(roles, { ...decision, activeRole: status.ActiveRole ?? '' });
-
-  if (!choice.ok) {
-    await centralConfig.release(opened.sid);
-    throw new Error(choice.refusal);
-  }
-
-  // **Always selected, never skipped — even when it is the role Ivanti already reported.**
-  //
-  // `SelectRole` does not merely change the role, it ACTIVATES the session. A CentralConfig
-  // session whose role was only ever *reported* by `InitializeSession` answers **551** to every
-  // `Workspace.asmx` method, the service catalog and the admin console; after one `SelectRole`
-  // call naming that same role, all of them answer 200. Controlled on a live tenant: two
-  // `InitializeSession` calls and no `SelectRole` stayed at 551, while one `InitializeSession`
-  // plus `SelectRole` — same role, same CSRF — returned 7 workspaces.
-  //
-  // Skipping the call when `choice.mustSelect` was false is what once made the whole form surface
-  // look unreachable. `mustSelect` is kept because it still says whether the role *changed*, which
-  // is worth reporting; it no longer decides whether to call.
-  //
-  // Mutable behind a getter: `switchTo` changes what Ivanti will answer, and a session object
-  // still reporting the old role would have `switch_role` confirm a change that did not happen.
-  let currentRole = await selectRole({ call }, choice.role);
-  let note = choice.note;
-
-  // The first choice was made blind when the roles arrived without flags — `GetRolesForUser` is
-  // the only source that answers a role-less session, and it carries none. Blind means the
-  // full-mode branch could only take the first entry Ivanti happened to list, which is how a
-  // portal role gets opened in an agent deployment.
-  //
-  // Selecting a role usually makes `GetUserData` answer, and it answers WITH the flags — so try
-  // again on real data. **Usually, not always**: measured against a live tenant, one account gets
-  // 500 from `GetUserData` whether or not a role is active, so its flags are not merely
-  // unavailable-yet but unobtainable. When that happens the choice stands on list order, and the
-  // caller is told so rather than left to assume it was informed.
-  if (!flagsKnown(roles)) {
-    let why: string | undefined;
-    const flagged = await userData()
-      .then(parseUserRoles)
-      .catch((error: unknown) => {
-        why = error instanceof Error ? error.message.slice(0, 120) : 'unknown';
-        return [] as IvantiRole[];
-      });
-
-    logger.debug('re-read the roles now that the session has one', {
-      login: opened.loginId,
-      // Whether Ivanti answered, and whether it answered with the flags — the two ways this
-      // second pass can come to nothing, which otherwise look identical from outside.
-      answered: flagged.length,
-      withFlags: flagsKnown(flagged),
-      ...(why === undefined ? {} : { reason: why }),
-    });
-
-    if (flagged.length > 0 && flagsKnown(flagged)) {
-      roles = flagged;
-      const confirmed = chooseRole(flagged, { ...decision, activeRole: currentRole });
-      if (!confirmed.ok) {
-        await centralConfig.release(opened.sid);
-        throw new Error(confirmed.refusal);
-      }
-      if (confirmed.mustSelect) {
-        logger.info('re-selecting the role now that Ivanti reports which are self-service', {
-          login: opened.loginId,
-          from: currentRole,
-          to: confirmed.role,
+    const post = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {
+      let response: Awaited<ReturnType<FetchLike>>;
+      try {
+        response = await fetchImpl(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json; charset=UTF-8',
+            Accept: 'application/json',
+            ...(sid === undefined ? {} : { Cookie: `SID=${sid}` }),
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
         });
-        currentRole = await selectRole({ call }, confirmed.role);
+      } catch (error: unknown) {
+        throw new IvantiApiError(
+          { status: 0, method: 'POST', url, body: '' },
+          `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
       }
-      note = confirmed.note ?? note;
-    } else {
-      // Say it plainly. A role picked from an arbitrary order should not read as a decision.
-      const blind =
-        `Ivanti would not report which of this person's roles are self-service, so ${currentRole} ` +
-        `was taken from the order it listed them (${roles.map((role) => role.name).join(', ')}) ` +
-        `rather than chosen. Set IVANTI_IMPERSONATION_ROLE to decide it explicitly.`;
-      note = note === undefined ? blind : `${note} ${blind}`;
-      logger.warn('role chosen without Ivanti reporting which are self-service', {
+
+      const text = await response.text();
+      if (!response.ok) {
+        // The SID is a live credential and Ivanti echoes submitted values into failures.
+        throw new IvantiApiError({
+          status: response.status,
+          method: 'POST',
+          url,
+          body: scrubErrorBody(text, opened.sid),
+        });
+      }
+
+      const parsed: unknown = text === '' ? {} : JSON.parse(text);
+      return (parsed as { d?: T }).d ?? (parsed as T);
+    };
+
+    const initialize = (): Promise<SessionStatus> =>
+      post<SessionStatus>(
+        routes.service('Services/Session.asmx/InitializeSession'),
+        { _csrfToken: null },
+        opened.sid,
+      );
+
+    const status = await initialize();
+    const csrf = status.SessionCsrfToken ?? '';
+    if (csrf === '') {
+      throw new Error(
+        `Ivanti opened a session for ${opened.loginId} but issued no CSRF token, so it cannot be used.`,
+      );
+    }
+
+    const call = async <T>(
+      servicePath: string,
+      method: string,
+      args: Record<string, unknown> = {},
+    ): Promise<T> =>
+      // `.asmx` wants the token in the BODY — the `.ashx` handlers want it as a header, which is why
+      // they do not share this path. (They are unreachable here in any case.)
+      post<T>(routes.service(`${servicePath}/${method}`), { _csrfToken: csrf, ...args }, opened.sid);
+
+    // The form-urlencoded handlers: `handlers/<path>`, the token as a LOWERCASE header.
+    const callHandler = async (handlerPath: string, form: Record<string, string>): Promise<string> => {
+      const url = routes.service(`handlers/${handlerPath}`);
+      let response: Awaited<ReturnType<FetchLike>>;
+      try {
+        response = await fetchImpl(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Cookie: `SID=${opened.sid}`,
+            _csrftoken: csrf,
+          },
+          body: new URLSearchParams(form).toString(),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error: unknown) {
+        throw new IvantiApiError(
+          { status: 0, method: 'POST', url, body: '' },
+          `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
+      const text = await response.text();
+      if (!response.ok) {
+        throw new IvantiApiError({
+          status: response.status,
+          method: 'POST',
+          url,
+          body: scrubErrorBody(text, opened.sid),
+        });
+      }
+      return text;
+    };
+
+    // The multipart upload: the token as a MIXED-case header, and no Content-Type — only fetch
+    // knows the boundary it generated, and naming the type without it makes Ivanti read the body
+    // as empty. Three spellings of one token, one session.
+    const uploadToHandler = async (handlerPath: string, form: FormData): Promise<string> => {
+      const url = routes.service(handlerPath);
+      let response: Awaited<ReturnType<FetchLike>>;
+      try {
+        response = await fetchImpl(url, {
+          method: 'POST',
+          headers: { Cookie: `SID=${opened.sid}`, _csrfToken: csrf },
+          body: form,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error: unknown) {
+        throw new IvantiApiError(
+          { status: 0, method: 'POST', url, body: '' },
+          `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
+      const text = await response.text();
+      if (!response.ok) {
+        throw new IvantiApiError({
+          status: response.status,
+          method: 'POST',
+          url,
+          body: scrubErrorBody(text, opened.sid),
+        });
+      }
+      return text;
+    };
+
+    // `tzoffset` is required: without it this answers 500, which reads as a broken session.
+    const userData = (): Promise<Record<string, unknown>> =>
+      call('Services/Session.asmx', 'GetUserData', { tzoffset: 0 });
+
+    let roles = await readRoles(
+      {
+        userData,
+        // A different convention: body only, no cookie and no CSRF, on the integration service.
+        rolesForUser: () =>
+          post(routes.service('ServiceAPI/FRSHEATIntegration.asmx/GetRolesForUser'), {
+            sessionKey: opened.sid,
+            tenantId: tenantHost,
+          }),
+      },
+      logger,
+    );
+
+    const decision = {
+      mode,
+      enduserRole,
+      ...(pinnedRole === undefined ? {} : { pinnedRole }),
+    };
+    const choice = chooseRole(roles, { ...decision, activeRole: status.ActiveRole ?? '' });
+
+    if (!choice.ok) {
+      throw new Error(choice.refusal);
+    }
+
+    // **Always selected, never skipped — even when it is the role Ivanti already reported.**
+    //
+    // `SelectRole` does not merely change the role, it ACTIVATES the session. A CentralConfig
+    // session whose role was only ever *reported* by `InitializeSession` answers **551** to every
+    // `Workspace.asmx` method, the service catalog and the admin console; after one `SelectRole`
+    // call naming that same role, all of them answer 200. Controlled on a live tenant: two
+    // `InitializeSession` calls and no `SelectRole` stayed at 551, while one `InitializeSession`
+    // plus `SelectRole` — same role, same CSRF — returned 7 workspaces.
+    //
+    // Skipping the call when `choice.mustSelect` was false is what once made the whole form surface
+    // look unreachable. `mustSelect` is kept because it still says whether the role *changed*, which
+    // is worth reporting; it no longer decides whether to call.
+    //
+    // Mutable behind a getter: `switchTo` changes what Ivanti will answer, and a session object
+    // still reporting the old role would have `switch_role` confirm a change that did not happen.
+    let currentRole = await selectRole({ call }, choice.role);
+    let note = choice.note;
+
+    // The first choice was made blind when the roles arrived without flags — `GetRolesForUser` is
+    // the only source that answers a role-less session, and it carries none. Blind means the
+    // full-mode branch could only take the first entry Ivanti happened to list, which is how a
+    // portal role gets opened in an agent deployment.
+    //
+    // Selecting a role usually makes `GetUserData` answer, and it answers WITH the flags — so try
+    // again on real data. **Usually, not always**: measured against a live tenant, one account gets
+    // 500 from `GetUserData` whether or not a role is active, so its flags are not merely
+    // unavailable-yet but unobtainable. When that happens the choice stands on list order, and the
+    // caller is told so rather than left to assume it was informed.
+    if (!flagsKnown(roles)) {
+      let why: string | undefined;
+      const flagged = await userData()
+        .then(parseUserRoles)
+        .catch((error: unknown) => {
+          why = error instanceof Error ? error.message.slice(0, 120) : 'unknown';
+          return [] as IvantiRole[];
+        });
+
+      logger.debug('re-read the roles now that the session has one', {
+        login: opened.loginId,
+        // Whether Ivanti answered, and whether it answered with the flags — the two ways this
+        // second pass can come to nothing, which otherwise look identical from outside.
+        answered: flagged.length,
+        withFlags: flagsKnown(flagged),
+        ...(why === undefined ? {} : { reason: why }),
+      });
+
+      if (flagged.length > 0 && flagsKnown(flagged)) {
+        roles = flagged;
+        const confirmed = chooseRole(flagged, { ...decision, activeRole: currentRole });
+        if (!confirmed.ok) {
+              throw new Error(confirmed.refusal);
+        }
+        if (confirmed.mustSelect) {
+          logger.info('re-selecting the role now that Ivanti reports which are self-service', {
+            login: opened.loginId,
+            from: currentRole,
+            to: confirmed.role,
+          });
+          currentRole = await selectRole({ call }, confirmed.role);
+        }
+        note = confirmed.note ?? note;
+      } else {
+        // Say it plainly. A role picked from an arbitrary order should not read as a decision.
+        const blind =
+          `Ivanti would not report which of this person's roles are self-service, so ${currentRole} ` +
+          `was taken from the order it listed them (${roles.map((role) => role.name).join(', ')}) ` +
+          `rather than chosen. Set IVANTI_IMPERSONATION_ROLE to decide it explicitly.`;
+        note = note === undefined ? blind : `${note} ${blind}`;
+        logger.warn('role chosen without Ivanti reporting which are self-service', {
+          login: opened.loginId,
+          role: currentRole,
+        });
+      }
+    }
+
+    if (note !== undefined) {
+      logger.warn('impersonated session opened under a different role than configured', {
         login: opened.loginId,
         role: currentRole,
+        note,
       });
     }
+
+    // The role the session runs under, in the shape `workspaces.ts` and `form-context.ts` read it.
+    // Live rather than captured: `switchTo` changes it, and a catalog built after a switch must see
+    // the switched role.
+    const identity = (): SessionIdentity => ({ role: currentRole, userName: opened.loginId });
+
+    return {
+      sid: opened.sid,
+      loginId: opened.loginId,
+      get role(): string {
+        return currentRole;
+      },
+      roles,
+      ...(note === undefined ? {} : { note }),
+      call,
+      callHandler,
+      uploadToHandler,
+      identity: () => Promise.resolve(identity()),
+      identityIfKnown: identity,
+      switchTo: async (next: string): Promise<string> => {
+        currentRole = await selectRole({ call }, next);
+        return currentRole;
+      },
+      release: () => centralConfig.release(opened.sid),
+    };
+  } catch (error) {
+    // Teardown must never replace the error the caller needs to see.
+    await centralConfig.release(opened.sid).catch(() => undefined);
+    throw error;
   }
-
-  if (note !== undefined) {
-    logger.warn('impersonated session opened under a different role than configured', {
-      login: opened.loginId,
-      role: currentRole,
-      note,
-    });
-  }
-
-  // The role the session runs under, in the shape `workspaces.ts` and `form-context.ts` read it.
-  // Live rather than captured: `switchTo` changes it, and a catalog built after a switch must see
-  // the switched role.
-  const identity = (): SessionIdentity => ({ role: currentRole, userName: opened.loginId });
-
-  return {
-    sid: opened.sid,
-    loginId: opened.loginId,
-    get role(): string {
-      return currentRole;
-    },
-    roles,
-    ...(note === undefined ? {} : { note }),
-    call,
-    callHandler,
-    uploadToHandler,
-    identity: () => Promise.resolve(identity()),
-    identityIfKnown: identity,
-    switchTo: async (next: string): Promise<string> => {
-      currentRole = await selectRole({ call }, next);
-      return currentRole;
-    },
-    release: () => centralConfig.release(opened.sid),
-  };
 }

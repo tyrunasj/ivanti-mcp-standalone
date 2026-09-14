@@ -96,10 +96,20 @@ export class SessionManager<T extends ClosableSession> {
     };
   }
 
-  closeAll(): void {
+  /**
+   * Closes every live session and WAITS for them.
+   *
+   * It used to fire each `close()` and return, which read as tidy and did nothing: closing a
+   * session is what runs `releaseOnClose`, and that hands an impersonated Ivanti session back to
+   * the tenant. On shutdown the process exited first, so the release request never left the
+   * machine and the session sat open until Ivanti timed it out — measured at 18,000 s.
+   */
+  async closeAll(): Promise<void> {
+    const closing: Promise<void>[] = [];
     for (const { id, value } of this.store.drain()) {
       this.options.logger.debug('closing session', { sessionId: id, reason: 'shutdown' });
-      void value.close();
+      closing.push(Promise.resolve(value.close()).catch(() => undefined));
     }
+    await Promise.all(closing);
   }
 }

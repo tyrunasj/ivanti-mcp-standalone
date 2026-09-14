@@ -32,8 +32,19 @@ import type { CallContext } from '../tool-definition.js';
  * called; see `impersonated-session.ts`.
  */
 
-/** One view per session, not per call — a `WeakMap` so it dies with the session it belongs to. */
-const perSession = new WeakMap<ImpersonatedSession, IvantiConnection>();
+/**
+ * One view per session AND per role, not per call — a `WeakMap` so it dies with the session.
+ *
+ * Keyed by the session object alone, the memo outlived `switch_role`: `switchTo` mutates the role
+ * inside the session's own closure and returns the same object, so nothing invalidated anything,
+ * and every form- and workspace-derived answer for the rest of the conversation described the role
+ * it had just left — including a cached `undefined` meaning "no form this role can reach", while
+ * `switch_role` was reporting "what records are visible follows this role, from the next call
+ * onwards". The role is stored beside the view and compared on the way in.
+ *
+ * `transport` needs no invalidation: it is built around the SID, which a role switch leaves alone.
+ */
+const perSession = new WeakMap<ImpersonatedSession, { role: string; connection: IvantiConnection }>();
 
 export function connectionFor(deps: IvantiToolDeps, context: CallContext): IvantiConnection {
   const base = deps.connection;
@@ -41,7 +52,7 @@ export function connectionFor(deps: IvantiToolDeps, context: CallContext): Ivant
   if (session === undefined) return base;
 
   const existing = perSession.get(session);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined && existing.role === session.role) return existing.connection;
 
   // Built the way `connectIvanti` builds them, on the person's session instead. Each caches for
   // the life of the session, exactly as the service account's cache for the life of the process.
@@ -54,6 +65,6 @@ export function connectionFor(deps: IvantiToolDeps, context: CallContext): Ivant
     workspaces,
     forms: createFormContext(session, workspaces, logger),
   };
-  perSession.set(session, scoped);
+  perSession.set(session, { role: session.role, connection: scoped });
   return scoped;
 }
