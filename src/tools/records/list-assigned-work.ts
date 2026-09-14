@@ -6,6 +6,7 @@ import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { buildQuery, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
+import { transportFor } from '../shared/transport-for.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -49,15 +50,19 @@ interface Person {
 }
 
 export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition {
-  const { transport } = deps.connection;
+  // Turning a name into a login is a fact about the tenant's directory, not about the caller, so
+  // it keeps the service account — the same split `connectionFor` makes for `people.directory`.
+  // The WORK ROWS below are the opposite and must follow the person; they used to share this
+  // transport, which was captured at factory scope where `transportFor` could never reach it.
+  const directory = deps.connection.transport;
 
   const findPerson = async (person: string): Promise<Person | undefined> => {
     for (const attempt of PERSON_FIELDS) {
       const url = withQuery(
-        transport.routes.entitySet('employees'),
+        directory.routes.entitySet('employees'),
         buildQuery({ filter: `${attempt.field} eq ${quoteOdataString(person)}`, top: 2 }),
       );
-      const rows = readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url);
+      const rows = readCollection<OdataRecord>(await directory.request<OdataRecord>(url), url);
       const loginId = rows[0]?.['LoginID'];
       if (typeof loginId !== 'string' || loginId === '') continue;
 
@@ -118,6 +123,9 @@ export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition
     },
     handler: (args, context) =>
       runTool('list_assigned_work', deps.logger, async () => {
+        // Their credential, so an empty queue is Ivanti's answer for them rather than the service
+        // account's view of it.
+        const transport = transportFor(deps.connection.transport, context);
         const pinned = context.pin?.person();
         // Whoever the conversation is acting for, unless the caller named someone. A named
         // person is legitimate here — an analyst looking at a colleague's queue is the job — so

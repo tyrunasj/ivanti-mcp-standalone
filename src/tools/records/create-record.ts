@@ -94,8 +94,13 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // filed under someone else's name is the thing this mode exists to prevent.
         const owner = await ownershipFields(deps, context, target);
 
+        // The person's connection, not the service account's: `resolveValidatedWrite` reads the
+        // create form, runs `GetFormValidationListData` and reads cascade parents through it. On
+        // `deps.connection` those ran as the service account while the write itself went out on the
+        // person's SID — so a value only an admin's form offers was accepted, attached to its RecId
+        // and stored, then confirmed, and reported as validated for a role that never offers it.
         const resolved = await resolveValidatedWrite({
-          connection: deps.connection,
+          connection,
           logger: deps.logger,
           entity,
           entitySet,
@@ -140,7 +145,7 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         // Throws when a value did not take: the record exists, but not as asked.
         await confirmWrite(
-          deps.connection,
+          connection,
           entitySet,
           recId,
           resolved.confirm,

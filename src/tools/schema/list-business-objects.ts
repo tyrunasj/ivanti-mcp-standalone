@@ -6,6 +6,7 @@ import { toEntitySet } from '../../ivanti/metadata/entity-names.js';
 import type { AdminBusinessObject } from '../../ivanti/session/admin-catalog.js';
 import type { WorkspaceObject } from '../../ivanti/session/workspaces.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
+import { connectionFor } from '../shared/connection-for.js';
 import { jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -104,9 +105,14 @@ export function createListBusinessObjectsTool(deps: IvantiToolDeps): ToolDefinit
         .describe('Include picklist-backing objects such as `IncidentStatus#`.'),
       includeAuditTables: z.boolean().optional().describe('Include audit_* shadow tables.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('list_business_objects', deps.logger, async () => {
-        const { capability, metadata, workspaces, admin } = deps.connection;
+        const { capability, metadata, admin } = deps.connection;
+        // The schema graphs and the admin catalog are facts about the tenant and stay on the
+        // service account. The ROLE's workspaces are not — they are what this person's role can
+        // reach, so they follow the person, and reading them off `deps.connection` while
+        // impersonating listed the service account's workspaces under their name.
+        const { workspaces } = connectionFor(deps, context);
 
         await metadata.widen();
         const metadataNames = await metadata.entityNames();

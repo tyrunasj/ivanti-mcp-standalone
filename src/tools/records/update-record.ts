@@ -91,8 +91,10 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // whether it is still open. Ivanti happily updates a closed record.
         await assertRecordWritable(deps, context, target, args.recordId);
 
+        // The person's connection — see create-record.ts. Validating against the service
+        // account's form while writing on the person's SID validates the wrong thing.
         const resolved = await resolveValidatedWrite({
-          connection: deps.connection,
+          connection,
           logger: deps.logger,
           entity,
           entitySet,
@@ -119,7 +121,7 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
           });
 
         await confirmWrite(
-          deps.connection,
+          connection,
           entitySet,
           args.recordId,
           resolved.confirm,
