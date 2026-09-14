@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { z, ZodRawShape } from 'zod';
 import { ANONYMOUS, type CallerIdentity } from '../auth/identity.js';

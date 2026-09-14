@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { z } from 'zod';
 import { toObjectId } from '../../ivanti/write/validated-write.js';
 import type { IvantiToolDeps } from '../shared/deps.js';

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 export const WRITE_RECIPES = `
 # Writing to Ivanti: the parts that are not guessable
 

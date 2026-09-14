@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { IvantiApiError } from '../http/errors.js';
 
 /** One Ivanti record, as it arrives: a bag of fields whose shape is the tenant's business. */

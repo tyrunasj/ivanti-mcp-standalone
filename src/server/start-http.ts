@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { createServer as createHttpServer, type IncomingMessage, type Server } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';

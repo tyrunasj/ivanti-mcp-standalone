@@ -1,0 +1,78 @@
+SYNERGY Ivanti MCP — Commercial Licence
+Copyright (c) 2026 SYNERGY. All rights reserved.
+
+This software is licensed, not sold.
+
+
+1. NO LICENCE EXCEPT BY AGREEMENT
+
+   No right to use, copy, modify, merge, publish, distribute, sublicense or
+   sell this software is granted, except under a separate written commercial
+   agreement with SYNERGY, and then only on that agreement's terms. Where this
+   licence and such an agreement differ, the agreement prevails.
+
+
+2. EVALUATION
+
+   Notwithstanding section 1, you may pull, run and evaluate the software
+   internally, for the purpose of assessing whether to license it, for up to
+   thirty (30) days from first use. Evaluation use must not be in production
+   and must not be provided to any third party. This permission ends when the
+   thirty days expire or a commercial agreement begins, whichever is first.
+
+
+3. RESTRICTIONS
+
+   Except as section 1 or 2 permits, or as applicable law allows regardless of
+   contract, you must not:
+
+   a. redistribute, resell, rent, lease or host the software for others;
+   b. modify it, or create derivative works from it;
+   c. reverse engineer, decompile or disassemble it;
+   d. remove or obscure any copyright, trademark or licence notice; or
+   e. publish any benchmark or evaluation of it without SYNERGY's written
+      consent.
+
+
+4. OWNERSHIP
+
+   SYNERGY retains all right, title and interest in the software, including
+   all intellectual property rights. Nothing here transfers ownership.
+
+
+5. THIRD-PARTY COMPONENTS
+
+   This software is distributed with third-party components licensed under
+   their own terms, which govern those components and are not affected by this
+   licence. They are listed, with their notices, in THIRD-PARTY-NOTICES.md.
+
+
+6. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+   The software operates on a live IT service management tenant and can create,
+   modify and delete records in it. You are responsible for the configuration
+   it runs under, for the credential it is given, and for the audience it is
+   exposed to.
+
+
+7. LIMITATION OF LIABILITY
+
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, SYNERGY'S TOTAL LIABILITY ARISING
+   OUT OF OR RELATING TO THE SOFTWARE SHALL NOT EXCEED THE FEES PAID BY YOU FOR
+   IT IN THE TWELVE MONTHS PRECEDING THE CLAIM, AND SYNERGY SHALL NOT BE LIABLE
+   FOR ANY INDIRECT, INCIDENTAL, SPECIAL OR CONSEQUENTIAL DAMAGES, OR FOR LOST
+   PROFITS, REVENUE OR DATA. Nothing in this licence excludes liability that
+   cannot lawfully be excluded.
+
+
+8. TERMINATION
+
+   This licence terminates automatically if you breach it. On termination you
+   must stop using the software and destroy all copies in your possession.
+
+
+Enquiries: https://www.synergy.eu

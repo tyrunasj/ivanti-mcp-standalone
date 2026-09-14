@@ -8,5 +8,7 @@ home: https://github.com/tyrunasj/ivanti-mcp-standalone
 sources:
   - https://github.com/tyrunasj/ivanti-mcp-standalone
 keywords: [mcp, ivanti, itsm]
+annotations:
+  licenses: LicenseRef-SYNERGY-Commercial
 maintainers:
   - name: tyrunasj

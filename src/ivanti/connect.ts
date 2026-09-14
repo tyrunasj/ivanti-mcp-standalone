@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { Logger } from '../logger.js';
 import { probeBasePath, type ProbeFetch } from './http/base-path.js';
 import { createTransport, type FetchLike, type IvantiTransport } from './http/transport.js';

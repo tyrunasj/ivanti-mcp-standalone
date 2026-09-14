@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 /**
  * URL builders for the surfaces one API key reaches: OData for records, REST for the handful of
  * services that never got an OData shape, and CSDL for the schema. They share an origin and a

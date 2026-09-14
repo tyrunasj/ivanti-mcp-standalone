@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { IvantiConnection } from '../../ivanti/connect.js';
 import type { Logger } from '../../logger.js';
 import type { ObjectGate } from './object-gate.js';

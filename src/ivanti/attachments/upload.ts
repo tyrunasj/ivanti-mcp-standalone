@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import type { IvantiTransport } from '../http/transport.js';
 import { IvantiApiError } from '../http/errors.js';
 import type { OdataRecord } from '../odata/response.js';

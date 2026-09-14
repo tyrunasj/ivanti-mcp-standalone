@@ -19,7 +19,9 @@
     "test:coverage": "vitest run --coverage",
     "version:sync": "node scripts/check-version.mjs --sync",
     "version:check": "node scripts/check-version.mjs --check",
-    "check:examples": "node scripts/check-example-envs.mjs"
+    "check:examples": "node scripts/check-example-envs.mjs",
+    "check:licenses": "node scripts/check-license-headers.mjs && node scripts/third-party-notices.mjs --check",
+    "licenses": "node scripts/third-party-notices.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
@@ -36,5 +38,7 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.0",
     "vitest": "^5.0.0"
-  }
+  },
+  "license": "LicenseRef-SYNERGY-Commercial",
+  "author": "SYNERGY (https://www.synergy.eu)"
 }

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { z } from 'zod';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';

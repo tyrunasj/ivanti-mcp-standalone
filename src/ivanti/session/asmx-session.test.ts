@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../logger.js';
 import type { IvantiApiError } from '../http/errors.js';

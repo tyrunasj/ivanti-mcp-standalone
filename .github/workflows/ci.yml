@@ -47,6 +47,11 @@ jobs:
       - run: pnpm check:examples
         if: ${{ !cancelled() }}
 
+      # Every source file carries the notice, and the third-party list matches
+      # the tree that actually ships.
+      - run: pnpm check:licenses
+        if: ${{ !cancelled() }}
+
       # The tarball is a release artefact, but building it here means a change that
       # breaks relocation is caught on the PR rather than at tag time.
       - run: ./scripts/release-tarball.sh "${RUNNER_TEMP}/release"

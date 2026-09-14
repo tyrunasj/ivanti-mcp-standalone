@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { UnknownEntityError } from './metadata/catalog.js';
 import type { IvantiConnection } from './connect.js';
 

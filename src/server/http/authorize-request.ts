@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { timingSafeEqual } from 'node:crypto';
 import type { TokenVerifier, VerifiedIdentity } from '../../auth/oauth/verify-token.js';
 import { buildWwwAuthenticate } from '../../auth/oauth/www-authenticate.js';

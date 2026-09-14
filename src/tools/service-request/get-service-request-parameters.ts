@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
+// Copyright (c) 2026 SYNERGY. All rights reserved.
+
 import { z } from 'zod';
 import { decodeParameter } from '../../ivanti/service-request/parameter-shape.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
