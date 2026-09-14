@@ -6,7 +6,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { assertOwnRecordById } from '../shared/own-records.js';
+import { assertOwnRecordById, missingRecordMessage } from '../shared/own-records.js';
 import { errorResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
@@ -68,7 +68,13 @@ export function createDownloadAttachmentTool(deps: IvantiToolDeps): ToolDefiniti
         const row = readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
 
         if (row === undefined) {
-          return errorResult(`No attachment with RecId ${args.attachmentId}.`);
+          // Same rule as get_attachment_details: to a scoped caller, an attachment that is not
+          // there and one that is someone else's must read identically, or the difference is an
+          // oracle over the tenant's attachment table — and this path returns BEFORE
+          // `requirePerson`, so an unidentified caller could probe it too.
+          return errorResult(
+            missingRecordMessage(deps) ?? `No attachment with RecId ${args.attachmentId}.`,
+          );
         }
 
         const name = typeof row['ATTACHNAME'] === 'string' ? row['ATTACHNAME'] : args.attachmentId;

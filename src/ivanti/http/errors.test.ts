@@ -103,4 +103,42 @@ describe('scrubErrorBody', () => {
   it('is a no-op on an empty key rather than redacting everything', () => {
     expect(scrubErrorBody('a body', '')).toBe('a body');
   });
+
+  /**
+   * A value containing a backslash used to defeat the match entirely.
+   *
+   * Ivanti nests its logging context inside a JSON *string*, and a domain-qualified login
+   * (`CORP\jsmith`) then arrives with its backslash escaped. The old value class excluded
+   * backslash, so the whole pattern failed and the field went through verbatim — into
+   * `IvantiApiError.body`, which `run-tool` hands to the model — while the fields either side of
+   * it redacted correctly, which is what made it look like it was working.
+   */
+  it('redacts a listed field whose value contains a backslash', () => {
+    const inner = JSON.stringify({
+      SessionId: 'abc-123',
+      LoginId: 'CORP\\jsmith',
+      Hostname: 'IVNT-APP-01',
+    });
+    const body = JSON.stringify({ Message: 'boom', LogEntryId: inner });
+
+    const scrubbed = scrubErrorBody(body, 'key');
+
+    expect(scrubbed).not.toContain('jsmith');
+    expect(scrubbed).not.toContain('abc-123');
+    expect(scrubbed).not.toContain('IVNT-APP-01');
+  });
+
+  // Narrowing check: admitting backslashes must not let a match run past its own closing quote
+  // and swallow the rest of the document.
+  it('still stops at the end of the value it is redacting', () => {
+    const body = '{"SessionId":"abc-123","IncidentNumber":11478,"RecId":"8E71E727DD5045C7"}';
+
+    const scrubbed = scrubErrorBody(body, 'key');
+
+    expect(scrubbed).not.toContain('abc-123');
+    expect(scrubbed).toContain('11478');
+    // The 32-char hex RecIds a caller needs from an error body are not key-shaped noise.
+    expect(scrubbed).toContain('8E71E727DD5045C7');
+  });
 });
+

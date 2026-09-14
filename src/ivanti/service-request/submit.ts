@@ -241,8 +241,20 @@ function sameMoment(sent: string, stored: string, localOffset: number): boolean 
     return false;
   }
 
-  // An explicit instant is compared as one, exactly.
-  const sentAt = Date.parse(sent);
+  // An explicit instant is compared as one, exactly — but in the TENANT's frame, not the host's.
+  //
+  // The tool asks for `YYYY-MM-DDTHH:MM` in the tenant's local time, and ECMAScript resolves a
+  // zone-less date-TIME string in whatever zone the server process happens to run in (a date-ONLY
+  // string is UTC, which is why the branch above never had this problem). So the same submit
+  // verified differently depending on where the process ran: on a host in the tenant's own
+  // timezone — the documented deployment, "beside the tenant it talks to" — a correctly stored
+  // value came back as `storedDifferently`, and a false mismatch on a correct write is exactly
+  // what sends a caller into a second, non-idempotent submit.
+  //
+  // Appending `Z` when the caller supplied no zone reads their wall clock as the tenant's, which
+  // is what they were asked for. A value that DOES carry a zone or offset is respected as given.
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/u.test(sent);
+  const sentAt = Date.parse(zoned ? sent : `${sent}Z`);
   return !Number.isNaN(sentAt) && storedAt - localOffset * 60_000 === sentAt;
 }
 

@@ -3,6 +3,9 @@
 
 import { describe, expect, it } from 'vitest';
 import { connectionFixture } from '../connection.fixture.js';
+import { createPersonDirectory } from './directory.js';
+import { UnknownEntityError } from '../metadata/catalog.js';
+import { IvantiApiError } from '../http/errors.js';
 
 /** The four rows Ivanti really answers `search: "John"` with on the staging tenant. */
 const JOHN_SEARCH = {
@@ -135,5 +138,64 @@ describe('createPersonDirectory', () => {
     const directory = directoryOf({ $search: JOHN_SEARCH }, { employee: {} });
 
     expect(await directory.personObjects()).toEqual(['employee']);
+  });
+});
+
+/**
+ * A failed lookup must not be memoised as "this tenant has no such object".
+ *
+ * `externalcontact` is absent from the seed graph, so resolving it is its own fetch. One 5xx used
+ * to be caught into `undefined`, recorded in the permanent `present` list as absence, and never
+ * retried — after which every external contact reads as "no such person" for the life of the
+ * process. In `enduser` mode that means those people cannot use the server at all. The metadata
+ * catalog already forgets retryable failures; memoising a list derived from one cancelled that.
+ */
+describe('personObjects', () => {
+  /** A catalog whose `entity()` fails the first N times, then answers. */
+  function flaky(failures: number, error: Error) {
+    let seen = 0;
+    return {
+      entity: (name: string) => {
+        if (name === 'employee') return Promise.resolve({ name: 'Employee' });
+        seen += 1;
+        return seen <= failures ? Promise.reject(error) : Promise.resolve({ name: 'ExternalContact' });
+      },
+      calls: () => seen,
+    };
+  }
+
+  function directoryWith(catalog: { entity: (name: string) => Promise<unknown> }) {
+    const { connection } = connectionFixture({ entities: { employee: {} } });
+    return createPersonDirectory({
+      transport: connection.transport,
+      metadata: catalog as never,
+      logger: { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
+    });
+  }
+
+  it('retries after a transport failure rather than recording absence', async () => {
+    const catalog = flaky(1, new IvantiApiError({ status: 0, method: 'GET', url: 'x' }, 'timeout'));
+    const directory = directoryWith(catalog);
+
+    await expect(directory.personObjects()).rejects.toThrow();
+    // The second call must actually ask again — the whole point.
+    await expect(directory.personObjects()).resolves.toEqual(['employee', 'externalcontact']);
+  });
+
+  // The ordinary case, and the one the catch was written for: this tenant genuinely has no
+  // `externalcontact`. That is absence, it is cached, and it must not become an error.
+  it('still treats a genuinely unknown entity as absent, once', async () => {
+    let asked = 0;
+    const directory = directoryWith({
+      entity: (name: string) => {
+        if (name === 'employee') return Promise.resolve({ name: 'Employee' });
+        asked += 1;
+        return Promise.reject(new UnknownEntityError('externalcontact', []));
+      },
+    });
+
+    await expect(directory.personObjects()).resolves.toEqual(['employee']);
+    await expect(directory.personObjects()).resolves.toEqual(['employee']);
+    expect(asked).toBe(1);
   });
 });

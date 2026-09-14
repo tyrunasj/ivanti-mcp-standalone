@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { assertRecordWritable } from '../shared/own-records.js';
+import { assertRecordWritable, missingRecordMessage } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
@@ -55,9 +55,13 @@ export function createDeleteAttachmentTool(deps: IvantiToolDeps): ToolDefinition
             : args.attachmentId;
 
         if (existing === undefined) {
+          // See download_attachment: a scoped caller must not be able to tell "no such
+          // attachment" from "not yours". The 204 note is still worth saying where there is
+          // nothing to hide.
           return errorResult(
-            `No attachment with RecId ${args.attachmentId}; nothing was deleted. Ivanti would ` +
-              'have answered 204 for this, so it was checked rather than believed.',
+            missingRecordMessage(deps) ??
+              `No attachment with RecId ${args.attachmentId}; nothing was deleted. Ivanti would ` +
+                'have answered 204 for this, so it was checked rather than believed.',
           );
         }
 
