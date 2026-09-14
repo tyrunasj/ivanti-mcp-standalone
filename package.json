@@ -21,7 +21,8 @@
     "version:check": "node scripts/check-version.mjs --check",
     "check:examples": "node scripts/check-example-envs.mjs",
     "check:licenses": "node scripts/check-license-headers.mjs && node scripts/third-party-notices.mjs --check",
-    "licenses": "node scripts/third-party-notices.mjs"
+    "licenses": "node scripts/third-party-notices.mjs",
+    "check:docker": "node scripts/check-docker-context.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

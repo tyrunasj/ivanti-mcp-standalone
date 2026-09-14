@@ -22,6 +22,9 @@ eslint.config.js
 docs
 *.md
 !README.md
+# These travel with the distribution — the licences of the components inside it
+# require their notices to, and the Dockerfile COPYs both next to dist/.
+!THIRD-PARTY-NOTICES.md
 
 .DS_Store
 .vscode
