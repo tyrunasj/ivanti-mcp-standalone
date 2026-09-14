@@ -462,6 +462,33 @@ The reply is columns, not objects: the stored value is at the **lowest** index i
 `DisplayName` labels it, `RecId` identifies it, and an empty list with `SameAs` means "reuse that
 field's options". Measured live: Incident Status has 7 values, Priority 5, Source 13.
 
+**A field on a validated list can still be *computed*, and the write is overridden without a word.**
+`Incident.Priority` is on the picklist — `get_pick_list_values` returns its five values, and a write
+passes every client-side check — but this tenant derives it from `Urgency` × `Impact` and overwrites
+whatever was sent. Measured live 2026-09-14, creating five incidents in one batch:
+
+| Urgency | Impact | Priority sent | Priority stored |
+|---|---|---|---|
+| Medium | Low | 4 | 4 |
+| High | Low | 3 | 3 |
+| Low | Low | **4** | **5** |
+| High | High | **2** | **1** |
+| Low | Low | 5 | 5 |
+
+The three that matched were the ones where the guess happened to agree with the matrix, so a smaller
+sample reads as "it works". Ivanti answers **201 for all five** and stores `Priority_Valid` pointing
+at the option it chose, not the one that was sent — so nothing on the wire says the value was
+rejected. `confirmWrite` is the only thing that catches it, and it does: the two divergent writes
+were reported as failures naming the field, the value sent and the value stored, while the record
+itself exists.
+
+Two consequences. A caller who sets `Priority` alongside `Urgency`/`Impact` should expect to be told
+the write did not store, and that is correct behaviour rather than a bug to route around — the fix is
+to set the drivers and let the rule decide, or to set `Priority` alone. And the refusal text points
+at "a stale option list … or a value that needs a different cascade parent", which is the wrong
+advice here: the list was fresh and the value was legal. **A computed field is a third cause that
+message does not name.**
+
 **A cascade parent supplied under the wrong name filters nothing, silently.**
 `GetFormValidationListData` takes the parents inside the data model, so a key the form does not
 have is simply ignored and the answer comes from the unfiltered list — whose values may not be
