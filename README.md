@@ -65,7 +65,7 @@ cannot drift apart. Full instructions in **[`docs/deployment.md`](docs/deploymen
 |---|---|---|---|
 | **Plain Node host** | a systemd service | stdio or HTTP | the release tarball — Node 22 and nothing else |
 | **Container** | `docker run` / compose | either | `tyrunas/ivanti-mcp` — multi-arch, distroless, cosign-signed |
-| **Kubernetes** | a Deployment | HTTP only | `oci://registry-1.docker.io/tyrunas/ivanti-mcp` — a Helm chart over that same image |
+| **Kubernetes** | a Deployment | HTTP only | `oci://ghcr.io/tyrunasj/charts/ivanti-mcp` — a Helm chart over that same image |
 
 ```bash
 docker run -d --name ivanti-mcp --env-file .env -p 3000:3000 \
@@ -75,7 +75,7 @@ docker run -d --name ivanti-mcp --env-file .env -p 3000:3000 \
 ```
 
 ```bash
-helm install ivanti-mcp oci://registry-1.docker.io/tyrunas/ivanti-mcp \
+helm install ivanti-mcp oci://ghcr.io/tyrunasj/charts/ivanti-mcp \
   --version 0.1.0 --namespace ivanti --create-namespace \
   --set server.publicUrl=https://mcp.example.com/mcp \
   --set 'server.trustedOrigins={https://claude.ai}' \
