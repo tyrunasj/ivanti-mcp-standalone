@@ -2,6 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
+import type { Logger } from '../../logger.js';
 
 export interface VerifiedIdentity {
   subject: string;
@@ -10,13 +11,18 @@ export interface VerifiedIdentity {
   claims: JWTPayload;
 }
 
-export type TokenFailure = 'invalid_token' | 'insufficient_scope';
+export type TokenFailure = 'invalid_token' | 'insufficient_scope' | 'temporarily_unavailable';
 
 export type TokenVerification =
   | { ok: true; identity: VerifiedIdentity }
   | {
       ok: false;
-      status: 401 | 403;
+      /**
+       * 503 is not a token verdict: it means the IdP could not be reached, so nothing was
+       * verified either way. Reporting that as 401 sends every client into a re-authentication
+       * loop, because the browser can still reach the IdP and will happily get a fresh token.
+       */
+      status: 401 | 403 | 503;
       error: TokenFailure;
       /**
        * Goes into the `WWW-Authenticate` challenge, which is truncated to 200 characters — so
@@ -42,6 +48,12 @@ export interface TokenVerifierOptions {
   requiredScopes?: readonly string[];
   clockToleranceSeconds?: number;
   keyResolver: JWTVerifyGetKey;
+  /**
+   * Optional, and the only place an IdP outage is visible at all: the request log line names
+   * neither the JWKS URI nor the network error, and `describeFailure` collapses everything it does
+   * not recognise into "Access token is not valid".
+   */
+  logger?: Logger;
 }
 
 export type TokenVerifier = (token: string) => Promise<TokenVerification>;
@@ -78,6 +90,23 @@ export function createRemoteKeyResolver(jwksUri: string): JWTVerifyGetKey {
 export function looksLikeJwt(token: string): boolean {
   const parts = token.split('.');
   return parts.length === 3 && parts.every((part) => part.length > 0);
+}
+
+/**
+ * Whether the IdP could not be REACHED, as opposed to the token being bad.
+ *
+ * jose fetches the JWKS lazily and on an unknown `kid`, so a firewall change, a DNS failure or an
+ * IdP 5xx surfaces here rather than at startup. Reported as 401 it starts a re-authentication
+ * LOOP across every user: the client reads 401 as "your token is bad", discards it, runs the
+ * authorization code flow — which succeeds, because the browser can still reach the IdP — and
+ * presents a fresh token to the same 401. 503 tells it to back off instead.
+ */
+function isUnreachable(error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  if (code === 'ERR_JWKS_TIMEOUT' || code === 'ERR_JOSE_GENERIC') return true;
+  if (error instanceof TypeError) return true;
+  const name = (error as { name?: unknown }).name;
+  return name === 'JWKSTimeout' || name === 'JOSEError';
 }
 
 function describeFailure(error: unknown): string {
@@ -128,10 +157,34 @@ export function createTokenVerifier(options: TokenVerifierOptions): TokenVerifie
       const result = await jwtVerify(token, options.keyResolver, {
         issuer: options.issuer,
         audience: [...options.audience],
+        // RFC 9068 §2.2 makes `exp` REQUIRED in a JWT access token, and jose only checks a claim
+        // it finds — so without this a token minted without one verified forever. Disabling the
+        // user at the IdP would change nothing, and a token captured from a log would be a
+        // permanent credential for the whole tool surface.
+        requiredClaims: ['exp'],
         clockTolerance: options.clockToleranceSeconds ?? 30,
       });
       claims = result.payload;
     } catch (error) {
+      if (isUnreachable(error)) {
+        // Not the caller's fault, and the only place the cause is visible at all: `describeFailure`
+        // collapses everything it does not recognise into "not valid", and the request log line
+        // names neither the JWKS URI nor the network error.
+        options.logger?.warn('token verification could not reach the IdP', {
+          reason: error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+        });
+        return {
+          ok: false,
+          status: 503,
+          error: 'temporarily_unavailable',
+          description: 'The authorization server’s keys could not be reached. Try again shortly.',
+          detail:
+            'jose could not fetch or refresh the JWKS. This is an outage between this server and ' +
+            'the IdP, not a problem with the token — reporting it as 401 would send every client ' +
+            'into a re-authentication loop, because the browser can still reach the IdP.',
+        };
+      }
+
       return {
         ok: false,
         status: 401,

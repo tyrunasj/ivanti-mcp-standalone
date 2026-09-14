@@ -196,6 +196,40 @@ describe('submit_service_request', () => {
     expect(result['requestNumber']).toBeDefined();
   });
 
+  /**
+   * Every file is checked before any file is uploaded.
+   *
+   * The decode/empty/size checks used to live INSIDE the staging loop, and staging is a real
+   * upload — `GetPackageDataSDA` → `GetUploadTicket` → a multipart POST. So when a later
+   * attachment failed validation, the earlier ones were already in Ivanti while the caller was
+   * told "Nothing was submitted": true about the service request, false about the tenant.
+   *
+   * The fixture stages nothing, so reaching the uploader at all fails with a session error. Seeing
+   * the SIZE message instead is what proves the pre-pass ran first.
+   */
+  it('checks every attachment before uploading any of them', async () => {
+    const { deps: d } = deps({ ...OFFERINGS, ...SUBMITTED });
+    const tooBig = Buffer.alloc(3 * 1024 * 1024, 1).toString('base64');
+
+    const result = await createSubmitServiceRequestTool(d).handler(
+      {
+        subscriptionId: 'sub-1',
+        answers: { P1: 'x' },
+        attachments: [
+          { filename: 'report.txt', contentBase64: Buffer.from('fine').toString('base64') },
+          { filename: 'capture.bin', contentBase64: tooBig },
+        ],
+      },
+      pinned(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('capture.bin');
+    expect(text(result)).toContain('over the');
+    // And the honest part: nothing reached the tenant, so the old wording is still correct here.
+    expect(text(result)).toContain('Nothing was submitted');
+  });
+
   it('refuses to file in someone else’s name in enduser mode', async () => {
     const { deps: d } = deps(SUBMITTED, true);
 

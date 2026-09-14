@@ -183,7 +183,14 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
         // Ivanti keeps ONE attachment record behind a staging id, so a second submit carrying it
         // would MOVE the file off the first request — a token nothing can reuse cannot do that.
         const files = args.attachments ?? [];
-        const staged: StagedAttachment[] = [];
+        // Decode and check EVERY file before staging any of them.
+        //
+        // These checks used to live inside the staging loop, and staging is a real upload —
+        // `GetPackageDataSDA` → `GetUploadTicket` → a multipart POST. So two attachments where the
+        // second is over the cap left the first one's bytes in Ivanti while the caller was told
+        // "Nothing was submitted". The "no service request was created" half of that was true;
+        // the implication that nothing reached the tenant was not.
+        const decoded: { filename: string; bytes: Buffer; contentType: string }[] = [];
         for (const file of files) {
           const bytes = Buffer.from(file.contentBase64, 'base64');
           if (bytes.byteLength === 0) {
@@ -199,15 +206,42 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
                 'call. Nothing was submitted.',
             );
           }
-          staged.push(
-            await stageAttachment({
-              session: connection.session,
-              subscriptionId: args.subscriptionId,
-              customerLocation: '',
-              filename: file.filename,
-              bytes,
-              contentType: file.contentType ?? 'application/octet-stream',
-            }),
+          decoded.push({
+            filename: file.filename,
+            bytes,
+            contentType: file.contentType ?? 'application/octet-stream',
+          });
+        }
+
+        // Past this point bytes really do reach the tenant, so a later failure has to say which
+        // files got there. What becomes of an abandoned staging record is UNMEASURED — the
+        // permanent-orphan case documented for `POST /api/rest/Attachment` is a different
+        // endpoint, and a staging ticket may well expire — so this reports rather than claims.
+        const staged: StagedAttachment[] = [];
+        try {
+          for (const file of decoded) {
+            staged.push(
+              await stageAttachment({
+                session: connection.session,
+                subscriptionId: args.subscriptionId,
+                customerLocation: '',
+                filename: file.filename,
+                bytes: file.bytes,
+                contentType: file.contentType,
+              }),
+            );
+          }
+        } catch (error: unknown) {
+          const reached = staged.map((file) => file.filename);
+          return errorResult(
+            `Staging '${decoded[staged.length]?.filename ?? 'a file'}' failed: ` +
+              `${error instanceof Error ? error.message : 'unknown error'}. No service request ` +
+              'was created' +
+              (reached.length === 0
+                ? '.'
+                : `, but ${reached.join(', ')} had already been uploaded and are now attached to ` +
+                  'nothing. They cannot be reached through this server; clear them in Ivanti if ' +
+                  'they matter.'),
           );
         }
 

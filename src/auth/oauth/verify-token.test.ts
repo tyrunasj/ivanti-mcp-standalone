@@ -2,7 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { SignJWT, generateKeyPair, type CryptoKey, type JWTVerifyGetKey } from 'jose';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTokenVerifier, extractScopes, looksLikeJwt } from './verify-token.js';
 
 const ISSUER = 'https://id.example.com';
@@ -21,6 +21,8 @@ interface TokenOverrides {
   expiresIn?: string;
   notBefore?: string;
   signWith?: CryptoKey;
+  /** RFC 9068 makes `exp` REQUIRED; a server that omits it is what this guards against. */
+  noExpiry?: boolean;
 }
 
 const issueToken = async (overrides: TokenOverrides = {}): Promise<string> => {
@@ -32,8 +34,8 @@ const issueToken = async (overrides: TokenOverrides = {}): Promise<string> => {
     .setProtectedHeader({ alg: 'RS256' })
     .setIssuedAt()
     .setIssuer(overrides.issuer ?? ISSUER)
-    .setAudience(overrides.audience ?? AUDIENCE)
-    .setExpirationTime(overrides.expiresIn ?? '5m');
+    .setAudience(overrides.audience ?? AUDIENCE);
+  if (overrides.noExpiry !== true) jwt = jwt.setExpirationTime(overrides.expiresIn ?? '5m');
 
   const subject = 'subject' in overrides ? overrides.subject : 'user-123';
   if (subject !== undefined) jwt = jwt.setSubject(subject);
@@ -211,4 +213,64 @@ describe('challenge-safe descriptions', () => {
       expect(result.detail).toContain('Dynamic Client Registration');
     }
   });
+
+  /**
+   * An IdP that cannot be reached is not a bad token.
+   *
+   * jose fetches the JWKS lazily and again on an unknown `kid`, so a firewall change or an IdP
+   * outage surfaces at verification time rather than at startup. Reported as 401 it starts a
+   * re-authentication LOOP across every user: the client reads 401 as "your token is bad",
+   * discards it, runs the authorization code flow — which SUCCEEDS, because the browser can still
+   * reach the IdP — and presents a fresh token to the same 401. And the cause was discarded, so
+   * the operator's only log line named neither the JWKS URI nor the network error.
+   */
+  describe('when the IdP cannot be reached', () => {
+    it.each([
+      ['a fetch failure', Object.assign(new TypeError('fetch failed'), {})],
+      ['a JWKS timeout', Object.assign(new Error('timeout'), { name: 'JWKSTimeout' })],
+    ])('answers 503 rather than 401 for %s', async (_label, thrown) => {
+      const warn = vi.fn();
+      const verify = createTokenVerifier({
+        issuer: ISSUER,
+        audience: [AUDIENCE],
+        keyResolver: () => Promise.reject(thrown),
+        logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+      });
+
+      const result = await verify(await issueToken());
+
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.status).toBe(503);
+      // The cause is logged once, which is the only place it is visible at all.
+      expect(warn).toHaveBeenCalled();
+    });
+
+    // Narrowing check: a genuinely bad token must still be 401, or this would hide real failures.
+    it('still answers 401 for a token that is actually invalid', async () => {
+      const verify = createTokenVerifier({
+        issuer: ISSUER,
+        audience: [AUDIENCE],
+        keyResolver: () => Promise.reject(Object.assign(new Error('nope'), { code: 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED' })),
+      });
+
+      const result = await verify(await issueToken());
+
+      expect(result.ok === false && result.status).toBe(401);
+    });
+  });
+
+  /**
+   * RFC 9068 §2.2 makes `exp` REQUIRED in a JWT access token, and jose only validates a claim it
+   * finds — so a token minted without one verified forever. Disabling the user at the IdP would
+   * change nothing, and a token captured from a log would be a permanent credential.
+   */
+  it('refuses a token that carries no expiry at all', async () => {
+    const verify = createTokenVerifier({ issuer: ISSUER, audience: [AUDIENCE], keyResolver });
+
+    const result = await verify(await issueToken({ noExpiry: true }));
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.status).toBe(401);
+  });
 });
+

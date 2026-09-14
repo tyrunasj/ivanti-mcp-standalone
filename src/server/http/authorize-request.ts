@@ -91,6 +91,18 @@ export async function authorizeRequest(
 
       const verification = await verifier(token);
       if (!verification.ok) {
+        // A 503 is not an authentication verdict — the IdP could not be reached, so nothing was
+        // verified either way — and RFC 6750 has no `error` code for it. Sending a challenge would
+        // tell the client its token is the problem, which is what starts the re-authentication
+        // loop this status exists to avoid.
+        if (verification.status === 503) {
+          return {
+            authorized: false,
+            status: 503,
+            reason: verification.detail ?? verification.description,
+          };
+        }
+
         return {
           authorized: false,
           status: verification.status,
@@ -98,7 +110,7 @@ export async function authorizeRequest(
           reason: verification.detail ?? verification.description,
           challenge: buildWwwAuthenticate({
             resourceMetadataUrl,
-            error: verification.error,
+            error: verification.error === 'insufficient_scope' ? 'insufficient_scope' : 'invalid_token',
             errorDescription: verification.description,
             scope: config.OAUTH_REQUIRED_SCOPES,
           }),
