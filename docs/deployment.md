@@ -14,7 +14,13 @@ derives the repository from the chart name, so pushing `ivanti-mcp` into the `ty
 namespace would target `tyrunas/ivanti-mcp:<version>` — the coordinate the image already
 occupies — and the chart would silently replace it. Docker Hub is only `user/repo`, with
 no free namespace to move to; ghcr.io nests, so the chart lives under `charts/` and needs
-no renaming. Both are public and neither needs a login to pull.
+no renaming.
+
+**The ghcr package must be made public once, by hand.** A package pushed by
+`GITHUB_TOKEN` is private by default, so an anonymous `helm pull` gets a 403 until
+someone flips it: *the repository → Packages → `charts/ivanti-mcp` → Package settings →
+Change visibility → Public*. It is a one-time setting; later pushes keep it. The image on
+Docker Hub is already public.
 
 Whatever the shape, two rules hold. **One instance serves one tenant** — staging, UAT
 and production are three deployments, not three tenants in one process. And **one

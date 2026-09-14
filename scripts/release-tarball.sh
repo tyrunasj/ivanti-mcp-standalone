@@ -17,9 +17,16 @@ STAGE="$OUT/ivanti-mcp-$VERSION"
 
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 
+# STDOUT IS THE TARBALL PATH AND NOTHING ELSE — the release workflow captures it with
+# `$(...)` and hands it straight to the upload step, so anything else printed here
+# becomes a filename. `pnpm install` writes progress to stdout: with that mixed in, the
+# workflow captured "Lockfile is up to date, resolution step is skipped" as the path,
+# the upload matched no file, and the step still exited 0. Everything chatty goes to
+# stderr from here on.
+
 # Production dependencies only, laid out flat.
 cp "$ROOT/package.json" "$ROOT/pnpm-lock.yaml" "$ROOT/pnpm-workspace.yaml" "$STAGE/"
-( cd "$STAGE" && pnpm install --prod --frozen-lockfile --node-linker=hoisted --ignore-scripts )
+( cd "$STAGE" && pnpm install --prod --frozen-lockfile --node-linker=hoisted --ignore-scripts ) >&2
 
 # Same prune as the Dockerfile's deps stage, for the same reason: none of this is read
 # by a running process. LICENCE files stay — the notices have to travel with the copy.
@@ -34,5 +41,5 @@ cp "$ROOT/README.md" "$STAGE/README.md" 2>/dev/null || true
 tar -czf "$OUT/ivanti-mcp-$VERSION.tar.gz" -C "$OUT" "ivanti-mcp-$VERSION"
 rm -rf "$STAGE"
 
+ls -lh "$OUT/ivanti-mcp-$VERSION.tar.gz" | awk '{print "  " $5}' >&2
 echo "$OUT/ivanti-mcp-$VERSION.tar.gz"
-ls -lh "$OUT/ivanti-mcp-$VERSION.tar.gz" | awk '{print "  " $5}'
