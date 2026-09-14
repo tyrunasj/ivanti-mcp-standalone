@@ -7,7 +7,14 @@ import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
 import type { FetchLike } from '../http/transport.js';
 import type { IvantiRoutes } from '../odata/url.js';
 import type { CentralConfig } from './central-config.js';
-import { chooseRole, readRoles, selectRole, type IvantiRole } from './roles.js';
+import {
+  chooseRole,
+  flagsKnown,
+  parseUserRoles,
+  readRoles,
+  selectRole,
+  type IvantiRole,
+} from './roles.js';
 
 /**
  * One Ivanti session belonging to **a named person**, for the life of one conversation.
@@ -147,10 +154,13 @@ export async function openImpersonatedSession(
     // they do not share this path. (They are unreachable here in any case.)
     post<T>(routes.service(`${servicePath}/${method}`), { _csrfToken: csrf, ...args }, opened.sid);
 
-  const roles = await readRoles(
+  // `tzoffset` is required: without it this answers 500, which reads as a broken session.
+  const userData = (): Promise<Record<string, unknown>> =>
+    call('Services/Session.asmx', 'GetUserData', { tzoffset: 0 });
+
+  let roles = await readRoles(
     {
-      // `tzoffset` is required: without it this answers 500, which reads as a broken session.
-      userData: () => call('Services/Session.asmx', 'GetUserData', { tzoffset: 0 }),
+      userData,
       // A different convention: body only, no cookie and no CSRF, on the integration service.
       rolesForUser: () =>
         post(routes.service('ServiceAPI/FRSHEATIntegration.asmx/GetRolesForUser'), {
@@ -161,12 +171,12 @@ export async function openImpersonatedSession(
     logger,
   );
 
-  const choice = chooseRole(roles, {
+  const decision = {
     mode,
     enduserRole,
     ...(pinnedRole === undefined ? {} : { pinnedRole }),
-    activeRole: status.ActiveRole ?? '',
-  });
+  };
+  const choice = chooseRole(roles, { ...decision, activeRole: status.ActiveRole ?? '' });
 
   if (!choice.ok) {
     await centralConfig.release(opened.sid);
@@ -176,12 +186,71 @@ export async function openImpersonatedSession(
   // Mutable behind a getter: `switchTo` changes what Ivanti will answer, and a session object
   // still reporting the old role would have `switch_role` confirm a change that did not happen.
   let currentRole = choice.mustSelect ? await selectRole({ call }, choice.role) : choice.role;
+  let note = choice.note;
 
-  if (choice.note !== undefined) {
+  // The first choice was made blind when the roles arrived without flags — `GetRolesForUser` is
+  // the only source that answers a role-less session, and it carries none. Blind means the
+  // full-mode branch could only take the first entry Ivanti happened to list, which is how a
+  // portal role gets opened in an agent deployment.
+  //
+  // Selecting a role usually makes `GetUserData` answer, and it answers WITH the flags — so try
+  // again on real data. **Usually, not always**: measured against a live tenant, one account gets
+  // 500 from `GetUserData` whether or not a role is active, so its flags are not merely
+  // unavailable-yet but unobtainable. When that happens the choice stands on list order, and the
+  // caller is told so rather than left to assume it was informed.
+  if (!flagsKnown(roles)) {
+    let why: string | undefined;
+    const flagged = await userData()
+      .then(parseUserRoles)
+      .catch((error: unknown) => {
+        why = error instanceof Error ? error.message.slice(0, 120) : 'unknown';
+        return [] as IvantiRole[];
+      });
+
+    logger.debug('re-read the roles now that the session has one', {
+      login: opened.loginId,
+      // Whether Ivanti answered, and whether it answered with the flags — the two ways this
+      // second pass can come to nothing, which otherwise look identical from outside.
+      answered: flagged.length,
+      withFlags: flagsKnown(flagged),
+      ...(why === undefined ? {} : { reason: why }),
+    });
+
+    if (flagged.length > 0 && flagsKnown(flagged)) {
+      roles = flagged;
+      const confirmed = chooseRole(flagged, { ...decision, activeRole: currentRole });
+      if (!confirmed.ok) {
+        await centralConfig.release(opened.sid);
+        throw new Error(confirmed.refusal);
+      }
+      if (confirmed.mustSelect) {
+        logger.info('re-selecting the role now that Ivanti reports which are self-service', {
+          login: opened.loginId,
+          from: currentRole,
+          to: confirmed.role,
+        });
+        currentRole = await selectRole({ call }, confirmed.role);
+      }
+      note = confirmed.note ?? note;
+    } else {
+      // Say it plainly. A role picked from an arbitrary order should not read as a decision.
+      const blind =
+        `Ivanti would not report which of this person's roles are self-service, so ${currentRole} ` +
+        `was taken from the order it listed them (${roles.map((role) => role.name).join(', ')}) ` +
+        `rather than chosen. Set IVANTI_IMPERSONATION_ROLE to decide it explicitly.`;
+      note = note === undefined ? blind : `${note} ${blind}`;
+      logger.warn('role chosen without Ivanti reporting which are self-service', {
+        login: opened.loginId,
+        role: currentRole,
+      });
+    }
+  }
+
+  if (note !== undefined) {
     logger.warn('impersonated session opened under a different role than configured', {
       login: opened.loginId,
       role: currentRole,
-      note: choice.note,
+      note,
     });
   }
 
@@ -192,7 +261,7 @@ export async function openImpersonatedSession(
       return currentRole;
     },
     roles,
-    ...(choice.note === undefined ? {} : { note: choice.note }),
+    ...(note === undefined ? {} : { note }),
     call,
     switchTo: async (next: string): Promise<string> => {
       currentRole = await selectRole({ call }, next);

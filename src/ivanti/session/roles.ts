@@ -142,6 +142,18 @@ export async function selectRole(caller: SessionCaller, role: string): Promise<s
   return effective === undefined || effective === null || effective === '' ? role : effective;
 }
 
+/**
+ * Whether Ivanti actually told us which roles are self-service.
+ *
+ * `GetRolesForUser` carries no flags, and it is the only source that answers for a session with
+ * no active role — so the first choice for such a person is made blind. That is survivable only
+ * because it can be redone: selecting any role gives the session one, and `GetUserData` then
+ * answers with the flags. This is what tells the caller a second pass is worth the round trip.
+ */
+export function flagsKnown(roles: readonly IvantiRole[]): boolean {
+  return roles.some((role) => role.selfService !== undefined);
+}
+
 export interface RoleChoiceOptions {
   mode: McpMode;
   /** `ENDUSER_ROLE` — the self-service role an end-user session should open under. */

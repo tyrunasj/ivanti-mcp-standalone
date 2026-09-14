@@ -1034,6 +1034,20 @@ blocking rather than optional. Note which number may move — `DESCRIPTION_BUDGE
 real client truncation and raising it buys nothing, while `MANIFEST_BUDGET` is a self-imposed
 cost ceiling and raising *that* is a decision to argue on cost. *(Measured 2026-09-14.)*
 
+**`GetUserData` can refuse for a person permanently, not just while their session has no role.**
+The obvious repair for a flagless role list is to select any role and ask again — the session then
+has one, and `GetUserData` carries `SelfServiceRole`. It works for most accounts. Measured against
+a live tenant it does **not** work for all: one account answers **500** from `GetUserData` both
+before and after `SelectRole` succeeded, so its flags are unobtainable rather than
+unavailable-yet. Do not treat "no active role" as the explanation for a `GetUserData` failure; it
+is one explanation.
+
+Where the flags cannot be had, the role can only come from the order `GetRolesForUser` listed them
+— alphabetical, so `Admin` sorts first and an account holding it opens under the most privileged
+role it has, by accident rather than policy. The server keeps that fallback (refusing would lock
+out the account entirely) but **says so in the response** and warns, and `IVANTI_IMPERSONATION_ROLE`
+is the way to decide it explicitly. *(Measured 2026-09-14.)*
+
 ## Observability
 
 **`/health` must answer without a token, so everything it returns is public.**

@@ -206,3 +206,67 @@ describe('openImpersonatedSession', () => {
     expect(release).toHaveBeenCalledWith(SID);
   });
 });
+
+describe('choosing a role when Ivanti reports no flags', () => {
+  // GetRolesForUser is the only source that answers a role-less session, and it carries no
+  // SelfServiceRole flags — so the first choice can only go by the order Ivanti listed them.
+  // Left there, a `full` deployment opens whatever sorts first, which may be a portal role.
+  const FLAGLESS = { status: 'Success', roleList: [{ Name: 'SelfServiceIT' }, { Name: 'ServiceDeskAnalyst' }] };
+
+  it('re-decides once a role exists and GetUserData can report them', async () => {
+    let userDataCalls = 0;
+    const { fetchImpl, calls } = (() => {
+      const seen: { url: string; body: unknown }[] = [];
+      const impl = vi.fn((url: string, init: { headers: Record<string, string>; body?: unknown }) => {
+        seen.push({ url, body: JSON.parse(String(init.body)) as unknown });
+        const answer = (d: unknown) => Promise.resolve(new Response(JSON.stringify({ d }), { status: 200 }));
+        if (url.includes('InitializeSession')) return answer({ SessionCsrfToken: 'CSRF', ActiveRole: '' });
+        if (url.includes('GetRolesForUser')) return answer(FLAGLESS);
+        if (url.includes('SelectRole')) {
+          const role = (JSON.parse(String(init.body)) as { sRole: string }).sRole;
+          return answer({ ActiveRole: role });
+        }
+        if (url.includes('GetUserData')) {
+          userDataCalls += 1;
+          // First call fails: the session has no role yet, which is exactly why the flags were
+          // missing. It answers only once a role has been selected.
+          if (userDataCalls === 1) return Promise.resolve(new Response('no', { status: 500 }));
+          return answer({
+            userRoleList: [
+              { Name: 'SelfServiceIT', SelfServiceRole: true },
+              { Name: 'ServiceDeskAnalyst', SelfServiceRole: false },
+            ],
+          });
+        }
+        return Promise.resolve(new Response('nope', { status: 551 }));
+      });
+      return { fetchImpl: impl, calls: seen };
+    })();
+
+    const session = await openImpersonatedSession({
+      centralConfig: centralConfig(),
+      routes,
+      tenantHost: TENANT,
+      login: 'HSanders',
+      mode: 'full',
+      enduserRole: 'SelfServiceMobile',
+      logger: logger(),
+      fetchImpl,
+    });
+
+    // Blind, it would have stopped at SelfServiceIT — a portal role, in full mode.
+    expect(session.role).toBe('ServiceDeskAnalyst');
+    const selected = calls.filter((c) => c.url.includes('SelectRole')).map((c) => (c.body as { sRole: string }).sRole);
+    expect(selected).toEqual(['SelfServiceIT', 'ServiceDeskAnalyst']);
+    // And the roles it reports now carry the flags, so switch_role lists real data.
+    expect(session.roles.every((r) => r.selfService !== undefined)).toBe(true);
+  });
+
+  // The second pass costs a round trip; it must not happen when the flags already arrived.
+  it('does not re-read when the first source already had flags', async () => {
+    const { promise, calls } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA });
+    await promise;
+
+    expect(calls.filter((c) => c.url.includes('GetUserData'))).toHaveLength(1);
+  });
+});
