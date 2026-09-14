@@ -5,6 +5,7 @@ import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/
 import type { z, ZodRawShape } from 'zod';
 import { ANONYMOUS, type CallerIdentity } from '../auth/identity.js';
 import { createSessionPin, type SessionPin } from '../auth/identity-pin.js';
+import type { ImpersonationSlot } from '../auth/impersonation.js';
 
 /**
  * What a handler may know about the call it is serving.
@@ -25,6 +26,16 @@ export interface CallContext {
    * `registerTools` rather than by whoever built the context, so no transport can forget to.
    */
   readonly pin?: SessionPin;
+  /**
+   * The Ivanti session this conversation holds on the pinned person's behalf, when impersonation
+   * is configured and reachable.
+   *
+   * Absent in the ordinary deployment, which is why every reader must check rather than assume:
+   * `undefined` here is not a failure, it is the shape of a server without the ConfigDB pair.
+   * Created per connection by the server factory, which also releases it when the connection
+   * closes — the two belong together, so neither can be done without the other.
+   */
+  readonly impersonation?: ImpersonationSlot;
 }
 
 /** The arguments a handler receives, derived from its own input schema. */

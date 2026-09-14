@@ -11,6 +11,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createAddNoteTool(deps: IvantiToolDeps): ToolDefinition {
   const enduser = deps.ownRecordsOnly;
@@ -58,6 +59,7 @@ export function createAddNoteTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('add_note', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const parent = await resolveObject(deps, args.object);
 
         // A note is written on a ticket, so the ticket decides whether it may be written — both
@@ -66,7 +68,7 @@ export function createAddNoteTool(deps: IvantiToolDeps): ToolDefinition {
 
         const notes = await resolveNoteObject(deps);
         const category = await tenantCategorySpelling(
-          deps.connection.transport,
+          transport,
           NOTE_ENTITY_SET,
           parent.entity.name,
         );
@@ -75,8 +77,8 @@ export function createAddNoteTool(deps: IvantiToolDeps): ToolDefinition {
         // otherwise. `JournalType` and `Category` are set by Ivanti on this extension.
         const visible = enduser ? true : ((args as { visibleToCustomer?: boolean }).visibleToCustomer ?? false);
 
-        const created = await deps.connection.transport.request<OdataRecord>(
-          deps.connection.transport.routes.entitySet(notes.entitySet),
+        const created = await transport.request<OdataRecord>(
+          transport.routes.entitySet(notes.entitySet),
           {
             method: 'POST',
             body: {

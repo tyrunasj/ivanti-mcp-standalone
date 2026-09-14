@@ -7,6 +7,7 @@ import { jsonResult } from '../shared/result.js';
 import { ObjectNotAllowedError } from '../shared/object-gate.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /** Each option arrives as a row of cells: `[recId, value, label?]`. */
 function toOption(row: unknown): { recId: string; value: string; label: string } | undefined {
@@ -72,14 +73,14 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
         .optional()
         .describe("The parameter's `ValidationList_RecID`, when it has one."),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('get_service_request_parameter_options', deps.logger, async () => {
         // These exist to serve service requests; where that object is gated away, so are they.
         if (!deps.gate.allows('ServiceReq')) {
           throw new ObjectNotAllowedError('ServiceReq', deps.gate.allowed);
         }
 
-        const { transport } = deps.connection;
+        const transport = transportFor(deps.connection.transport, context);
         // A POST, despite being a read: the constraints travel in the body.
         const url = transport.routes.rest(
           `ServiceRequest/${encodeURIComponent(args.parameterId)}/ValidationList`,

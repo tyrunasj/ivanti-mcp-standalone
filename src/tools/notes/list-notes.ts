@@ -10,6 +10,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { countJournalEntries, readNotes, toNote } from './notes.js';
+import { transportFor } from '../shared/transport-for.js';
 
 const DEFAULT_TOP = 20;
 
@@ -56,12 +57,13 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('list_notes', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const parent = await resolveObject(deps, args.object);
 
         // The note is reached through the ticket, so the ticket is what is checked.
         await assertOwnRecordById(deps, context, parent, args.recordId);
 
-        const rows = await readNotes(deps, args.recordId, {
+        const rows = await readNotes(deps, transport, args.recordId, {
           visibleOnly: enduser,
           top: args.top ?? DEFAULT_TOP,
         });
@@ -73,7 +75,7 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
 
         // What was NOT returned, because a bare `returned: 0` on a record with eight escalation
         // entries reads as "nothing has happened here" — which is the opposite of true.
-        const allEntries = await countJournalEntries(deps, args.recordId).catch(() => 0);
+        const allEntries = await countJournalEntries(deps, transport, args.recordId).catch(() => 0);
         const otherEntries = Math.max(0, allEntries - notes.length);
 
         /**

@@ -10,6 +10,8 @@ import { createActAsTool } from './act-as.js';
 import { createSessionPin } from '../../auth/identity-pin.js';
 import { ANONYMOUS, verifiedIdentity } from '../../auth/identity.js';
 import type { CallContext } from '../tool-definition.js';
+import { createImpersonationSlot } from '../../auth/impersonation.js';
+import type { ImpersonatedSession } from '../../ivanti/session/impersonated-session.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -194,5 +196,77 @@ describe('act_as', () => {
       expect(result.isError).toBe(true);
       expect(text(result)).toContain('OAUTH_IDENTITY_CLAIM');
     });
+  });
+});
+
+describe('act_as when the deployment can impersonate', () => {
+  const session = (overrides: Partial<ImpersonatedSession> = {}): ImpersonatedSession =>
+    ({
+      sid: 'tenant#A#1',
+      loginId: 'HSanders',
+      role: 'ServiceDeskAnalyst',
+      roles: [
+        { name: 'ServiceDeskAnalyst', displayName: 'Service Desk Analyst', selfService: false },
+        { name: 'SelfServiceMobile', displayName: 'Self Service', selfService: true },
+      ],
+      call: () => Promise.reject(new Error('unused')),
+      switchTo: () => Promise.reject(new Error('unused')),
+      release: () => Promise.resolve(),
+      ...overrides,
+    });
+
+  const impersonatingCtx = (
+    open: (login: string) => Promise<ImpersonatedSession>,
+  ): CallContext => ({
+    identity: ANONYMOUS,
+    pin: createSessionPin(ANONYMOUS),
+    impersonation: createImpersonationSlot(open),
+  });
+
+  it('opens an Ivanti session as the person it pinned', async () => {
+    const open = vi.fn(() => Promise.resolve(session()));
+    const tool = setup({ $filter: { value: [HAROLD] } });
+
+    const result = await tool.handler({ person: 'HSanders' }, impersonatingCtx(open));
+
+    // The LOGIN, not the display name: Ivanti authenticates a session by login.
+    expect(open).toHaveBeenCalledWith('HSanders');
+    expect(body(result)['role']).toBe('ServiceDeskAnalyst');
+    expect(body(result)['otherRoles']).toEqual(['SelfServiceMobile']);
+    expect(String(body(result)['scope'])).toContain('their own access');
+  });
+
+  // Silently answering as the service account would tell the caller something false about whose
+  // data they are reading — the one outcome this feature exists to prevent.
+  it('refuses the call when the session cannot be opened, rather than falling back', async () => {
+    const tool = setup({ $filter: { value: [HAROLD] } });
+
+    const result = await tool.handler(
+      { person: 'HSanders' },
+      impersonatingCtx(() => Promise.reject(new Error('Ivanti has no enabled user named HSanders.'))),
+    );
+
+    expect(text(result)).toContain('will not answer as though I had');
+    // The actionable half of Ivanti's reason survives into the refusal.
+    expect(text(result)).toContain('no enabled user');
+  });
+
+  it('refuses a person who has no Ivanti login to authenticate as', async () => {
+    const noLogin = { ...HAROLD, LoginID: undefined };
+    const tool = setup({ $filter: { value: [noLogin] } });
+
+    const result = await tool.handler({ person: 'Harold Sanders' }, impersonatingCtx(() => Promise.resolve(session())));
+
+    expect(text(result)).toContain('no Ivanti login');
+  });
+
+  // Without the ConfigDB pair there is no slot, and act_as keeps the meaning it always had.
+  it('says nothing about roles when the deployment cannot impersonate', async () => {
+    const tool = setup({ $filter: { value: [HAROLD] } });
+
+    const result = await tool.handler({ person: 'HSanders' }, ctx());
+
+    expect(body(result)['role']).toBeUndefined();
+    expect(String(body(result)['scope'])).not.toContain('their own access');
   });
 });

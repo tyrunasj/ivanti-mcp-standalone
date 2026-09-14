@@ -14,6 +14,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { assertNullFilterTypes } from '../shared/null-filter.js';
 import { zeroNote } from '../shared/zero-note.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -57,6 +58,7 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('count_records', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const resolved = await resolveObject(deps, args.object);
         const { entity, entitySet } = resolved;
         assertNullFilterTypes(args.filter, entity);
@@ -65,11 +67,11 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         // One row is enough to ask for: the count rides along with any page, and a page of one
         // is the cheapest thing to carry it.
         const url = withQuery(
-          deps.connection.transport.routes.entitySet(entitySet),
+          transport.routes.entitySet(entitySet),
           buildQuery({ filter: scoped.filter, search: args.search, top: 1, count: true }),
         );
 
-        const payload = await deps.connection.transport
+        const payload = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => {
             throw explainFieldError(error, entity, referencedFieldNames({ filter: args.filter })) ?? error;

@@ -14,6 +14,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { assertOrderBy } from '../shared/order-by.js';
 import { QUERY_WORDS, noHitsNote } from './query-words.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -68,13 +69,14 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
     },
     handler: (args, context) =>
       runTool('fulltext_search_object', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const resolved = await resolveObject(deps, args.object);
         const { entitySet } = resolved;
         assertOrderBy(args.orderBy, resolved.entity);
         const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
 
         const url = withQuery(
-          deps.connection.transport.routes.entitySet(entitySet),
+          transport.routes.entitySet(entitySet),
           buildQuery({
             search: args.query,
             filter: scoped.filter,
@@ -84,7 +86,7 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
           }),
         );
 
-        const payload = await deps.connection.transport.request<OdataRecord>(url);
+        const payload = await transport.request<OdataRecord>(url);
         const rows = readCollection<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
 

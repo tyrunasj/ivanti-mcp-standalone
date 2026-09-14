@@ -5,7 +5,7 @@ import { ANONYMOUS } from './auth/identity.js';
 import { createOAuthSetup } from './auth/oauth/create-verifier.js';
 import type { TokenVerifier } from './auth/oauth/verify-token.js';
 import { ConfigError, loadConfig } from './config/load-config.js';
-import { isIvantiConfigured } from './config/validate-config.js';
+import { isImpersonationConfigured, isIvantiConfigured } from './config/validate-config.js';
 import { connectIvanti } from './ivanti/connect.js';
 import { validateBusinessObjectAllowlist } from './ivanti/validate-allowlist.js';
 
@@ -28,6 +28,15 @@ async function main(): Promise<void> {
         apiKey: config.IVANTI_API_KEY,
         logger,
         ...(config.IVANTI_MAX_TIER === undefined ? {} : { maxTier: config.IVANTI_MAX_TIER }),
+        // Both or neither: validateConfig has already refused the half-configured case.
+        ...(isImpersonationConfigured(config)
+          ? {
+              impersonation: {
+                configUrl: config.IVANTI_CONFIG_URL,
+                apiKey: config.IVANTI_CENTRAL_CONFIG_API_KEY,
+              },
+            }
+          : {}),
       })
     : undefined;
 

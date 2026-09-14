@@ -11,6 +11,7 @@ import { errorResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /**
  * Reading an attached file, which is worth doing for some types and not others.
@@ -58,7 +59,7 @@ export function createDownloadAttachmentTool(deps: IvantiToolDeps): ToolDefiniti
     },
     handler: (args, context) =>
       runTool('download_attachment', deps.logger, async (): Promise<CallToolResult> => {
-        const { transport } = deps.connection;
+        const transport = transportFor(deps.connection.transport, context);
 
         const url = withQuery(
           transport.routes.entitySet('attachments'),

@@ -33,8 +33,14 @@ export interface ConnectionFixtureOptions {
    * (`'POST incidents'`) when a write and a read share a URL, which they do for a collection.
    */
   responses?: Record<string, unknown>;
-  /** Defaults to the OData tier: no session, as a customer with an analyst key would run. */
-  capability?: Capability;
+  /**
+   * Defaults to the OData tier: no session, as a customer with an analyst key would run.
+   *
+   * Partial on purpose. A test that cares about the tier should not have to restate every other
+   * field, and a field added here must not break every test that happens to build one — the
+   * lesson `configFixture` already learned when five `OAUTH_*` keys broke four files at once.
+   */
+  capability?: Partial<Capability>;
   /** ASMX answers, keyed by `<service>/<method>` fragment. */
   sessionCalls?: Record<string, unknown>;
 }
@@ -115,6 +121,11 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
 
   const transport: IvantiTransport = {
     routes,
+    // A fixture serves one credential. Impersonated routing is exercised where it is decided —
+    // `transportFor` — rather than duplicated into every tool's fixture.
+    asPerson: (): never => {
+      throw new Error('this fixture has no impersonated transport');
+    },
     request: (url: string, init?: { method?: string }) =>
       answerAsync(url, init?.method ?? 'GET') as Promise<never>,
     requestRequired: (url: string, init?: { method?: string }) => {
@@ -201,7 +212,16 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
           logger: fixtureLogger,
         }),
       },
-      capability: options.capability ?? { tier: 'odata', reason: 'fixture default' },
+      // Impersonation is a live HTTP client against a second host; a fixture that wanted one
+      // would stub it explicitly rather than get one by default.
+      centralConfig: undefined,
+      capability: {
+        tier: 'odata',
+        reason: 'fixture default',
+        // Off unless a test asks for it: the ordinary deployment shape.
+        canImpersonate: false,
+        ...options.capability,
+      },
     },
   };
 }

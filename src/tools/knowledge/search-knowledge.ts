@@ -8,6 +8,8 @@ import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import type { IvantiTransport } from '../../ivanti/http/transport.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /**
  * The knowledge base, which has an audience rule the object gate cannot express.
@@ -60,6 +62,9 @@ function toText(html: unknown): string | undefined {
  */
 async function readWholeArticle(
   deps: IvantiToolDeps,
+  // Passed in rather than reached for: this runs per row inside the handler, and the credential
+  // it must use is the caller's, not the service account's.
+  transport: IvantiTransport,
   base: OdataRecord,
 ): Promise<Record<string, string>> {
   const type = base['FRS_KnowledgeType'];
@@ -78,10 +83,8 @@ async function readWholeArticle(
     .map((field) => field.name)
     .filter((name) => !inherited.has(name) && !name.endsWith('_Valid'));
 
-  const record = await deps.connection.transport
-    .request<OdataRecord>(
-      deps.connection.transport.routes.record(`${subtypeName}s`, recId),
-    )
+  const record = await transport
+    .request<OdataRecord>(transport.routes.record(`${subtypeName}s`, recId))
     .catch(() => undefined);
   if (record === undefined) return {};
 
@@ -175,11 +178,12 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
         .optional()
         .describe(`How much of each article body to return. Default ${String(DEFAULT_EXCERPT)}.`),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('search_knowledge', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         if (args.articleNumber !== undefined) {
           const oneUrl = withQuery(
-            deps.connection.transport.routes.entitySet('frs_knowledges'),
+            transport.routes.entitySet('frs_knowledges'),
             buildQuery({
               filter:
                 `KnowledgeNumber eq ${String(args.articleNumber)}` +
@@ -189,7 +193,7 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
             }),
           );
           const base = readCollection<OdataRecord>(
-            await deps.connection.transport.request<OdataRecord>(oneUrl),
+            await transport.request<OdataRecord>(oneUrl),
             oneUrl,
           )[0];
 
@@ -201,7 +205,7 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
             );
           }
 
-          const body = await readWholeArticle(deps, base);
+          const body = await readWholeArticle(deps, transport, base);
           return jsonResult({
             number: base['KnowledgeNumber'] ?? null,
             title: base['Title'] ?? null,
@@ -234,7 +238,7 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
         }
 
         const url = withQuery(
-          deps.connection.transport.routes.entitySet('frs_knowledges'),
+          transport.routes.entitySet('frs_knowledges'),
           buildQuery({
             search: args.query,
             ...(conditions.length > 0 ? { filter: conditions.join(' and ') } : {}),
@@ -243,7 +247,7 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
           }),
         );
 
-        const payload = await deps.connection.transport.request<OdataRecord>(url);
+        const payload = await transport.request<OdataRecord>(url);
         const rows = readCollection<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
         const limit = args.excerptChars ?? DEFAULT_EXCERPT;

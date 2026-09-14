@@ -10,6 +10,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /**
  * The ceiling on a file, and why there is one.
@@ -65,6 +66,7 @@ export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition
     },
     handler: (args, context) =>
       runTool('upload_attachment', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const target = await resolveObject(deps, args.object);
 
         // Their own record, and one still open: a file added to a closed ticket is invisible
@@ -96,7 +98,7 @@ export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition
         }
 
         const uploaded = await uploadAttachment({
-          transport: deps.connection.transport,
+          transport,
           parentEntitySet: target.entitySet,
           // Ivanti wants the AdminUI form here, `Incident#`, not the entity set.
           parentObjectType: toObjectId(target.entity.name),

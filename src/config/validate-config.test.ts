@@ -7,6 +7,7 @@ import {
   canonicalUriProblems,
   isExposedToNetwork,
   isHttpTransport,
+  isImpersonationConfigured,
   isIvantiConfigured,
   validateConfig,
 } from './validate-config.js';
@@ -208,5 +209,69 @@ describe('isIvantiConfigured', () => {
     expect(isIvantiConfigured(config({ IVANTI_BASE_URL: 'https://t', IVANTI_API_KEY: 'k' }))).toBe(
       true,
     );
+  });
+});
+
+const TENANT = { IVANTI_BASE_URL: 'https://t.ivanticloud.com', IVANTI_API_KEY: 'k' } as const;
+const CONFIG_DB = {
+  IVANTI_CONFIG_URL: 'https://config-t.ivanticloud.com',
+  IVANTI_CENTRAL_CONFIG_API_KEY: 'c',
+} as const;
+
+describe('impersonation configuration', () => {
+  it('refuses a ConfigDB URL without its key', () => {
+    const problems = validateConfig(config({ ...TENANT, IVANTI_CONFIG_URL: CONFIG_DB.IVANTI_CONFIG_URL }));
+
+    expect(problems.some((problem) => problem.includes('IVANTI_CENTRAL_CONFIG_API_KEY'))).toBe(true);
+  });
+
+  it('refuses a ConfigDB key without its URL', () => {
+    const problems = validateConfig(config({ ...TENANT, IVANTI_CENTRAL_CONFIG_API_KEY: 'c' }));
+
+    expect(problems.some((problem) => problem.includes('IVANTI_CONFIG_URL'))).toBe(true);
+  });
+
+  // Impersonation acts on a tenant; configured without one it would look enabled and refuse every
+  // act_as, which reads as broken rather than unconfigured.
+  it('refuses impersonation without a tenant to impersonate against', () => {
+    const problems = validateConfig(config({ ...CONFIG_DB }));
+
+    expect(problems.some((problem) => problem.includes('IVANTI_BASE_URL'))).toBe(true);
+  });
+
+  it('accepts the pair alongside a tenant, and neither at all', () => {
+    expect(validateConfig(config({ ...TENANT, ...CONFIG_DB }))).toEqual([]);
+    expect(validateConfig(config({ ...TENANT }))).toEqual([]);
+  });
+
+  // Pinning an arbitrary role is a full-mode decision: enduser opens a self-service role, so the
+  // setting would be silently ignored — and a deployment that asked for a role and got a
+  // different one should be told at startup, not left to find out.
+  it('refuses a pinned impersonation role in enduser mode', () => {
+    const problems = validateConfig(
+      config({
+        ...TENANT,
+        MCP_MODE: 'enduser',
+        ENDUSER_BUSINESS_OBJECTS: ['incident'],
+        IVANTI_IMPERSONATION_ROLE: 'Admin',
+      }),
+    );
+
+    expect(problems.some((problem) => problem.includes('IVANTI_IMPERSONATION_ROLE'))).toBe(true);
+  });
+
+  it('allows a pinned impersonation role in full mode', () => {
+    expect(
+      validateConfig(config({ ...TENANT, ...CONFIG_DB, IVANTI_IMPERSONATION_ROLE: 'Admin' })),
+    ).toEqual([]);
+  });
+});
+
+describe('isImpersonationConfigured', () => {
+  it('is true only when both halves are present', () => {
+    expect(isImpersonationConfigured(config({}))).toBe(false);
+    expect(isImpersonationConfigured(config({ IVANTI_CONFIG_URL: 'https://c' }))).toBe(false);
+    expect(isImpersonationConfigured(config({ IVANTI_CENTRAL_CONFIG_API_KEY: 'c' }))).toBe(false);
+    expect(isImpersonationConfigured(config({ ...CONFIG_DB }))).toBe(true);
   });
 });

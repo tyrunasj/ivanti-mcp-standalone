@@ -5,6 +5,7 @@ import { buildQuery, quoteOdataString, readTotal, withQuery } from '../../ivanti
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import type { ResolvedObject } from '../shared/resolve-object.js';
+import type { IvantiTransport } from '../../ivanti/http/transport.js';
 
 /**
  * Notes, which are an extension of a group Business Object rather than an object of their own.
@@ -80,6 +81,9 @@ export async function resolveNoteObject(deps: IvantiToolDeps): Promise<ResolvedO
  */
 export async function readNotes(
   deps: IvantiToolDeps,
+  // Passed in, not reached for: notes are the caller's data, so they are read on the caller's
+  // credential when there is one.
+  transport: IvantiTransport,
   parentRecId: string,
   options: { visibleOnly: boolean; top: number },
 ): Promise<OdataRecord[]> {
@@ -87,7 +91,7 @@ export async function readNotes(
   if (options.visibleOnly) conditions.push('PublishToWeb eq true');
 
   const url = withQuery(
-    deps.connection.transport.routes.entitySet(NOTE_ENTITY_SET),
+    transport.routes.entitySet(NOTE_ENTITY_SET),
     buildQuery({
       filter: conditions.join(' and '),
       orderBy: 'CreatedDateTime desc',
@@ -96,7 +100,7 @@ export async function readNotes(
     }),
   );
 
-  return readCollection<OdataRecord>(await deps.connection.transport.request<OdataRecord>(url), url);
+  return readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url);
 }
 
 /**
@@ -109,13 +113,14 @@ export async function readNotes(
  */
 export async function countJournalEntries(
   deps: IvantiToolDeps,
+  transport: IvantiTransport,
   parentRecId: string,
 ): Promise<number> {
   const url = withQuery(
-    deps.connection.transport.routes.entitySet('journals'),
+    transport.routes.entitySet('journals'),
     buildQuery({ filter: `ParentLink_RecID eq ${quoteOdataString(parentRecId)}`, top: 1, count: true }),
   );
-  const payload = await deps.connection.transport.request<OdataRecord>(url);
+  const payload = await transport.request<OdataRecord>(url);
   const rows = readCollection<OdataRecord>(payload, url);
   return readTotal(payload, rows.length)?.total ?? rows.length;
 }

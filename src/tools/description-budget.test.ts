@@ -85,7 +85,9 @@ function manifest(config: (typeof MODES)[number][1]) {
     // The admin tier, so every tool that can exist does — the widest manifest a caller sees.
     ivanti: connectionFixture({
       entities: { incident: {}, change: {}, servicereq: {}, employee: {}, journal__notes: {} },
-      capability: { tier: 'admin', identity: { role: 'Admin' } },
+      // Impersonation on as well: descriptions vary with it, and this must measure the WIDEST
+      // manifest a caller can be sent, not a narrower one that happens to fit.
+      capability: { tier: 'admin', identity: { role: 'Admin' }, canImpersonate: true },
     }).connection,
   };
   return selectTools(config, context).map((tool) => ({

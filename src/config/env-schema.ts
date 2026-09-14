@@ -106,6 +106,32 @@ export const envSchema = z.object({
   IVANTI_MAX_TIER: z.enum(['odata', 'session', 'admin']).optional(),
 
   /**
+   * The ConfigDB tenant, e.g. `https://config-<tenant>/`.
+   *
+   * Set together with `IVANTI_CENTRAL_CONFIG_API_KEY`, this turns `act_as` from a preference
+   * into an identity Ivanti itself enforces: CentralConfig mints a session for the named person
+   * and OData applies *their* access to it. With neither set the server behaves exactly as it
+   * does without them — see `docs/impersonation-plan.md`.
+   */
+  IVANTI_CONFIG_URL: z.url().optional(),
+  /**
+   * The key from the ConfigDB tenant's Configure → Security Controls → API Keys, in the
+   * `CentralConfigApiKey` group. Also accepted as IVANTI_CENTRAL_CONFIG_API_KEY_FILE.
+   *
+   * It is not the tenant API key and cannot be substituted for one: it authenticates against
+   * CentralConfig, which answers with the tenant's database credentials among other things.
+   */
+  IVANTI_CENTRAL_CONFIG_API_KEY: z.string().min(1).optional(),
+  /**
+   * Pins which of the person's roles an impersonated session opens under, in `full` mode.
+   *
+   * Without it the session keeps whichever non-self-service role Ivanti made active. The role is
+   * used when the person holds it and refused when they do not, rather than silently ignored —
+   * a deployment that asked for a role and got a weaker one should be told.
+   */
+  IVANTI_IMPERSONATION_ROLE: z.string().min(1).optional(),
+
+  /**
    * Business Objects an end user may create on. Any of Ivanti's three naming dialects is
    * accepted and normalised to one — `Incident#`, `Incidents` and `incident` name the same
    * object, and an allowlist that missed by dialect would fail open or closed for no reason a
@@ -114,6 +140,20 @@ export const envSchema = z.object({
   ENDUSER_BUSINESS_OBJECTS: commaSeparated
     .default([])
     .transform((objects) => objects.map((object) => toCsdlEntity(object).toLowerCase())),
+
+  /**
+   * The Ivanti role an impersonated `enduser` session opens under.
+   *
+   * A tenant renames roles, so this is a setting rather than a constant, and it is resolved
+   * against the tenant's own roles at startup. The default is the role Ivanti ships for the
+   * mobile self-service portal.
+   *
+   * It is named rather than derived on purpose. Ivanti flags its self-service roles
+   * (`SelfServiceRole` on `GetUserData.userRoleList`), but several qualify and they are not
+   * interchangeable — this says which one. Ignored outside `enduser`, like the other
+   * `ENDUSER_*` settings.
+   */
+  ENDUSER_ROLE: z.string().min(1).default('SelfServiceMobile'),
 
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
 });

@@ -8,6 +8,7 @@ import { createMetadataCatalog, type MetadataCatalog } from './metadata/catalog.
 import { createSession, type IvantiSession } from './session/asmx-session.js';
 import { probeCapability, type Capability, type CapabilityTier } from './session/capability.js';
 import { createAdminCatalog, type AdminCatalog } from './session/admin-catalog.js';
+import { createCentralConfig, type CentralConfig } from './session/central-config.js';
 import { createFormContext, type FormContext } from './session/form-context.js';
 import { createWorkspaceCatalog, type WorkspaceCatalog } from './session/workspaces.js';
 import { createPersonDirectory, type PersonDirectory } from './people/directory.js';
@@ -22,6 +23,11 @@ export interface ConnectOptions {
   apiKey: string;
   /** Refuses to use more than this, whatever the credential can do. */
   maxTier?: CapabilityTier;
+  /**
+   * The ConfigDB half, when impersonation is configured. Both or neither — `validateConfig`
+   * already refused the half-configured case.
+   */
+  impersonation?: { configUrl: string; apiKey: string };
   logger: Logger;
   fetchImpl?: FetchLike & ProbeFetch;
   timeoutMs?: number;
@@ -45,6 +51,13 @@ export interface IvantiConnection {
   readonly workspaces: WorkspaceCatalog;
   /** The complete catalog, when the key's role can reach the admin console. */
   readonly admin: AdminCatalog;
+  /**
+   * Opens a session as a named person, when configured and reachable.
+   *
+   * `undefined` when impersonation is not configured — which is the ordinary case, and the
+   * reason callers must check `capability.canImpersonate` rather than assume.
+   */
+  readonly centralConfig: CentralConfig | undefined;
   /** Create forms, which are the only session-reachable source of a field's allowed values. */
   readonly forms: FormContext;
   /**
@@ -82,7 +95,15 @@ export interface IvantiConnection {
  * cannot reach should not come up and advertise Ivanti tools that are all going to fail.
  */
 export async function connectIvanti(options: ConnectOptions): Promise<IvantiConnection> {
-  const { baseUrl, apiKey, logger, fetchImpl = globalThis.fetch, timeoutMs, maxTier } = options;
+  const {
+    baseUrl,
+    apiKey,
+    logger,
+    fetchImpl = globalThis.fetch,
+    timeoutMs,
+    maxTier,
+    impersonation,
+  } = options;
 
   const probe = await probeBasePath(baseUrl, apiKey, fetchImpl, timeoutMs);
 
@@ -116,7 +137,21 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
 
   // Probed here, not on first use: which tools exist depends on the answer, and tools are
   // selected once at startup.
-  const capability = await probeCapability(session, admin, logger, maxTier);
+  // The tenant hostname IS Ivanti's `tenantId` — the same string that is in the URL, not a name
+  // anyone chose. `asmx-session.ts` derives it the same way.
+  const centralConfig =
+    impersonation === undefined
+      ? undefined
+      : createCentralConfig({
+          configUrl: impersonation.configUrl,
+          tenantHost: new URL(baseUrl).hostname,
+          apiKey: impersonation.apiKey,
+          logger,
+          fetchImpl,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        });
+
+  const capability = await probeCapability(session, admin, logger, maxTier, centralConfig);
 
   const metadata = createMetadataCatalog({
     transport,
@@ -139,6 +174,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     session,
     workspaces,
     admin,
+    centralConfig,
     forms: createFormContext(session, workspaces, logger),
     serviceRequests: { tenantOffset: createTenantOffsetReader(transport, logger) },
     people: {

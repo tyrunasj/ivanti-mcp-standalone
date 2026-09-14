@@ -5,6 +5,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Config } from '../config/env-schema.js';
 import type { IvantiConnection } from '../ivanti/connect.js';
 import type { Logger } from '../logger.js';
+import {
+  createImpersonationSlot,
+  type ImpersonationSlot,
+  type SessionOpener,
+} from '../auth/impersonation.js';
+import {
+  openImpersonatedSession,
+  type ImpersonatedSession,
+} from '../ivanti/session/impersonated-session.js';
 import { registerTools, selectTools } from '../tools/register-tools.js';
 import { registerResources, selectResources } from '../resources/register-resources.js';
 import type { CallContext } from '../tools/tool-definition.js';
@@ -43,7 +52,47 @@ export interface ServerFactoryDeps {
   ivanti?: IvantiConnection;
 }
 
+/**
+ * Gives an Ivanti session back when the conversation holding it ends.
+ *
+ * Exported so the guarantee can be tested on the path that actually runs, rather than on a
+ * reconstruction of it. It chains rather than replaces: `onclose` may already carry the SDK's own
+ * teardown, and dropping that to add this would trade one leak for another.
+ */
+export function releaseOnClose(server: McpServer, slot: ImpersonationSlot): void {
+  const previous = server.server.onclose;
+  server.server.onclose = (): void => {
+    void slot.release();
+    previous?.call(server.server);
+  };
+}
+
 export function createServerFactory(config: Config, deps: ServerFactoryDeps): ServerFactory {
+  // Built once, from process-wide facts. `canImpersonate` is the gate: a deployment whose
+  // ConfigDB is unconfigured or unreachable gets no opener, so no connection gets a slot, so
+  // `act_as` keeps its existing meaning without a single conditional in the tools.
+  const ivanti = deps.ivanti;
+  const centralConfig =
+    ivanti?.capability.canImpersonate === true ? ivanti.centralConfig : undefined;
+  const opener: SessionOpener | undefined =
+    ivanti !== undefined && centralConfig !== undefined
+      ? (login: string): Promise<ImpersonatedSession> =>
+          openImpersonatedSession({
+            centralConfig,
+            routes: ivanti.transport.routes,
+            // The tenant hostname IS Ivanti's `tenantId`. Taken from the URL that actually
+            // answered at startup rather than re-derived from configuration.
+            tenantHost: new URL(ivanti.metadataUrl).hostname,
+            login,
+            mode: config.MCP_MODE,
+            enduserRole: config.ENDUSER_ROLE,
+            ...(config.IVANTI_IMPERSONATION_ROLE === undefined
+              ? {}
+              : { pinnedRole: config.IVANTI_IMPERSONATION_ROLE }),
+            logger: deps.logger,
+          })
+      : undefined;
+
   const toolContext = {
     serverName: SERVER_NAME,
     serverVersion: SERVER_VERSION,
@@ -71,7 +120,18 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
         // Said once, at connect time, rather than repeated in every tool description.
         instructions === undefined ? {} : { instructions },
       );
-      registerTools(server, tools, context, deps.logger);
+
+      // Per connection, like the pin — and released here rather than anywhere else, so the thing
+      // that creates an Ivanti session is the thing that gives it back.
+      const impersonation = opener === undefined ? undefined : createImpersonationSlot(opener);
+      if (impersonation !== undefined) releaseOnClose(server, impersonation);
+
+      registerTools(
+        server,
+        tools,
+        { ...context, ...(impersonation === undefined ? {} : { impersonation }) },
+        deps.logger,
+      );
       registerResources(server, resources);
       return server;
     },

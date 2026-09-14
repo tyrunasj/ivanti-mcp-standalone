@@ -44,8 +44,13 @@ for (const name of files) {
       c.MCP_MODE,
       c.ENDUSER_BUSINESS_OBJECTS?.length ? `gate:${c.ENDUSER_BUSINESS_OBJECTS.join('+')}` : null,
       env.IVANTI_MAX_TIER ? `tier<=${env.IVANTI_MAX_TIER}` : null,
+      // The role is only ENDUSER_ROLE's business in enduser mode; full mode pins one or keeps
+      // whichever non-self-service role Ivanti made active.
+      c.IVANTI_CONFIG_URL
+        ? `impersonates/${c.MCP_MODE === 'enduser' ? c.ENDUSER_ROLE : (c.IVANTI_IMPERSONATION_ROLE ?? 'their own role')}`
+        : null,
     ].filter(Boolean).join(' · ');
-    console.log(`  ok    ${name.padEnd(22)} ${shape}`);
+    console.log(`  ok    ${name.padEnd(23)} ${shape}`);
   } catch (error) {
     failed += 1;
     const lines = String(error instanceof Error ? error.message : error).split('\n');

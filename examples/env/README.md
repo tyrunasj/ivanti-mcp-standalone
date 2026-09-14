@@ -17,6 +17,7 @@ configuration that runs, with a note on the one thing that catches people out.
 | [`oauth-keycloak.env`](oauth-keycloak.env) | HTTP | `oauth` — Keycloak, discovery skipped | `full` |
 | [`both-transports.env`](both-transports.env) | stdio **and** HTTP | `bearer` (HTTP only) | `full` |
 | [`degraded-tier.env`](degraded-tier.env) | stdio | none | `full`, capped to `session` |
+| [`impersonation-oauth.env`](impersonation-oauth.env) | HTTP | `oauth`, impersonation on | `enduser`, acting as the caller |
 
 ```bash
 cp examples/env/shared-bearer.env .env

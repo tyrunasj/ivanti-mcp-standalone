@@ -10,6 +10,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createDeleteAttachmentTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -38,7 +39,7 @@ export function createDeleteAttachmentTool(deps: IvantiToolDeps): ToolDefinition
     },
     handler: (args, context) =>
       runTool('delete_attachment', deps.logger, async () => {
-        const { transport } = deps.connection;
+        const transport = transportFor(deps.connection.transport, context);
         const read = async (): Promise<OdataRecord | undefined> => {
           const url = withQuery(
             transport.routes.entitySet('attachments'),

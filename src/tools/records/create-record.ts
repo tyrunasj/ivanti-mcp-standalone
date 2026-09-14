@@ -20,6 +20,7 @@ import { knownObjectNames } from '../shared/object-names.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { projectWritten } from '../shared/project-written.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -84,6 +85,7 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('create_record', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const target = await resolveObject(deps, args.object);
         const { entity, entitySet } = target;
 
@@ -100,9 +102,9 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         });
 
         const body = { ...args.fields, ...resolved.values, ...resolved.companions, ...owner };
-        const url = deps.connection.transport.routes.entitySet(entitySet);
+        const url = transport.routes.entitySet(entitySet);
 
-        const created = await deps.connection.transport
+        const created = await transport
           .request<OdataRecord>(url, { method: 'POST', body })
           .catch(async (error: unknown) => {
             // A create aimed at a base type answers 500 with an empty message, which explains
@@ -136,7 +138,14 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         }
 
         // Throws when a value did not take: the record exists, but not as asked.
-        await confirmWrite(deps.connection, entitySet, recId, resolved.confirm, resolved.companions);
+        await confirmWrite(
+          deps.connection,
+          entitySet,
+          recId,
+          resolved.confirm,
+          resolved.companions,
+          transport,
+        );
 
         deps.logger.info('ivanti record created', { object: entitySet });
 

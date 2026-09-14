@@ -13,6 +13,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { ObjectNotAllowedError } from '../shared/object-gate.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /** The parameters live in their own Business Object, linked to the template by RecId. */
 const PARAMETER_OBJECT = 'servicereqtemplateparams';
@@ -109,6 +110,7 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
     },
     handler: (args, context) =>
       runTool('get_service_request_parameters', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         // These exist to serve service requests; where that object is gated away, so are they.
         if (!deps.gate.allows('ServiceReq')) {
           throw new ObjectNotAllowedError('ServiceReq', deps.gate.allowed);
@@ -121,14 +123,14 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
           await assertOwnRecordById(deps, context, request, args.requestId);
 
           const answersUrl = withQuery(
-            deps.connection.transport.routes.entitySet(ANSWER_OBJECT),
+            transport.routes.entitySet(ANSWER_OBJECT),
             buildQuery({
               filter: `ParentLink_RecID eq ${quoteOdataString(args.requestId)}`,
               top: 100,
             }),
           );
           const answered = readCollection<OdataRecord>(
-            await deps.connection.transport.request<OdataRecord>(answersUrl),
+            await transport.request<OdataRecord>(answersUrl),
             answersUrl,
           );
 
@@ -175,7 +177,7 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
         }
 
         const url = withQuery(
-          deps.connection.transport.routes.entitySet(PARAMETER_OBJECT),
+          transport.routes.entitySet(PARAMETER_OBJECT),
           buildQuery({
             filter: `ParentLink_RecID eq ${quoteOdataString(args.templateId)}`,
             orderBy: 'SequenceNum',
@@ -183,7 +185,7 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
           }),
         );
 
-        const payload = await deps.connection.transport.request<OdataRecord>(url);
+        const payload = await transport.request<OdataRecord>(url);
         const rows = readCollection<OdataRecord>(payload, url);
 
         // Ivanti sends every field whatever is asked for, and a 16-parameter template is ~28 KB

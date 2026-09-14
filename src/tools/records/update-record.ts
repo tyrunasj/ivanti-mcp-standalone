@@ -18,6 +18,7 @@ import { assertRecordWritable } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { projectWritten } from '../shared/project-written.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -81,6 +82,7 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('update_record', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const target = await resolveObject(deps, args.object);
         const { entity, entitySet } = target;
 
@@ -98,9 +100,9 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         });
 
         const body = { ...args.fields, ...resolved.values, ...resolved.companions };
-        const url = deps.connection.transport.routes.record(entitySet, args.recordId);
+        const url = transport.routes.record(entitySet, args.recordId);
 
-        const updated = await deps.connection.transport
+        const updated = await transport
           .request<OdataRecord>(url, { method: 'PATCH', body })
           .catch(async (error: unknown) => {
             // Required-field rules name display names, and some of them are links; the form is
@@ -121,6 +123,7 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
           args.recordId,
           resolved.confirm,
           resolved.companions,
+          transport,
         );
 
         deps.logger.info('ivanti record updated', { object: entitySet });

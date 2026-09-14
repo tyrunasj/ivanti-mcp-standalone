@@ -12,6 +12,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /** Each bucket is its own round trip, so the fan-out is capped. */
 const MAX_BUCKETS = 25;
@@ -75,6 +76,7 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('group_count', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const resolved = await resolveObject(deps, args.object);
         const { entity, entitySet } = resolved;
         const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
@@ -126,12 +128,12 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
               conditions.push(`(${scoped.filter})`);
 
             const url = withQuery(
-              deps.connection.transport.routes.entitySet(entitySet),
+              transport.routes.entitySet(entitySet),
               buildQuery({ filter: conditions.join(' and '), top: 1, count: true }),
             );
 
             try {
-              const payload = await deps.connection.transport.request<OdataRecord>(url);
+              const payload = await transport.request<OdataRecord>(url);
               const rows = readCollection<OdataRecord>(payload, url);
               const total = readTotal(payload, rows.length);
               // No count and no rows is Ivanti's empty body: an exact zero.
@@ -154,10 +156,10 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
         // real total and the shortfall reported, rather than left to be noticed.
         const bucketTotal = groups.reduce((sum, group) => sum + countOf(group), 0);
         const wholeUrl = withQuery(
-          deps.connection.transport.routes.entitySet(entitySet),
+          transport.routes.entitySet(entitySet),
           buildQuery({ filter: scoped.filter, top: 1, count: true }),
         );
-        const whole = await deps.connection.transport
+        const whole = await transport
           .request<OdataRecord>(wholeUrl)
           .then((payload) => readTotal(payload, 0))
           .catch(() => undefined);

@@ -12,6 +12,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { encodeRecordId, recordRecId, recordSummary, recordTitle } from './record-identity.js';
 import { QUERY_WORDS, noHitsNote } from './query-words.js';
+import { transportFor } from '../shared/transport-for.js';
 
 /** Where a question usually lands when the asker did not say which object. */
 const DEFAULT_OBJECTS = ['incidents', 'servicereqs', 'changes'] as const;
@@ -58,6 +59,7 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('search', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const objects = (args.objects ?? [...DEFAULT_OBJECTS]).filter((object) =>
           deps.gate.allows(object),
         );
@@ -90,11 +92,11 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
               // a record to a person is not the same field on each of them.
               const scoped = await scopeToOwnRecords(deps, context, resolved);
               const url = withQuery(
-                deps.connection.transport.routes.entitySet(entitySet),
+                transport.routes.entitySet(entitySet),
                 buildQuery({ search: args.query, filter: scoped.filter, top: PER_OBJECT_TOP }),
               );
               const rows = readCollection<OdataRecord>(
-                await deps.connection.transport.request<OdataRecord>(url),
+                await transport.request<OdataRecord>(url),
                 url,
               );
 

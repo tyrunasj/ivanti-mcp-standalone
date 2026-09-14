@@ -28,6 +28,10 @@ function fakeTransport(documents: Record<string, string | Error>): {
   const calls: string[] = [];
   const transport: IvantiTransport = {
     routes: createIvantiRoutes('https://t', '/HEAT'),
+    // A fixture serves one credential; impersonation is exercised where it is implemented.
+    asPerson: (): never => {
+      throw new Error('this fixture has no impersonated transport');
+    },
     request: () => Promise.resolve(undefined),
     requestRequired: () => Promise.reject(new Error('unused')),
     requestMultipart: () => Promise.reject(new Error('unused')),

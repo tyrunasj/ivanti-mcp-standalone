@@ -21,6 +21,7 @@ import { visibleFields } from '../../ivanti/metadata/csdl.js';
 import { assertNullFilterTypes } from '../shared/null-filter.js';
 import { ignoredFieldNames, ignoredFieldsNote } from '../shared/ignored-fields.js';
 import { zeroNote } from '../shared/zero-note.js';
+import { transportFor } from '../shared/transport-for.js';
 
 export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -100,6 +101,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('list_records', deps.logger, async () => {
+        const transport = transportFor(deps.connection.transport, context);
         const resolved = await resolveObject(deps, args.object);
         const { entity, entitySet } = resolved;
         const top = args.top ?? DEFAULT_TOP;
@@ -114,7 +116,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
 
         const url = withQuery(
-          deps.connection.transport.routes.entitySet(entitySet),
+          transport.routes.entitySet(entitySet),
           buildQuery({
             filter: scoped.filter,
             search: args.search,
@@ -127,7 +129,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
 
         const projection = resolveRowFields(parseFieldList(args.fields), args.fields);
 
-        const payload = await deps.connection.transport
+        const payload = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => {
             const referenced = referencedFieldNames({

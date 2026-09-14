@@ -6,6 +6,7 @@ import type { PersonCandidate } from '../../ivanti/people/directory.js';
 import { MIN_CLAIM_LENGTH } from '../../ivanti/people/directory.js';
 import type { PinnedPerson } from '../../auth/identity-pin.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
+import type { ImpersonatedSession } from '../../ivanti/session/impersonated-session.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -87,7 +88,12 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
       'first name alone usually returns several people to choose between — call again with the ' +
       'login or email of the right one.\n\n' +
       'ONE PERSON PER CONVERSATION. Once set it cannot be changed; a second, different person ' +
-      'is refused rather than swapped in.',
+      'is refused rather than swapped in.' +
+      // Only where it is true. A deployment without the ConfigDB pair pays nothing for this, and
+      // one with it must not have the model read an empty result as "no such record".
+      (deps.connection.capability.canImpersonate
+        ? '\n\nIvanti then applies THEIR OWN ACCESS: an empty result can mean it is not theirs to see.'
+        : ''),
     annotations: {
       title: 'Act as a person',
       readOnlyHint: true,
@@ -213,6 +219,42 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
           ...(verified ? { subject: identity.subject } : {}),
         });
 
+        // Only when this deployment can impersonate at all. Absent, everything below is skipped
+        // and `act_as` keeps exactly the meaning it has always had.
+        let session: ImpersonatedSession | undefined;
+        if (context.impersonation !== undefined) {
+          if (only.loginId === undefined || only.loginId === '') {
+            // Ivanti authenticates a session by login, and this record has none — an external
+            // contact, typically. Say which, rather than letting the handshake fail obscurely.
+            return errorResult(
+              `${only.displayName} has no Ivanti login, so this server cannot open a session as ` +
+                'them. Records can only be shown for someone who can sign in.',
+            );
+          }
+
+          try {
+            session = await context.impersonation.open(only.loginId);
+          } catch (error: unknown) {
+            // Refused, never silently downgraded. A caller who asked to act as someone and was
+            // quietly answered as the service account has been told something false about whose
+            // data they are reading.
+            return errorResult(
+              `I found ${only.displayName}, but could not open an Ivanti session as them, so I ` +
+                'will not answer as though I had. ' +
+                (error instanceof Error ? error.message : 'The reason is unknown.'),
+            );
+          }
+
+          // Every impersonation is audited, with how the identity was established — the audit log
+          // is where `verified` and `asserted` stay distinguishable, because Ivanti's own record
+          // of the work will name the person either way.
+          deps.logger.info('impersonating in ivanti', {
+            login: session.loginId,
+            role: session.role,
+            provenance: verified ? 'verified' : 'asserted',
+          });
+        }
+
         return jsonResult({
           pinned: true,
           repeated: already !== undefined,
@@ -221,9 +263,24 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
           ...(statusProblem(only) === 'flag'
             ? { warning: `Ivanti marks them ${String(only.status)}.` }
             : {}),
-          scope: scoped
-            ? 'Record tools now answer with their records only.'
-            : 'This does not narrow what you can read; it only decides who "my" means.',
+          scope:
+            session !== undefined
+              ? `Ivanti is applying their own access, under the role ${session.role}. What comes ` +
+                'back is what they would see signing in themselves.'
+              : scoped
+                ? 'Record tools now answer with their records only.'
+                : 'This does not narrow what you can read; it only decides who "my" means.',
+          // The roles ride along so nothing has to go and ask for them — `switch_role` takes one
+          // of these names.
+          ...(session === undefined
+            ? {}
+            : {
+                role: session.role,
+                ...(session.roles.length > 1
+                  ? { otherRoles: session.roles.map((held) => held.name).filter((name) => name !== session.role) }
+                  : {}),
+                ...(session.note === undefined ? {} : { roleNote: session.note }),
+              }),
         });
       }),
   });
