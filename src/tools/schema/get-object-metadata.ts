@@ -4,7 +4,7 @@
 import { z } from 'zod';
 import { visibleFields } from '../../ivanti/metadata/csdl.js';
 import { findSubtypes } from '../../ivanti/metadata/subtypes.js';
-import type { IvantiToolDeps } from '../shared/deps.js';
+import { registersFormTools, type IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { knownObjectNames } from '../shared/object-names.js';
@@ -31,7 +31,9 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
       '`validated: true` marks a field whose value comes from a picklist. It is a FLOOR, not a ' +
       'ceiling: it comes from `$metadata`, and a field without the flag may still be backed by a ' +
       'list the form knows about — `Employee.Department` carries no flag and has 17 values. If a ' +
-      'field looks enumerable, try get_pick_list_values regardless of the flag rather than paging ' +
+      (registersFormTools(deps)
+        ? 'field looks enumerable, try get_pick_list_values regardless of the flag rather than paging '
+        : 'field looks enumerable, its values come from a list this credential cannot read — say so rather than paging ') +
       'the table to find out. ' +
       'Relationships are the names the related-records tool takes.',
     annotations: {

@@ -4,7 +4,7 @@
 import { z } from 'zod';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
-import type { IvantiToolDeps } from '../shared/deps.js';
+import { registersLinkTools, type IvantiToolDeps } from '../shared/deps.js';
 import { assertRecordWritable, missingRecordMessage } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
@@ -22,7 +22,9 @@ export function createDeleteAttachmentTool(deps: IvantiToolDeps): ToolDefinition
       'the filename and size. A vague "ok" is not consent, and an attachment is often a ' +
       "ticket's only evidence.\n\n" +
       'THERE IS NO DETACH THAT KEEPS THE FILE. An attachment belongs to its record through its ' +
-      'own ParentLink fields; unlink_records does not detach one, it blanks that link and leaves ' +
+      (registersLinkTools(deps)
+        ? 'own ParentLink fields; unlink_records does not detach one, it blanks that link and leaves '
+        : 'own ParentLink fields; blanking that link does not detach the file, it leaves ') +
       'the file on no record where nobody can reach it. If they want it off this ticket but ' +
       'kept, they must download it first.\n\n' +
       'Existence is checked first and again after: Ivanti answers 204 for a delete of an id that ' +
