@@ -155,7 +155,28 @@ export function createTransport(options: TransportOptions): IvantiTransport {
         );
     }
 
-    const text = await response.text();
+    // Reading the body is still the request, and still under the timeout. Outside the try it threw
+    // a RAW `TimeoutError`/`TypeError` rather than an `IvantiApiError` — and the metadata catalog
+    // evicts a cached failure only for `IvantiApiError` with `status: 0`, so one interrupted body
+    // read poisoned that URL's schema for the life of the process. `$metadata` is the largest
+    // document this server fetches (~325 KB), which is exactly where a mid-body failure is
+    // likeliest. A reset, a proxy dropping a long transfer and a decompression error all land here
+    // too, not only the timeout.
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (cause) {
+      throw new IvantiApiError(
+        {
+          status: 0,
+          method,
+          url,
+          body: scrubErrorBody(cause instanceof Error ? cause.message : String(cause), apiKey),
+        },
+        `Ivanti ${method} did not complete: ${cause instanceof Error ? cause.message : 'unknown error'}`,
+      );
+    }
+
     // The path, never the query: a `$filter` carries whatever the caller searched for, which for
     // Ivanti routinely means a person's name. Without the path, a failure line says only that
     // *something* returned 400.

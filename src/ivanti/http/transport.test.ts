@@ -161,4 +161,45 @@ describe('createTransport', () => {
       'https://t/HEAT/api/odata/businessobject/Incidents',
     );
   });
+
+  /**
+   * Reading the body is still the request.
+   *
+   * The `try` used to close before `response.text()`, so a timeout, a socket reset
+   * (`TypeError: terminated`), a proxy dropping a long transfer or a decompression failure all
+   * threw a RAW error instead of an `IvantiApiError`. That mattered two layers up: the metadata
+   * catalog evicts a cached failure only for an `IvantiApiError`, so an interrupted body read
+   * poisoned that URL's schema for the life of the process — and `$metadata` is the largest
+   * document this server fetches, which is where a mid-body failure is likeliest.
+   */
+  it('wraps a failure that happens while reading the body', async () => {
+    const t = transport(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.reject(new TypeError('terminated')),
+      } as unknown as Response),
+    );
+
+    await expect(t.request(t.routes.entitySet('Incidents'))).rejects.toMatchObject({
+      name: 'IvantiApiError',
+      status: 0,
+    });
+  });
+
+  it('scrubs the api key out of a body-read failure too', async () => {
+    const t = transport(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.reject(new Error('socket hung up on super-secret-key')),
+      } as unknown as Response),
+    );
+
+    const error = await t.request(t.routes.entitySet('Incidents')).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(IvantiApiError);
+    expect((error as IvantiApiError).body).not.toContain('super-secret-key');
+  });
 });
+

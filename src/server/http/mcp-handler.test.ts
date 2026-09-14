@@ -244,6 +244,78 @@ describe('createMcpHandler', () => {
     expect(session.handled).not.toHaveBeenCalled();
   });
 
+  /**
+   * The same rule, on the methods that used to skip it.
+   *
+   * `sameSubject` lived inline in the POST branch, so a holder of a valid token for a DIFFERENT
+   * subject could send `DELETE /mcp` with somebody else's session id — `handleDeleteRequest`
+   * closes the transport in a `finally` and answers 200, destroying their conversation — or `GET`
+   * to attach to their standalone SSE stream. Only the POST case was covered.
+   */
+  it.each(['GET', 'DELETE'])(
+    'refuses a %s on a session that belongs to another verified identity',
+    async (method) => {
+      const owner = verifiedIdentity({
+        subject: 'user-1',
+        issuer: 'https://id.example',
+        scopes: [],
+        claims: {},
+      });
+      const logger = silentLogger();
+      const sessions = new SessionManager<FakeSession>({
+        maxSessions: 10,
+        idleTtlMs: 60_000,
+        logger,
+      });
+      const session = fakeSession('s1', owner);
+      sessions.register('s1', session);
+      const handler = createMcpHandler<FakeSession>({
+        sessions,
+        logger,
+        createSession: () => session,
+      });
+      const res = response();
+
+      await handler(request(method, { 'mcp-session-id': 's1' }), res, {
+        authorized: true,
+        status: 200,
+        identity: {
+          subject: 'someone-else',
+          issuer: 'https://id.example',
+          scopes: [],
+          claims: {},
+        },
+      });
+
+      expect(res.status).toBe(403);
+      expect(session.handled).not.toHaveBeenCalled();
+    },
+  );
+
+  // Narrowing check: the owner must still be able to end and stream their own session, and an
+  // unverified deployment (`none`/`bearer`) has no subject to compare and must be unaffected.
+  it.each(['GET', 'DELETE'])('still lets the owner %s their own session', async (method) => {
+    const owner = verifiedIdentity({
+      subject: 'user-1',
+      issuer: 'https://id.example',
+      scopes: [],
+      claims: {},
+    });
+    const logger = silentLogger();
+    const sessions = new SessionManager<FakeSession>({ maxSessions: 10, idleTtlMs: 60_000, logger });
+    const session = fakeSession('s1', owner);
+    sessions.register('s1', session);
+    const handler = createMcpHandler<FakeSession>({ sessions, logger, createSession: () => session });
+
+    await handler(request(method, { 'mcp-session-id': 's1' }), response(), {
+      authorized: true,
+      status: 200,
+      identity: { subject: 'user-1', issuer: 'https://id.example', scopes: [], claims: {} },
+    });
+
+    expect(session.handled).toHaveBeenCalled();
+  });
+
   it('lets the same verified subject continue its own session', async () => {
     const owner = verifiedIdentity({
       subject: 'user-1',
