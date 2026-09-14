@@ -56,6 +56,8 @@ const open = (
 };
 
 const INITIALIZED = { SessionCsrfToken: 'CSRF', ActiveRole: 'ServiceDeskAnalyst' };
+/** SelectRole is called on every open, so the happy-path fixtures all answer it. */
+const SELECTED = { ActiveRole: 'ServiceDeskAnalyst' };
 const USER_DATA = {
   UserRole: 'ServiceDeskAnalyst',
   userRoleList: [
@@ -66,7 +68,7 @@ const USER_DATA = {
 
 describe('openImpersonatedSession', () => {
   it('carries the composed SID as a cookie on every call', async () => {
-    const { promise, calls } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA });
+    const { promise, calls } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED });
 
     const session = await promise;
 
@@ -76,7 +78,7 @@ describe('openImpersonatedSession', () => {
   });
 
   it('sends the CSRF token in the body, which is what .asmx wants', async () => {
-    const { promise, calls } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA });
+    const { promise, calls } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED });
 
     await promise;
 
@@ -85,13 +87,25 @@ describe('openImpersonatedSession', () => {
     expect(userData?.body).toEqual({ _csrfToken: 'CSRF', tzoffset: 0 });
   });
 
-  it('keeps the role Ivanti made active, without a SelectRole call', async () => {
-    const { promise, calls } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA });
+  // SelectRole ACTIVATES the session; it does not merely change the role. A CentralConfig session
+  // whose role was only ever reported by InitializeSession answers 551 to every Workspace.asmx
+  // method, the service catalog and the admin console — and answers 200 to all of them after one
+  // SelectRole naming that SAME role. Skipping the call when the role already matched is what made
+  // the whole form surface look unreachable, so it is called on every open.
+  it('always calls SelectRole, even for the role Ivanti already reported', async () => {
+    const { promise, calls } = open({
+      InitializeSession: INITIALIZED,
+      GetUserData: USER_DATA,
+      SelectRole: SELECTED,
+    });
 
     const session = await promise;
 
     expect(session.role).toBe('ServiceDeskAnalyst');
-    expect(calls.some((call) => call.url.includes('SelectRole'))).toBe(false);
+    expect(calls.find((call) => call.url.includes('SelectRole'))?.body).toEqual({
+      _csrfToken: 'CSRF',
+      sRole: 'ServiceDeskAnalyst',
+    });
   });
 
   it('selects the configured self-service role in enduser mode', async () => {
@@ -160,7 +174,7 @@ describe('openImpersonatedSession', () => {
 
   it('refuses a pinned role the person does not hold', async () => {
     const { promise } = open(
-      { InitializeSession: INITIALIZED, GetUserData: USER_DATA },
+      { InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED },
       { pinnedRole: 'Admin' },
     );
 
@@ -197,7 +211,7 @@ describe('openImpersonatedSession', () => {
   it('releases through CentralConfig', async () => {
     const release = vi.fn(() => Promise.resolve());
     const { promise } = open(
-      { InitializeSession: INITIALIZED, GetUserData: USER_DATA },
+      { InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED },
       { centralConfig: centralConfig({ release }) },
     );
 
@@ -264,7 +278,7 @@ describe('choosing a role when Ivanti reports no flags', () => {
 
   // The second pass costs a round trip; it must not happen when the flags already arrived.
   it('does not re-read when the first source already had flags', async () => {
-    const { promise, calls } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA });
+    const { promise, calls } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED });
     await promise;
 
     expect(calls.filter((c) => c.url.includes('GetUserData'))).toHaveLength(1);

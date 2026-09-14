@@ -8,6 +8,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 interface WorkspaceSearchData {
   SearchData?: {
@@ -28,9 +29,14 @@ export function createListSavedSearchesTool(deps: IvantiToolDeps): ToolDefinitio
       'The saved searches an Ivanti user would see on an object — "All Active Incidents", ' +
       '"All Incidents Not Closed". They are the tenant\'s own definitions of the questions it ' +
       'asks, so running one is usually better than inventing a filter.\n\n' +
-      'Names beginning "My" are marked `answersForServiceAccount`. Those resolve against the ' +
-      'account this server signs in as — not the person asking — so running one answers a ' +
-      'question nobody asked. For a named person use list_assigned_work.\n\n' +
+      (deps.connection.capability.canImpersonate
+        ? // Replaced, not appended: the sentence below is false wherever act_as has opened a session.
+          'Names beginning "My" resolve against the SESSION. After act_as that is the person, and ' +
+          'the entry says `answersFor` with their login; before it, the service account, marked ' +
+          '`answersForServiceAccount` — then use list_assigned_work instead.\n\n'
+        : 'Names beginning "My" are marked `answersForServiceAccount`. Those resolve against the ' +
+          'account this server signs in as — not the person asking — so running one answers a ' +
+          'question nobody asked. For a named person use list_assigned_work.\n\n') +
       'Pass a name and its `id` to saved_search to run it.',
     annotations: {
       title: 'List saved searches',
@@ -48,11 +54,13 @@ export function createListSavedSearchesTool(deps: IvantiToolDeps): ToolDefinitio
             'take them from list_business_objects rather than assuming the ones Ivanti ships.',
         ),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('list_saved_searches', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
+        const impersonating = context.impersonation?.session()?.loginId;
         const { entity } = await resolveObject(deps, args.object);
         const objectId = toObjectId(entity.name);
-        const form = await deps.connection.forms.get(objectId);
+        const form = await connection.forms.get(objectId);
 
         if (form === undefined) {
           return errorResult(
@@ -61,7 +69,7 @@ export function createListSavedSearchesTool(deps: IvantiToolDeps): ToolDefinitio
           );
         }
 
-        const workspace = await deps.connection.session.call<WorkspaceSearchData>(
+        const workspace = await connection.session.call<WorkspaceSearchData>(
           'Services/Workspace.asmx',
           'GetWorkspaceData',
           { ObjectId: objectId, LayoutName: form.layoutName },
@@ -76,8 +84,13 @@ export function createListSavedSearchesTool(deps: IvantiToolDeps): ToolDefinitio
             name: favorite.Name,
             id: favorite.Id,
             ...(favorite.isDefault === true ? { isDefault: true } : {}),
+            // "My …" resolves against the SESSION. Under impersonation that is the person, and
+            // the flag must say so — a model told "service account" would refuse a search that
+            // now answers exactly the question that was asked.
             ...(answersForSignedInAccount(favorite.Name)
-              ? { answersForServiceAccount: true }
+              ? impersonating === undefined
+                ? { answersForServiceAccount: true }
+                : { answersFor: impersonating }
               : {}),
           }));
 

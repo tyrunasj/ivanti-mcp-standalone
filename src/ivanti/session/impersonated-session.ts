@@ -6,6 +6,7 @@ import type { Logger } from '../../logger.js';
 import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
 import type { FetchLike } from '../http/transport.js';
 import type { IvantiRoutes } from '../odata/url.js';
+import type { IvantiSession, SessionIdentity } from './asmx-session.js';
 import type { CentralConfig } from './central-config.js';
 import {
   chooseRole,
@@ -23,13 +24,15 @@ import {
  * helping, which is a question the server answers on its own; this is Ivanti's answer to *what
  * they may see*, and it only exists when impersonation is configured and reachable.
  *
- * **It carries the record surface only.** OData accepts its SID cookie and applies the person's
- * own access. `Session.asmx` accepts it. Everything else — `Workspace.asmx`, so forms, pick
- * lists and quick actions, and the admin console — answers **551** to it, whatever role it holds,
- * and keeps running as the service account. That split is measured, not chosen; see
- * `docs/notes.md`.
+ * **It carries every surface — once `SelectRole` has been called.** An earlier version of this
+ * file said the opposite: that `Workspace.asmx`, the service catalog and the admin console answer
+ * 551 to a CentralConfig session whatever role it holds. They do — until `SelectRole` is called,
+ * even naming the role `InitializeSession` already reported. That call *activates* the session;
+ * skipping it when the role already matched was what made the form surface look unreachable.
+ * Controlled on a live tenant (same role, same CSRF): two `InitializeSession` calls stayed at 551,
+ * one `InitializeSession` plus `SelectRole` answered 200. See `docs/notes.md`.
  */
-export interface ImpersonatedSession {
+export interface ImpersonatedSession extends IvantiSession {
   /** The cookie value for both OData and ASMX: `<tenantId>#<sessionId>#1`. */
   readonly sid: string;
   /** The login Ivanti matched, which is not necessarily the spelling that was asked for. */
@@ -40,8 +43,6 @@ export interface ImpersonatedSession {
   readonly roles: readonly IvantiRole[];
   /** Something the caller should be told — a fallback role, a portal-only account. */
   readonly note?: string;
-  /** POST to an ASMX service as this person. Only `Session.asmx` will answer. */
-  call: <T>(servicePath: string, method: string, args?: Record<string, unknown>) => Promise<T>;
   /** Re-points the session at another of their roles, returning what Ivanti actually applied. */
   switchTo: (role: string) => Promise<string>;
   /** Best-effort; a session nobody releases expires on its own. */
@@ -154,6 +155,70 @@ export async function openImpersonatedSession(
     // they do not share this path. (They are unreachable here in any case.)
     post<T>(routes.service(`${servicePath}/${method}`), { _csrfToken: csrf, ...args }, opened.sid);
 
+  // The form-urlencoded handlers: `handlers/<path>`, the token as a LOWERCASE header.
+  const callHandler = async (handlerPath: string, form: Record<string, string>): Promise<string> => {
+    const url = routes.service(`handlers/${handlerPath}`);
+    let response: Awaited<ReturnType<FetchLike>>;
+    try {
+      response = await fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Cookie: `SID=${opened.sid}`,
+          _csrftoken: csrf,
+        },
+        body: new URLSearchParams(form).toString(),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error: unknown) {
+      throw new IvantiApiError(
+        { status: 0, method: 'POST', url, body: '' },
+        `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new IvantiApiError({
+        status: response.status,
+        method: 'POST',
+        url,
+        body: scrubErrorBody(text, opened.sid),
+      });
+    }
+    return text;
+  };
+
+  // The multipart upload: the token as a MIXED-case header, and no Content-Type — only fetch
+  // knows the boundary it generated, and naming the type without it makes Ivanti read the body
+  // as empty. Three spellings of one token, one session.
+  const uploadToHandler = async (handlerPath: string, form: FormData): Promise<string> => {
+    const url = routes.service(handlerPath);
+    let response: Awaited<ReturnType<FetchLike>>;
+    try {
+      response = await fetchImpl(url, {
+        method: 'POST',
+        headers: { Cookie: `SID=${opened.sid}`, _csrfToken: csrf },
+        body: form,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error: unknown) {
+      throw new IvantiApiError(
+        { status: 0, method: 'POST', url, body: '' },
+        `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new IvantiApiError({
+        status: response.status,
+        method: 'POST',
+        url,
+        body: scrubErrorBody(text, opened.sid),
+      });
+    }
+    return text;
+  };
+
   // `tzoffset` is required: without it this answers 500, which reads as a broken session.
   const userData = (): Promise<Record<string, unknown>> =>
     call('Services/Session.asmx', 'GetUserData', { tzoffset: 0 });
@@ -183,9 +248,22 @@ export async function openImpersonatedSession(
     throw new Error(choice.refusal);
   }
 
+  // **Always selected, never skipped — even when it is the role Ivanti already reported.**
+  //
+  // `SelectRole` does not merely change the role, it ACTIVATES the session. A CentralConfig
+  // session whose role was only ever *reported* by `InitializeSession` answers **551** to every
+  // `Workspace.asmx` method, the service catalog and the admin console; after one `SelectRole`
+  // call naming that same role, all of them answer 200. Controlled on a live tenant: two
+  // `InitializeSession` calls and no `SelectRole` stayed at 551, while one `InitializeSession`
+  // plus `SelectRole` — same role, same CSRF — returned 7 workspaces.
+  //
+  // Skipping the call when `choice.mustSelect` was false is what once made the whole form surface
+  // look unreachable. `mustSelect` is kept because it still says whether the role *changed*, which
+  // is worth reporting; it no longer decides whether to call.
+  //
   // Mutable behind a getter: `switchTo` changes what Ivanti will answer, and a session object
   // still reporting the old role would have `switch_role` confirm a change that did not happen.
-  let currentRole = choice.mustSelect ? await selectRole({ call }, choice.role) : choice.role;
+  let currentRole = await selectRole({ call }, choice.role);
   let note = choice.note;
 
   // The first choice was made blind when the roles arrived without flags — `GetRolesForUser` is
@@ -254,6 +332,11 @@ export async function openImpersonatedSession(
     });
   }
 
+  // The role the session runs under, in the shape `workspaces.ts` and `form-context.ts` read it.
+  // Live rather than captured: `switchTo` changes it, and a catalog built after a switch must see
+  // the switched role.
+  const identity = (): SessionIdentity => ({ role: currentRole, userName: opened.loginId });
+
   return {
     sid: opened.sid,
     loginId: opened.loginId,
@@ -263,6 +346,10 @@ export async function openImpersonatedSession(
     roles,
     ...(note === undefined ? {} : { note }),
     call,
+    callHandler,
+    uploadToHandler,
+    identity: () => Promise.resolve(identity()),
+    identityIfKnown: identity,
     switchTo: async (next: string): Promise<string> => {
       currentRole = await selectRole({ call }, next);
       return currentRole;

@@ -145,8 +145,8 @@ set was returned. Descriptions carry what is dangerous not to know; resources ca
 expensive to repeat. Measured on a live `full`/admin server: **37,991 characters of description**
 across 41 tools — the widest manifest, with impersonation on, since `act_as` says more when it
 can act as the person — sent on every session, against 24,023 characters across the six
-reference documents, fetched only on demand. **The manifest budget has 9 characters of
-headroom** and the longest single description is 1,948 of a 2,000 cap, so the next addition
+reference documents, fetched only on demand. **The manifest budget has 98 characters of
+headroom** (117 with impersonation on, whose descriptions are shorter) and the longest single description is 1,948 of a 2,000 cap, so the next addition
 fails the build by design — which is now imminent rather than theoretical.
 
 **Resources narrow the way tools do**, and for the same reason: a document naming a tool this
@@ -311,15 +311,18 @@ session — this server's service account — and on an admin key its override s
 real approver. `Approve Vote` on the `frs_approvalvotetracking` row acts on a row that already
 belongs to a named approver, so the decision is theirs; `vote_on_approval` refuses any row whose
 `Owner` is not the pinned person, and that check is the whole safety argument. `VotedBy` still
-records the service account, which is accurate: their decision, this server's hands. A raw status
+records the service account — without impersonation. With it, the vote is cast on the person's
+own session and `VotedBy` is them; either way the row already belonged to a named approver. A raw status
 update is **not** a vote — it stores nothing meaningful and the workflow never runs.
 
 **An end user's record says they authored it.** Ivanti fills `CreatedBy` from the session, which
 would put this server's service account on every ticket an end user raises. It accepts an override
 and keeps it, so `enduser` writes stamp the pinned person — while `LastModBy`, which cannot be
 overridden, keeps recording the account that performed the write. The two fields then say exactly
-what happened. The attribution is only as strong as the identity behind it: verified under `oauth`,
-an unverified claim otherwise.
+what happened. The attribution is only as strong as the identity behind it: verified under `oauth`, an
+unverified claim otherwise. With the ConfigDB pair configured none of the override is needed:
+`act_as` opens Ivanti's own session for the person, and every write — records, notes, quick
+actions, service requests and their attachments — carries their name because Ivanti filled it.
 
 **A closed record is read-only, and only this server enforces that.** Ivanti sets `ReadOnly: true`
 on a closed ticket (`Resolved` stays false — it can still be reopened) and then accepts a PATCH to

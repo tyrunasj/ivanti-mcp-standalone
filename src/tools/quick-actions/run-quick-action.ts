@@ -18,6 +18,7 @@ import { ActionNotAllowedError } from '../shared/action-gate.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { NO_OP_ACTION_TYPE } from './list-quick-actions.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -42,10 +43,14 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
       'THIS REPEATS ITS SIDE EFFECTS ON RETRY: an action that sends an email sends another, one ' +
       'that creates a child record creates a second. After an ambiguous failure, check the ' +
       'record before running it again.\n\n' +
-      'A QUICK ACTION IS RECORDED AS THE SERVICE ACCOUNT, not as the person you are acting ' +
-      'for. `ClosedBy` and `ResolvedBy` name this server\'s account — as does a service ' +
-      'request\'s `CreatedBy` — unlike create_record, add_note and upload_attachment, which ' +
-      'stamp the person. Do not tell someone the record shows them as having done it.\n\n' +
+      (deps.connection.capability.canImpersonate
+        ? // Replaced, not appended: the sentence below is false wherever act_as opened a session.
+          'After act_as, Ivanti records this as THAT PERSON: `ClosedBy` and `ResolvedBy` carry ' +
+          'their name, as does a service request\'s `CreatedBy`.\n\n'
+        : 'A QUICK ACTION IS RECORDED AS THE SERVICE ACCOUNT, not as the person you are acting ' +
+          'for. `ClosedBy` and `ResolvedBy` name this server\'s account — as does a service ' +
+          'request\'s `CreatedBy` — unlike create_record, add_note and upload_attachment, which ' +
+          'stamp the person. Do not tell someone the record shows them as having done it.\n\n') +
       'Preview with preview_quick_action for what it asks, then pass those as `answers`. This ' +
       'previews again itself — Ivanti mints a token per probe and the commit must echo that ' +
       "probe's own — so an action that suddenly demands an unsupplied answer is refused rather " +
@@ -70,6 +75,7 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('run_quick_action', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
         const resolved = await resolveObject(deps, args.object);
         const { entity } = resolved;
         const objectId = toActionObjectId(toObjectId(entity.name));
@@ -78,7 +84,7 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
         // the deployment named. Both are no-ops in `full`, where the audience is IT staff.
         await assertRecordWritable(deps, context, resolved, args.recordId);
 
-        const known = await listQuickActions(deps.connection.session, objectId);
+        const known = await listQuickActions(connection.session, objectId);
         const action = known.find(
           (candidate) => candidate.actionId.toLowerCase() === args.actionId.toLowerCase(),
         );
@@ -100,7 +106,7 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        const form = await deps.connection.forms.get(objectId);
+        const form = await connection.forms.get(objectId);
         if (form === undefined) {
           return errorResult(
             `This role has no form for ${objectId}, and running an action without one means ` +
@@ -109,7 +115,7 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
         }
 
         const shared = {
-          session: deps.connection.session,
+          session: connection.session,
           objectId,
           recordId: args.recordId,
           actionId: args.actionId,

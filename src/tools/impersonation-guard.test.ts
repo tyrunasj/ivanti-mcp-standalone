@@ -12,6 +12,7 @@ import type { Logger } from '../logger.js';
 import { ARGUMENTS, RESPONSES } from './every-tool.fixture.js';
 import { selectTools } from './register-tools.js';
 import type { CallContext } from './tool-definition.js';
+import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
 
 /**
  * Impersonation must be something a deployment *has*, never something every deployment needs.
@@ -55,15 +56,11 @@ const SESSION_CALLS: Record<string, unknown> = {
 };
 
 const openSession = (): ImpersonatedSession =>
-  ({
+  impersonatedSessionFixture({
     sid: 'tenant.example.com#SID#1',
     loginId: 'JSmith',
-    role: 'ServiceDeskAnalyst',
     roles: [{ name: 'ServiceDeskAnalyst', displayName: 'Service Desk Analyst', selfService: false }],
-    call: () => Promise.reject(new Error('unused')),
-    switchTo: () => Promise.reject(new Error('unused')),
-    release: () => Promise.resolve(),
-  }) as ImpersonatedSession;
+  });
 
 /** Tools that refuse before reaching Ivanti because no person is pinned here — by design. */
 const REFUSES_WITHOUT_AN_IDENTITY = new Set(['vote_on_approval', 'switch_role']);

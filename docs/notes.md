@@ -924,8 +924,9 @@ Ivanti publishes no role ordering anywhere reachable — `frs_def_role` has `Par
 null on all 51 roles here, there is no permissions object in the 1324-object catalog, and
 `employee.ROLE_TO_LINK` is null. What does rank them is `GetRoleWorkspaces`, and it takes the role
 as an argument (`sRole`), so one session can measure a role without switching into it — **but only
-an admin one**. A `ServiceDeskAnalyst` session answers **551** for every role including its own,
-so ranking is an admin-tier capability and there is no non-admin path to it, lazy or otherwise.
+an admin one** — or so it appeared: a `ServiceDeskAnalyst` session answered **551** for every role
+including its own, later traced to the session never having been activated with `SelectRole`
+(see below), not to admin rights. The ranking was dropped for other reasons before that was known.
 Count only the `ObjectWorkspace` rows: measured here, `ServiceOwner` has 12 workspaces to
 `ChangeManager`'s 11 but 2 object workspaces to its 7, and `SelfServiceIT` ties
 `ServiceDeskAnalyst` at 7 total while holding 1 against 3. The ladder measured by object
@@ -947,8 +948,8 @@ choice wherever the lowest is wanted. *(Measured 2026-09-14.)*
 `SelfServiceRole` and `EnableMobileAnalystUI` alongside `Name`/`DisplayName`. That flag is the
 authoritative answer to "is this a portal role", and it arrives on a **non-admin** session:
 measured against an impersonated `ServiceDeskAnalyst`, `GetUserData` answered with the role list
-while `GetRoleWorkspaces` answered 551 for every role. So the workspace ranking is an admin-only
-enrichment, not the way to find a self-service role. *(Measured 2026-09-14.)*
+while `GetRoleWorkspaces` answered 551 for every role — an un-activated session, as it turned out,
+not a permission. The flag remains the right way to find a self-service role either way. *(Measured 2026-09-14.)*
 
 **`GetUserData` needs `tzoffset`, and fails when the session has no active role.**
 Called as `{_csrfToken, tzoffset: 0}` it answers; omitting `tzoffset` answers **500
@@ -966,16 +967,20 @@ session by rewriting Ivanti's `UserSettings` cookie, with no re-authentication a
 while signed out, so it is not the one to call. *(From `ivanti-mobile`, verified live there;
 not re-measured here.)*
 
-**An impersonated session reaches OData and `Session.asmx`, and nothing else.**
-Measured against a CentralConfig-minted session for a `ServiceDeskAnalyst`: `InitializeSession`,
-`GetUserData` and `SelectRole` all answer, and OData answers with rows — while **every**
-`Services/Workspace.asmx` method (`GetRoleWorkspaces`, `GetWorkspaceData`, `FindFormViewData`) and
-`AdminUI/services/AppDesign.asmx` answer **551 `ValidateSessionException`**. It is not a role
-permission: real analysts call those methods from Ivanti's own mobile client. A session minted by
-CentralConfig is simply not accepted by the workspace/form layer, while one from
-`AuthenticateTenantAPIKey` is. So anything built on forms — pick lists, validated fields, quick
-actions, service-request submit — must keep using the service-account session.
-*(Measured 2026-09-14.)*
+**A CentralConfig session must be ACTIVATED with `SelectRole`, or the whole form surface answers 551.**
+`InitializeSession` reports a role; that is not the same as a role being *selected*. Until
+`Session.asmx/SelectRole` has been called — even naming the exact role already reported — every
+`Workspace.asmx` method, `ServiceCatalog/services/ServiceSubscription.asmx` (the file-staging
+pair) and `AdminUI/services/AppDesign.asmx` answer **551 `ValidateSessionException`**, while OData
+and `Session.asmx` itself answer normally. Controlled on a live tenant with one variable — same
+role, same CSRF token reused: two `InitializeSession` calls and no `SelectRole` stayed at 551; one
+`InitializeSession` plus `SelectRole` answered 200 with 7 workspaces. After activation the full
+chain runs as the person — measured by filing a service request *with an attachment* as someone
+other than the service account: the request and its file both came back `CreatedBy` that person.
+
+This server once documented those 551s as an Ivanti boundary and built a surface split on it. The
+cause was its own optimisation: `SelectRole` was skipped whenever the chosen role already matched
+the active one. **Never skip it.** *(Measured 2026-09-14.)*
 
 **OData scopes to the session's role, and a session with no role reads nothing.**
 Counts through the same OData path, varying only the session: service account (Admin) and an
@@ -1029,7 +1034,7 @@ on every boot is not worth catching a typo. Note the field is `DBConnectionStrin
 `ConnectionString` on `AuthenticateAPI`: a redaction pattern written for one misses the other,
 which is how the first version of the scrubber let it through. *(Measured 2026-09-14.)*
 
-**The manifest budget is spent: 9 characters of 38,000.**
+**The manifest budget was down to 9 characters of 38,000, and is now 98.**
 `full` now carries 41 tools and 37,991 characters of description with impersonation on — the
 widest manifest a caller can be sent, which is what `description-budget.test.ts` measures since
 descriptions vary with `canImpersonate`. `switch_role` cost 277 and the conditional `act_as` line
@@ -1065,6 +1070,26 @@ them, so `act_as` gates the attempt, opens the session, and commits the pin only
 still refuse. Checking *before* opening matters on its own — otherwise an injected second name
 would mint an Ivanti session for a person the conversation is about to refuse. Anything
 irreversible wants the same shape: ask, do the work that can fail, then commit.
+*(Measured 2026-09-14.)*
+
+**`AuthenticateWithAPIKeyAndUser` does NOT impersonate — it returns the API key's own session and
+echoes your `loginId` back at you.** Its signature (`key`, `userIpAddress`, `userAgent`, `tenant`,
+`loginId`, `role`) reads exactly like the impersonation endpoint one would hope for. Measured, it
+answers the **same `SessionId` as `AuthenticateTenantAPIKey`** — the service account's — for
+`HSanders`, for `ACope`, and for `nobody-at-all`, a login that does not exist. It validates no user
+at all. The `LoginId` field in the reply is the string you sent, not the identity of the session.
+
+Everything about it looks like success: HTTP 200, a plausible `LoginId`, and `Workspace.asmx`
+answering 200 with 31 workspaces where an un-activated impersonated session gets 551 — because it is the
+service account's admin session. Code that trusted this would run every "impersonated" call as the
+service account with admin rights and report the person's name while doing it. **Read the session
+back from `InitializeSession` (`UserName`), never from the authentication reply.**
+*(Measured 2026-09-14.)*
+
+**`ServiceSubscription.asmx` answers 551 for the same reason `Workspace.asmx` does, and stops for
+the same reason.** `GetPackageDataSDA` and `GetUploadTicket` refuse an un-activated session and
+accept an activated one; the service is not special. Kept because an earlier entry generalised
+one service's 551 into "the ASMX boundary" — the wrong lesson from a true measurement.
 *(Measured 2026-09-14.)*
 
 ## Observability

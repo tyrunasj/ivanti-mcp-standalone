@@ -29,14 +29,6 @@ const SERVICE_ACCOUNT_BY_DESIGN: Record<string, string> = {
     'Samples rows to learn a link field\'s `_Category` spelling. That is a fact about the tenant, ' +
     'not about the caller, and reading it per person would make a process-wide answer vary by ' +
     'conversation.',
-  'service-request/submit-service-request.ts':
-    'A service request is staged and submitted through ASMX, which refuses an impersonated ' +
-    'session (551). Splitting the flow across two credentials would stage files as one identity ' +
-    'and submit as another, so the whole flow stays on the service account.',
-  'service-request/list-request-offerings.ts':
-    'Feeds the submit flow above and must agree with it about which identity is filing; an ' +
-    'offering listed as one person and submitted as another is how a request ends up with none ' +
-    'of its answers on it.',
 };
 
 const TOOLS_DIR = new URL('..', import.meta.url).pathname;
@@ -54,15 +46,15 @@ function sourceFiles(dir: string, prefix = ''): { name: string; body: string }[]
 describe('which credential a tool talks to Ivanti on', () => {
   it('has every record operation going through transportFor, or declared with a reason', () => {
     const offenders = sourceFiles(TOOLS_DIR)
-      .filter(({ name }) => name !== 'shared/transport-for.ts')
-      .filter(({ body }) => /deps\.connection\.transport(?!\s*,)/.test(stripResolved(body)))
+      .filter(({ name }) => name !== 'shared/transport-for.ts' && name !== 'shared/connection-for.ts')
+      .filter(({ body }) => /deps\.connection\.(transport|session|forms|workspaces)\b(?!\s*,)/.test(stripResolved(body)))
       .map(({ name }) => name)
       .filter((name) => !(name in SERVICE_ACCOUNT_BY_DESIGN));
 
     expect(
       offenders,
-      'These reach for the service-account transport without resolving the caller\'s first. ' +
-        'Use `transportFor(deps.connection.transport, context)`, or add the file to ' +
+      'These reach for a service-account surface without resolving the caller\'s first. ' +
+        'Use `connectionFor(deps, context)`, or add the file to ' +
         'SERVICE_ACCOUNT_BY_DESIGN with the reason it is a tenant fact rather than a person\'s ' +
         `data:\n  ${offenders.join('\n  ')}`,
     ).toEqual([]);

@@ -18,7 +18,7 @@ import { assertRecordWritable } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { projectWritten } from '../shared/project-written.js';
-import { transportFor } from '../shared/transport-for.js';
+import { connectionFor } from '../shared/connection-for.js';
 
 export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -82,7 +82,8 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
     },
     handler: (args, context) =>
       runTool('update_record', deps.logger, async () => {
-        const transport = transportFor(deps.connection.transport, context);
+        const connection = connectionFor(deps, context);
+        const transport = connection.transport;
         const target = await resolveObject(deps, args.object);
         const { entity, entitySet } = target;
 
@@ -107,7 +108,7 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
           .catch(async (error: unknown) => {
             // Required-field rules name display names, and some of them are links; the form is
             // the only thing that can translate either.
-            const form = await deps.connection.forms
+            const form = await connection.forms
               .get(toObjectId(entity.name))
               .catch(() => undefined);
             throw (

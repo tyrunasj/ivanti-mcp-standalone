@@ -10,6 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createImpersonationSlot } from '../auth/impersonation.js';
 import type { ImpersonatedSession } from '../ivanti/session/impersonated-session.js';
 import { createServerFactory, releaseOnClose } from './create-server.js';
+import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
 
 const config = configFixture();
 
@@ -98,15 +99,7 @@ describe('the impersonated session\'s lifetime', () => {
 
 describe('releaseOnClose', () => {
   const opened = (release: () => Promise<void>): ImpersonatedSession =>
-    ({
-      sid: 'tenant#A#1',
-      loginId: 'HSanders',
-      role: 'ServiceDeskAnalyst',
-      roles: [],
-      call: () => Promise.reject(new Error('unused')),
-      switchTo: () => Promise.reject(new Error('unused')),
-      release,
-    }) as ImpersonatedSession;
+    impersonatedSessionFixture({ sid: 'tenant#A#1', release });
 
   const server = (): McpServer => new McpServer({ name: 'test', version: '0' });
 

@@ -9,14 +9,19 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { connectionFor } from '../shared/connection-for.js';
+import type { IvantiConnection } from '../../ivanti/connect.js';
 
 /** A RecId's display name, so an opaque id can be echoed back as a person. Best effort. */
 async function findEmployeeName(
   deps: IvantiToolDeps,
+  // Passed in rather than reached for: which offerings a person may see is read on the
+  // caller's credential when there is one.
+  connection: IvantiConnection,
   recId: string,
 ): Promise<string | undefined> {
-  const record = await deps.connection.transport
-    .request<OdataRecord>(deps.connection.transport.routes.record('employees', recId))
+  const record = await connection.transport
+    .request<OdataRecord>(connection.transport.routes.record('employees', recId))
     .catch(() => undefined);
   const name = record?.['DisplayName'];
   return typeof name === 'string' && name !== '' ? name : undefined;
@@ -69,6 +74,7 @@ export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefini
     },
     handler: (args, context) =>
       runTool('list_request_offerings', deps.logger, async () => {
+        const connection = connectionFor(deps, context);
         const pinned = context.pin?.person();
         // A catalogue is per person — entitlements differ — so naming someone else would be a
         // way to read what a colleague is entitled to.
@@ -83,8 +89,8 @@ export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefini
         }
 
         const result = await listOfferings({
-          transport: deps.connection.transport,
-          session: deps.connection.session,
+          transport: connection.transport,
+          session: connection.session,
           logger: deps.logger,
           personRecId,
           topLevelOnly: args.topLevelOnly ?? false,
@@ -104,7 +110,7 @@ export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefini
           forPerson:
             pinned !== undefined && pinned.recId === personRecId
               ? pinned.displayName
-              : ((await findEmployeeName(deps, personRecId)) ?? personRecId),
+              : ((await findEmployeeName(deps, connection, personRecId)) ?? personRecId),
           ...(result.note === undefined ? {} : { note: result.note }),
           offerings: result.offerings,
         });

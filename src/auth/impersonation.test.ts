@@ -4,17 +4,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ImpersonatedSession } from '../ivanti/session/impersonated-session.js';
 import { createImpersonationSlot } from './impersonation.js';
+import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
 
 const session = (loginId: string, release = vi.fn(() => Promise.resolve())): ImpersonatedSession =>
-  ({
-    sid: `tenant#ABC#1`,
-    loginId,
-    role: 'ServiceDeskAnalyst',
-    roles: [],
-    call: () => Promise.reject(new Error('unused')),
-    switchTo: () => Promise.reject(new Error('unused')),
-    release,
-  }) as ImpersonatedSession;
+  impersonatedSessionFixture({ sid: 'tenant#ABC#1', loginId, release });
 
 describe('createImpersonationSlot', () => {
   it('holds nothing until something opens it', () => {

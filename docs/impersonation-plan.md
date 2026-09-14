@@ -18,15 +18,18 @@ for **every** Ivanti surface, not just the ASMX one:
 |---|---|---|
 | OData / REST | `Authorization: rest_api_key=<key>` | `Cookie: SID=<impersonated>` — **and Ivanti scopes it** |
 | `Session.asmx` | service-account SID + CSRF | impersonated SID + its own CSRF |
-| `Workspace.asmx` (forms, pick lists, quick actions) | service-account SID + CSRF | **unchanged — the impersonated session is refused** |
-| AdminUI (`AppDesign.asmx`) | service-account SID + CSRF | **unchanged — refused** |
+| `Workspace.asmx` (forms, pick lists, quick actions) | service-account SID + CSRF | impersonated SID + CSRF, **once `SelectRole` has run** |
+| Service catalog + `.ashx` upload (service requests, files) | service-account SID + CSRF | impersonated — the request and its attachment both carry the person's name |
+| AdminUI (`AppDesign.asmx`) | service-account SID + CSRF | unchanged: a tenant catalog, not a person's view |
 
-**The split is the design.** A CentralConfig-minted session is accepted by OData and
-`Session.asmx` and rejected with 551 by the workspace/form layer, whatever role it holds. So
-impersonation covers the record surface — where Ivanti applies the person's own access — and the
-form surface keeps running as the service account exactly as it does today. That is not a
-limitation to work around; it is the boundary, and building anything that tries to cross it
-would be building on a 551.
+**Every surface follows the person; only tenant facts stay behind.** An earlier draft of this
+section said the form surface was refused (551) and made that the design. It was refused because
+the session had never been *activated*: `Session.asmx/SelectRole` must be called after
+`InitializeSession` even when it names the role already reported, and the implementation had
+optimised that call away. What stays on the service account does so for a stated reason, not a
+measured refusal: the metadata catalog (a schema, cached once), the admin catalog (a list of
+objects, unreachable to most people), the person directory (what `act_as` resolves through — using
+the person's session there is circular) and the tenant UTC offset.
 
 See `docs/notes.md` for the measured mechanics. The one that matters most is that a SID is
 `<tenantId>#<sessionId>#<n>` and CentralConfig returns only the middle segment.
@@ -102,8 +105,8 @@ opens a session for the resolved `LoginID`:
 4. establish a role if none is active, and the one the mode wants if it differs (§8)
 5. bind the pair to the conversation, beside the existing pin
 
-**Only the OData/REST calls for that conversation use it.** The form and admin surfaces keep the
-service-account session, because the impersonated one is refused there (§1). The session is
+**Every call for that conversation uses it** — records, forms, pick lists, quick actions, service
+requests and their attachments — through `connectionFor`, the one place that decides (§1). The session is
 released on conversation end (`CentralConfig.asmx/RemoveSession`), and `SessionKeyExpire` is
 honoured by re-running the handshake rather than by letting a call fail.
 
@@ -302,10 +305,10 @@ docs" is not actionable and these are.
 - §14 *Symptom to cause*: "can't find user name X" means **no enabled user** by that name —
   `Disabled`, which is a different field from `Status` and contradicts it.
 
-**What must NOT change in the handbook.** "A QUICK ACTION IS RECORDED AS THE SERVICE ACCOUNT" and
-the approval-voting rows stay exactly as they are. Those run through `Save.asmx`, which an
-impersonated session cannot reach, so they remain service-account writes — and a reader who
-concluded otherwise would be wrong in the direction that matters.
+**What changes in the handbook that is easy to miss.** "A QUICK ACTION IS RECORDED AS THE SERVICE
+ACCOUNT" and the approval-voting rows were true, and are now true only *without* impersonation:
+under it, `ClosedBy`, `ResolvedBy` and `VotedBy` carry the person. Every such sentence becomes
+conditional on `canImpersonate`, the way `act_as`'s did — replaced, never appended beside.
 
 **`docs/configuration.md`** — the provider rows and the symptom→cause entry above.
 
@@ -326,7 +329,7 @@ does when impersonation is on, within the 375 characters `full` has spare (§9 *
 4. `roles.ts` — the role list (`GetUserData.userRoleList`, falling back to `GetRolesForUser`),
    selection by `SelfServiceRole`, and `Session.asmx/SelectRole`
 5. Per-conversation impersonated session, bound beside the pin; role always established; release on close
-6. Route **OData/REST only** through it; the form and admin surfaces keep the service account
+6. Route every surface through it via `connectionFor`; tenant facts keep the service account
 7. `switch_role`, registered in `full` only; `act_as` refusal paths, with the distinguishable reasons
    - **Double-check here:** step 5 left release-on-close proven only for the *never-opened* case.
      Opening a session needs `act_as`, so once it exists, assert end-to-end that a conversation

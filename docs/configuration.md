@@ -504,7 +504,7 @@ and RFC 9728 metadata must still match exactly.
 | `Ivanti has no enabled user named X` from `act_as` | **Not a typo in the login.** CentralConfig only opens a session for an account whose `Disabled` bit is clear, and `Disabled` is a *different field from* `Status` — every account here read `Status: Active` while disabled. Enable the account in Ivanti. |
 | `impersonation configured but unavailable` at startup | The ConfigDB answered 401 (wrong `IVANTI_CENTRAL_CONFIG_API_KEY` — it comes from Configure → Security Controls → API Keys, `CentralConfigApiKey` group, and is **not** the tenant API key) or could not be reached. The server keeps running with `act_as` in its ordinary meaning. |
 | Impersonation is on, but every `act_as` fails | The startup probe validates the key, **not** the tenant: `GetTenantTimeout` answers 200 with a default for a tenant it has never heard of. Check `IVANTI_BASE_URL`'s hostname is the tenant CentralConfig knows. |
-| Pick lists and quick actions still act as the service account | Correct, and not configurable. Ivanti refuses a CentralConfig session on the form and admin surfaces (551), so only the record surface is impersonated. |
+| A form, pick-list or quick-action call answers **551** while impersonating | The session was never activated: `Session.asmx/SelectRole` must be called after `InitializeSession` — even naming the role it already reported — or every `Workspace.asmx` and service-catalog method refuses. The server always calls it, so a 551 here means that changed. |
 
 At `LOG_LEVEL=debug` every request logs its method, tool, session and authenticated subject, which
 answers most of the above directly. Arguments are never logged.
