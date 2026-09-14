@@ -270,3 +270,53 @@ describe('act_as when the deployment can impersonate', () => {
     expect(String(body(result)['scope'])).not.toContain('their own access');
   });
 });
+
+describe('a failed impersonation must not bind the conversation', () => {
+  // Found on a live tenant: act_as pinned the person, THEN tried to open the session. The open
+  // failed, the error was returned — and the pin had already stuck, so the conversation was
+  // bound to someone it could not act as and refused every other person for the rest of its
+  // life. One unlucky name bricked the session.
+  it('leaves the conversation free to try someone else', async () => {
+    const tool = setup({ $filter: { value: [HAROLD] } });
+    const slot = createImpersonationSlot(() =>
+      Promise.reject(new Error('This person holds no self-service role.')),
+    );
+    const context: CallContext = {
+      identity: ANONYMOUS,
+      pin: createSessionPin(ANONYMOUS),
+      impersonation: slot,
+    };
+
+    const refused = await tool.handler({ person: 'HSanders' }, context);
+
+    expect(refused.isError).toBe(true);
+    // The point: nothing was pinned, so the next attempt is not blocked by the failed one.
+    expect(context.pin?.person()).toBeUndefined();
+  });
+
+  // The pin's own rules still gate the attempt — they must run BEFORE a session is opened, or an
+  // injected second name would mint an Ivanti session for someone the conversation will refuse.
+  it('refuses a second person without opening a session for them', async () => {
+    const tool = setup({ $filter: { value: [HAROLD] } });
+    const open = vi.fn(() => Promise.reject(new Error('should never be reached')));
+    const context: CallContext = {
+      identity: ANONYMOUS,
+      pin: createSessionPin(ANONYMOUS),
+      impersonation: createImpersonationSlot(open),
+    };
+    // Someone else is already pinned.
+    context.pin?.pin({
+      recId: 'other',
+      displayName: 'Someone Else',
+      category: 'employee',
+      provenance: 'asserted',
+      matchedOn: 'LoginID',
+    });
+
+    const refused = await tool.handler({ person: 'HSanders' }, context);
+
+    expect(refused.isError).toBe(true);
+    expect(text(refused)).toContain('already acting for Someone Else');
+    expect(open).not.toHaveBeenCalled();
+  });
+});

@@ -1053,6 +1053,20 @@ role it has, by accident rather than policy. The server keeps that fallback (ref
 out the account entirely) but **says so in the response** and warns, and `IVANTI_IMPERSONATION_ROLE`
 is the way to decide it explicitly. *(Measured 2026-09-14.)*
 
+**Pinning a person before the work that can fail bricks the conversation.**
+`act_as` pinned the resolved person and then opened the Ivanti session. When the open failed it
+returned the error — and the pin had already stuck, one-way by design, so the conversation was
+bound to someone it could not act as and refused **every other person** for the rest of its life.
+One unlucky name ended the session's usefulness. Found on a live tenant, not in tests: the unit
+tests all pinned someone who could be impersonated.
+
+The fix is ordering, not a new escape hatch: `SessionPin.check()` asks the rules without applying
+them, so `act_as` gates the attempt, opens the session, and commits the pin only once nothing can
+still refuse. Checking *before* opening matters on its own — otherwise an injected second name
+would mint an Ivanti session for a person the conversation is about to refuse. Anything
+irreversible wants the same shape: ask, do the work that can fail, then commit.
+*(Measured 2026-09-14.)*
+
 ## Observability
 
 **`/health` must answer without a token, so everything it returns is public.**

@@ -7,6 +7,10 @@ import { MIN_CLAIM_LENGTH } from '../../ivanti/people/directory.js';
 import type { PinnedPerson } from '../../auth/identity-pin.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import type { ImpersonatedSession } from '../../ivanti/session/impersonated-session.js';
+import {
+  IdentityConflictError,
+  VerifiedSessionError,
+} from '../../auth/identity-pin.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -208,7 +212,19 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
           });
         }
 
-        pin.pin(toPinned(only, verified ? 'verified' : 'asserted'));
+        const pinned = toPinned(only, verified ? 'verified' : 'asserted');
+
+        // Asked, not applied. Pinning is one-way, and the session below can fail — committing
+        // first left a conversation bound to someone it had then failed to act as, refusing
+        // every other person for the rest of its life. The rules still gate the attempt.
+        try {
+          pin.check(pinned);
+        } catch (error: unknown) {
+          if (error instanceof IdentityConflictError || error instanceof VerifiedSessionError) {
+            return errorResult(error.message);
+          }
+          throw error;
+        }
 
         deps.logger.info('acting as a person', {
           provenance: verified ? 'verified' : 'asserted',
@@ -254,6 +270,9 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
             provenance: verified ? 'verified' : 'asserted',
           });
         }
+
+        // Everything that could refuse has now run, so this is safe to make permanent.
+        pin.pin(pinned);
 
         return jsonResult({
           pinned: true,
