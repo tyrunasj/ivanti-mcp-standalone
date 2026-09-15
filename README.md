@@ -223,6 +223,7 @@ tools/    tool-definition -> register-tools (which tools this mode exposes)
 | [`docs/configuration.md`](docs/configuration.md) | configuring against a real IdP, per provider, with a symptom→cause table |
 | [`docs/initial-design.md`](docs/initial-design.md) | decisions and why — including, in §10, what was rejected and for what reason |
 | [`docs/notes.md`](docs/notes.md) | traps: things that pass locally and fail elsewhere |
+| [`docs/review/`](docs/review) | full-codebase review findings, with what was refuted and what nobody looked at |
 | [`charts/ivanti-mcp/README.md`](charts/ivanti-mcp/README.md) | the chart's values and what it refuses to render |
 | [`CLAUDE.md`](CLAUDE.md) | orientation for agents working in this repository |
 | [`LICENSE`](LICENSE) · [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) | the commercial terms, and the components distributed with it |

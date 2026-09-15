@@ -43,3 +43,34 @@ describe('createObjectGate', () => {
     expect(OPEN_GATE.allows('anything')).toBe(true);
   });
 });
+
+/**
+ * An object whose own CSDL name ends in `s`.
+ *
+ * The gate resolved a reference through `toCsdlEntity`, which strips a trailing `s` — right for
+ * `Incidents`, wrong for `journal__notes`. With the allowlist collapsed the same way, the two
+ * agreed on a name the tenant does not have, so the object was unreachable while every refusal
+ * listed it as allowed. Both sides now keep the name as given as well as the guess.
+ */
+describe('an allowlisted object whose name really ends in s', () => {
+  const gate = createObjectGate(
+    configFixture({ MCP_MODE: 'enduser', ENDUSER_BUSINESS_OBJECTS: ['journal__notes', 'incident'] }),
+  );
+
+  it.each([
+    ['as given', 'journal__notes'],
+    ['in another casing', 'Journal__Notes'],
+  ])('allows it %s', (_label, ref) => {
+    expect(gate.allows(ref)).toBe(true);
+  });
+
+  // Still a gate: nothing outside the list gets through, and the singular is not the same object.
+  it.each(['journal__note', 'employee', 'change'])('still refuses %s', (ref) => {
+    expect(gate.allows(ref)).toBe(false);
+  });
+
+  it('still resolves the ordinary plural dialect', () => {
+    expect(gate.allows('Incidents')).toBe(true);
+    expect(gate.allows('Incident#')).toBe(true);
+  });
+});

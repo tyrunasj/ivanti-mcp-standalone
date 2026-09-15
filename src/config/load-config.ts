@@ -43,7 +43,13 @@ export function loadConfig(env: EnvRecord, readFile?: FileReader): Config {
 
   for (const key of SECRET_KEYS) {
     try {
-      resolved[key] = readSecret(env, key, readFile);
+      // `resolved`, not `env`: the secrets have to see the same "set to nothing is unset" rule as
+      // every other setting. Reading the raw record made `BEARER_TOKEN=` alongside
+      // `BEARER_TOKEN_FILE=/run/secrets/…` — the documented way to move from the inline form to
+      // the file form — fail with "Both … are set; provide exactly one", when only one was. It
+      // also let a whitespace-only `BEARER_TOKEN` start the server, which is the one direction
+      // this bug failed open.
+      resolved[key] = readSecret(resolved, key, readFile);
       delete resolved[`${key}_FILE`];
     } catch (error) {
       throw new ConfigError([error instanceof Error ? error.message : String(error)]);

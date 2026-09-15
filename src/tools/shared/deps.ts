@@ -26,3 +26,17 @@ export interface IvantiToolDeps {
   /** Which of the tenant's own procedures this audience may run. Open in `full`. */
   actions: ActionGate;
 }
+
+/**
+ * Whether this deployment registers the tools a description might point the model at.
+ *
+ * A description naming a tool that is not in `tools/list` is worse than saying nothing: a model
+ * cannot tell "not registered here" from "you called it wrong", so it retries with synonyms.
+ * `resources.test.ts` has enforced this for the reference documents since they existed;
+ * `description-cross-reference.test.ts` now enforces it here.
+ */
+export const registersFormTools = (deps: IvantiToolDeps): boolean =>
+  deps.connection.capability.tier !== 'odata';
+
+/** `link_records` / `unlink_records` are `full`-only: see register-tools. */
+export const registersLinkTools = (deps: IvantiToolDeps): boolean => !deps.ownRecordsOnly;

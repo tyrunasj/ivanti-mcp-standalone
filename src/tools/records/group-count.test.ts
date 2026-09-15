@@ -41,7 +41,11 @@ const deps = (
   sessionCalls: Record<string, unknown> = FORM_CHAIN,
 ) => {
   const { connection, urls } = connectionFixture({
-    entities: { incident: entityFixture('incident', { fields: [field('Status', { validated: true })] }) },
+    entities: {
+      incident: entityFixture('incident', {
+        fields: [field('Status', { validated: true }), field('Subject')],
+      }),
+    },
     capability: { tier: 'session', identity: { role: 'Admin' } },
     sessionCalls,
     responses,

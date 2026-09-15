@@ -298,9 +298,15 @@ export async function assertRecordWritable(
   // here too, or the guard would be checking something the caller cannot actually reach.
   const transport = transportFor(deps.connection.transport, context);
   const url = transport.routes.record(resolved.entitySet, recordId);
-  const record = await transport
-    .request<OdataRecord>(url)
-    .catch(() => undefined);
+  // Only Ivanti's not-found dialect means "not there". A bare catch here swallowed every other
+  // failure too — a 500, a 502 from a proxy, the transport's own 10 s timeout — and in `full` mode
+  // the branch below then RETURNS, skipping the `ReadOnly` refusal and letting the write go out
+  // against a closed record that Ivanti accepts with a 200. A guard that cannot be evaluated must
+  // refuse the write, not disable itself. `delete_record` already reads it this way.
+  const record = await transport.request<OdataRecord>(url).catch((error: unknown) => {
+    if (isIvantiNotFound(error)) return undefined;
+    throw error;
+  });
 
   // A record that is not there is the caller's own tool to explain — each one says something
   // different and better than a generic line here. In `enduser` it is not explained at all,

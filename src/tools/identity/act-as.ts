@@ -200,7 +200,27 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
         // A verified session whose token matched only on a name has proved *who* the person is
         // but not *which record* is theirs. Confirm before pinning, and show what matched what,
         // so a wrong-person match is visible rather than silent.
-        if (verified && only.matchedOn === 'name' && (choice === undefined || choice === '')) {
+        //
+        // The test is whether `person` actually IDENTIFIES this candidate, not whether it was
+        // supplied. Keying on presence alone meant any non-empty string silenced the
+        // confirmation — including `person: "x"`, and including the very name the tool's own
+        // schema invites ("Give whatever they gave you"), because `chosenBy` only ever runs when
+        // there is more than one candidate. On a deployment whose token claim is a human name,
+        // one wrong record was pinned as `provenance: 'verified'` with nothing shown.
+        //
+        // Not identity spoofing: `lookup` is still the token's claim, so every candidate came
+        // from what the issuer said. It is the confirmation step that was bypassable.
+        // Deliberately stricter than `chosenBy`, which also accepts a display name: here the
+        // display name IS the ambiguous claim, so confirming with it proves nothing about which
+        // record is theirs. The refusal asks for "their login or email", and that is what counts.
+        const wanted = choice?.trim().toLowerCase() ?? '';
+        const confirmedByArgument =
+          wanted !== '' &&
+          (only.recId.toLowerCase() === wanted ||
+            only.loginId?.toLowerCase() === wanted ||
+            only.primaryEmail?.toLowerCase() === wanted);
+
+        if (verified && only.matchedOn === 'name' && !confirmedByArgument) {
           return jsonResult({
             pinned: false,
             question:

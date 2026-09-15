@@ -11,6 +11,7 @@ import {
   NotYourRecordError,
   UnscopableObjectError,
   assertOwnRecord,
+  assertRecordWritable,
   hideMissingRecord,
   missingRecordMessage,
   ownershipFields,
@@ -192,5 +193,75 @@ describe('hideMissingRecord', () => {
     expect(() => hideMissingRecord({ ownRecordsOnly: true } as never, boom)).toThrow(
       IvantiApiError,
     );
+  });
+});
+
+/**
+ * The closed-record guard, which is the only thing standing between a caller and a silently edited
+ * closed ticket — Ivanti sets `ReadOnly: true` and then accepts a PATCH to it anyway, answering
+ * 200. `docs/notes.md` records that the update path is the one place Ivanti does not hold the line.
+ *
+ * The guard reads the record to answer two questions at once, and the read is where it used to fail
+ * open: a bare `.catch(() => undefined)` turned any transport failure into "not there", which in
+ * `full` mode returns rather than throwing — so the `ReadOnly` test never ran and the write went
+ * out. A guard that cannot be evaluated has to refuse, not disable itself.
+ */
+describe('assertRecordWritable', () => {
+  /** A fixture whose single-record read answers with `record`, or throws `fails`. */
+  function writable(record: Record<string, unknown> | undefined, fails?: unknown) {
+    const { connection } = connectionFixture({
+      entities: { incident: { fields: [field('RecId'), field('ProfileLink_RecID'), field('ProfileLink_Category')] }, employee: {} },
+      responses: {
+        "incidents('i1')": fails ?? (record === undefined ? { value: [] } : record),
+        incidents: { value: [] },
+        employees: { value: [] },
+      },
+    });
+    return { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS };
+  }
+
+  const notFound = new IvantiApiError(
+    { status: 400, method: 'GET', url: 'x', body: 'ISM_4000: Invalid key' },
+    'Invalid key',
+  );
+
+  it('refuses a write to a closed record', async () => {
+    const deps = writable({ RecId: 'i1', ReadOnly: true });
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    await expect(assertRecordWritable(deps, anonymous(), resolved, 'i1')).rejects.toThrow(
+      /closed|read-only/i,
+    );
+  });
+
+  it('allows a write to an open record', async () => {
+    const deps = writable({ RecId: 'i1', ReadOnly: false });
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    await expect(assertRecordWritable(deps, anonymous(), resolved, 'i1')).resolves.toMatchObject({
+      RecId: 'i1',
+    });
+  });
+
+  // Ivanti's own not-found dialect still means "not there", and `full` mode leaves the explanation
+  // to the calling tool rather than inventing a worse one here.
+  it('reports a genuinely missing record as absent, in full mode', async () => {
+    const deps = writable(undefined, notFound);
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    await expect(assertRecordWritable(deps, anonymous(), resolved, 'i1')).resolves.toBeUndefined();
+  });
+
+  // The fail-open path. Every one of these used to read as "the record is not there", skip the
+  // ReadOnly test, and let the write proceed against a record that might be closed.
+  it.each([
+    ['a 500 from the tenant', new IvantiApiError({ status: 500, method: 'GET', url: 'x' }, 'boom')],
+    ['a 502 from a proxy', new IvantiApiError({ status: 502, method: 'GET', url: 'x' }, 'bad gateway')],
+    ['the transport timing out', new IvantiApiError({ status: 0, method: 'GET', url: 'x' }, 'did not complete')],
+  ])('refuses the write when the guard cannot be evaluated: %s', async (_label, failure) => {
+    const deps = writable(undefined, failure);
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    await expect(assertRecordWritable(deps, anonymous(), resolved, 'i1')).rejects.toThrow();
   });
 });

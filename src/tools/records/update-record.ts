@@ -9,7 +9,7 @@ import {
   resolveValidatedWrite,
   toObjectId,
 } from '../../ivanti/write/validated-write.js';
-import type { IvantiToolDeps } from '../shared/deps.js';
+import { registersFormTools, type IvantiToolDeps } from '../shared/deps.js';
 import { explainFieldError } from '../shared/explain-field-error.js';
 import { explainRequiredFields } from '../shared/explain-required-fields.js';
 import { jsonResult } from '../shared/result.js';
@@ -27,14 +27,18 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
     description:
       'Changes fields on one existing record, by RecId, and reads it back to confirm.\n\n' +
       'Only the fields named are touched. A validated field takes a value from a list — see ' +
-      'get_pick_list_values — and a list can CASCADE: the categories depend on the service. This ' +
+      (registersFormTools(deps)
+        ? 'get_pick_list_values — and a list can CASCADE: the categories depend on the service. This '
+        : 'a list this credential cannot read — and a list can CASCADE. This ') +
       'tool reads the record\'s stored parents before checking, so patching `Category` alone is ' +
       'judged against the service the record already has rather than against an empty one.\n\n' +
       'OMITTING A VALIDATED FIELD IS NOT THE SAME AS LEAVING IT ALONE on some objects, because ' +
       'Ivanti recalculates dependent fields; read the result rather than assuming.\n\n' +
       'To change a link — the customer, the requestor, the owner — set BOTH halves of its pair: ' +
       '`<Link>_RecID` and `<Link>_Category`. Which link carries which meaning differs per object, ' +
-      'so get_link_fields for this object rather than assuming the name another object used.\n\n' +
+      (registersFormTools(deps)
+        ? 'so get_link_fields for this object rather than assuming the name another object used.\n\n'
+        : 'so read this object\'s own metadata rather than assuming the name another object used.\n\n') +
       'A FIELD CHANGE IS NOT A PRIVATE EDIT. Ivanti runs the tenant\'s own workflow on a write, ' +
       'and that workflow mails real people. Measured: patching `Priority` on one incident logged ' +
       'a "Priority Changed" outgoing email and three escalation notifications within ten seconds, ' +
@@ -91,8 +95,10 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // whether it is still open. Ivanti happily updates a closed record.
         await assertRecordWritable(deps, context, target, args.recordId);
 
+        // The person's connection — see create-record.ts. Validating against the service
+        // account's form while writing on the person's SID validates the wrong thing.
         const resolved = await resolveValidatedWrite({
-          connection: deps.connection,
+          connection,
           logger: deps.logger,
           entity,
           entitySet,
@@ -119,7 +125,7 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
           });
 
         await confirmWrite(
-          deps.connection,
+          connection,
           entitySet,
           args.recordId,
           resolved.confirm,

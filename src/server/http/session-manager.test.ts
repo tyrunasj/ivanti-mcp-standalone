@@ -14,10 +14,12 @@ const silent = (): Logger => spyLogger().logger;
 
 let clock = 1_000;
 interface FakeSession {
-  close: ReturnType<typeof vi.fn<() => void>>;
+  // `void | Promise<void>`, as `ClosableSession` declares it: closing an MCP session releases the
+  // person's Ivanti session, which is asynchronous, and shutdown has to be able to wait for it.
+  close: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
 }
 
-const session = (): FakeSession => ({ close: vi.fn<() => void>() });
+const session = (): FakeSession => ({ close: vi.fn<() => void | Promise<void>>() });
 
 const manager = (maxSessions = 2, idleTtlMs = 100, logger: Logger = silent()) =>
   new SessionManager<FakeSession>({
@@ -103,18 +105,56 @@ describe('SessionManager', () => {
     expect(s.close).not.toHaveBeenCalled();
   });
 
-  it('closes everything on shutdown', () => {
+  it('closes everything on shutdown', async () => {
     const m = manager(5);
     const a = session();
     const b = session();
     m.register('a', a);
     m.register('b', b);
 
-    m.closeAll();
+    await m.closeAll();
 
     expect(a.close).toHaveBeenCalled();
     expect(b.close).toHaveBeenCalled();
     expect(m.size).toBe(0);
+  });
+
+  /**
+   * Closing a session is what releases the person's Ivanti session, so shutdown has to WAIT for
+   * it. This used to fire each `close()` and return, which read as tidy and did nothing: the
+   * process exited before the release request left the machine.
+   */
+  it('waits for a close that takes a moment', async () => {
+    const m = manager(5);
+    let released = false;
+    m.register('slow', {
+      close: vi.fn<() => void | Promise<void>>(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              released = true;
+              resolve();
+            }, 5);
+          }),
+      ),
+    });
+
+    await m.closeAll();
+
+    expect(released).toBe(true);
+  });
+
+  // One session refusing to close must not strand the others.
+  it('closes the rest when one throws', async () => {
+    const m = manager(5);
+    const good = session();
+    m.register('bad', {
+      close: vi.fn<() => void | Promise<void>>(() => Promise.reject(new Error('stuck'))),
+    });
+    m.register('good', good);
+
+    await expect(m.closeAll()).resolves.toBeUndefined();
+    expect(good.close).toHaveBeenCalled();
   });
 
   it('stops sweeping when the returned function is called', () => {

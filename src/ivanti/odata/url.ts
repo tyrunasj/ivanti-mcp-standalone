@@ -57,6 +57,13 @@ export function createIvantiRoutes(baseUrl: string, basePath: string): IvantiRou
     savedSearch: (entitySet, name) => `${bo}/${entitySet}/${encodeURIComponent(name)}`,
     rest: (path: string) => `${root}/api/rest/${path.replace(/^\/+/, '')}`,
     service: (path: string) => `${root}/${path.replace(/^\/+/, '')}`,
-    metadata: (graph) => `${root}/api/odata/${graph === undefined ? '' : `${graph}/`}$metadata`,
+    // The graph name is caller-derived and was the ONE segment in this file interpolated raw,
+    // against the principle stated above. A `#` in an object name truncates the URL at a fragment,
+    // so a lookup meant for `$metadata` sent an authenticated GET to a different path entirely —
+    // and `../` would have walked out of `/api/odata/`. A blind primitive rather than a readable
+    // one (the body only ever reaches `parseCsdl`), but it is still a request this code never
+    // meant to make.
+    metadata: (graph) =>
+      `${root}/api/odata/${graph === undefined ? '' : `${encodeURIComponent(graph)}/`}$metadata`,
   };
 }

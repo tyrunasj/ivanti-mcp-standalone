@@ -167,6 +167,69 @@ describe('submit_service_request', () => {
     ]);
   });
 
+  /**
+   * A failed read-back is not a passed one.
+   *
+   * `verifyStoredAnswers` is wrapped in a `.catch` — correctly, because the request EXISTS by then
+   * and turning a filed request into a reported failure would be worse. But its result used to be
+   * indistinguishable from "nothing mismatched": `undefined` rendered as `answersVerified: true`,
+   * beside an `answerNote` promising the comparison had confirmed the answers individually. Per
+   * this module's own measurements, a wrong offset sign stores a datetime as `0001-01-01` while
+   * Ivanti still reports success — precisely the case the read-back exists to catch.
+   */
+  it('says the verification is unknown when the read-back fails', async () => {
+    const { deps: d } = deps({
+      ...SUBMITTED,
+      ServiceReqContainsServiceReqParam: new Error('Ivanti 500 while reading the request back'),
+    });
+
+    const result = body(
+      await createSubmitServiceRequestTool(d).handler(
+        { subscriptionId: 'sub-1', answers: { P1: true } },
+        pinned(),
+      ),
+    );
+
+    expect(result['answersVerified']).toBe('unknown');
+    expect(String(result['verifyWarning'])).toContain('NOT a confirmation');
+    // The request itself was still filed, and its number still reported.
+    expect(result['requestNumber']).toBeDefined();
+  });
+
+  /**
+   * Every file is checked before any file is uploaded.
+   *
+   * The decode/empty/size checks used to live INSIDE the staging loop, and staging is a real
+   * upload — `GetPackageDataSDA` → `GetUploadTicket` → a multipart POST. So when a later
+   * attachment failed validation, the earlier ones were already in Ivanti while the caller was
+   * told "Nothing was submitted": true about the service request, false about the tenant.
+   *
+   * The fixture stages nothing, so reaching the uploader at all fails with a session error. Seeing
+   * the SIZE message instead is what proves the pre-pass ran first.
+   */
+  it('checks every attachment before uploading any of them', async () => {
+    const { deps: d } = deps({ ...OFFERINGS, ...SUBMITTED });
+    const tooBig = Buffer.alloc(3 * 1024 * 1024, 1).toString('base64');
+
+    const result = await createSubmitServiceRequestTool(d).handler(
+      {
+        subscriptionId: 'sub-1',
+        answers: { P1: 'x' },
+        attachments: [
+          { filename: 'report.txt', contentBase64: Buffer.from('fine').toString('base64') },
+          { filename: 'capture.bin', contentBase64: tooBig },
+        ],
+      },
+      pinned(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('capture.bin');
+    expect(text(result)).toContain('over the');
+    // And the honest part: nothing reached the tenant, so the old wording is still correct here.
+    expect(text(result)).toContain('Nothing was submitted');
+  });
+
   it('refuses to file in someone else’s name in enduser mode', async () => {
     const { deps: d } = deps(SUBMITTED, true);
 

@@ -462,6 +462,72 @@ The reply is columns, not objects: the stored value is at the **lowest** index i
 `DisplayName` labels it, `RecId` identifies it, and an empty list with `SameAs` means "reuse that
 field's options". Measured live: Incident Status has 7 values, Priority 5, Source 13.
 
+**`CentralConfig/RemoveSession` does not end the session, in either spelling of the id.**
+Measured live 2026-09-15 by driving `openImpersonatedSession` itself rather than a hand-rolled
+handshake — the first two attempts at this measured the wrong thing twice, once by dropping the
+`/HEAT` base path and once by using `GetUserData`, which 500s permanently for some accounts and so
+reads as "dead" for a session that is fine.
+
+With a fully activated session and `Session.asmx/GetRoleWorkspaces` as the liveness test:
+
+| | workspace call works |
+|---|---|
+| before `release()` | yes |
+| after `release()` (composed `<host>#<id>#1`) | **yes** |
+| after `release(<bare middle segment>)` | **yes** |
+
+`RemoveSession` answers **200 with an empty body** every time, which is why nothing ever said so —
+and `release()` swallows non-2xx by design on the reasoning that a leaked session expires anyway.
+So the composed-vs-bare question the review raised is not the issue: neither form works.
+
+→ Two consequences. Calling `release()` is still right — it is the documented teardown, it costs
+one request, and a later Ivanti version may honour it — but it must not be relied on: an
+impersonated session lives until the tenant timeout, measured at **18,000 s** via
+`GetTenantTimeout`. And a deployment opening many short conversations accumulates sessions on the
+tenant for five hours regardless of how carefully it tidies up. If that ever matters, the lever is
+the tenant timeout, not this call.
+
+**`/api/rest/Attachment?ID=` accepts a SID cookie, so file bytes can follow the person.**
+Measured live 2026-09-14. `requestBinary` was the one transport method that did not go through
+`send`, so it ignored the SID it was built with and always sent `Authorization: rest_api_key=` —
+fetching file BYTES as the service account while the attachment row read, and the DELETE of that
+same attachment, both used the person's SID. Routing it through the same credential branch was
+assumed to be safe on the strength of the DELETE; it is not an assumption any more. With the
+change in place, `act_as` followed by `download_attachment` returned the file on
+`Cookie: SID=<person>` with no `Authorization` header at all.
+
+→ The open question this closes was whether Ivanti's REST-by-id fetch is *stricter* than its OData
+row read, which would have meant a person could see an attachment row and not its bytes. It is not.
+The remaining honest limit is that both were measured as the same Admin account: a role that can
+read the row but not the file would still be invisible here.
+
+**A field on a validated list can still be *computed*, and the write is overridden without a word.**
+`Incident.Priority` is on the picklist — `get_pick_list_values` returns its five values, and a write
+passes every client-side check — but this tenant derives it from `Urgency` × `Impact` and overwrites
+whatever was sent. Measured live 2026-09-14, creating five incidents in one batch:
+
+| Urgency | Impact | Priority sent | Priority stored |
+|---|---|---|---|
+| Medium | Low | 4 | 4 |
+| High | Low | 3 | 3 |
+| Low | Low | **4** | **5** |
+| High | High | **2** | **1** |
+| Low | Low | 5 | 5 |
+
+The three that matched were the ones where the guess happened to agree with the matrix, so a smaller
+sample reads as "it works". Ivanti answers **201 for all five** and stores `Priority_Valid` pointing
+at the option it chose, not the one that was sent — so nothing on the wire says the value was
+rejected. `confirmWrite` is the only thing that catches it, and it does: the two divergent writes
+were reported as failures naming the field, the value sent and the value stored, while the record
+itself exists.
+
+Two consequences. A caller who sets `Priority` alongside `Urgency`/`Impact` should expect to be told
+the write did not store, and that is correct behaviour rather than a bug to route around — the fix is
+to set the drivers and let the rule decide, or to set `Priority` alone. And the refusal text points
+at "a stale option list … or a value that needs a different cascade parent", which is the wrong
+advice here: the list was fresh and the value was legal. **A computed field is a third cause that
+message does not name.**
+
 **A cascade parent supplied under the wrong name filters nothing, silently.**
 `GetFormValidationListData` takes the parents inside the data model, so a key the form does not
 have is simply ignored and the answer comes from the unfiltered list — whose values may not be

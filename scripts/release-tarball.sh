@@ -30,7 +30,9 @@ cp "$ROOT/package.json" "$ROOT/pnpm-lock.yaml" "$ROOT/pnpm-workspace.yaml" "$STA
 
 # Same prune as the Dockerfile's deps stage, for the same reason: none of this is read
 # by a running process. LICENCE files stay — the notices have to travel with the copy.
-find "$STAGE/node_modules" \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) -type f -delete
+# Licence files survive: four production packages ship theirs only as .md. See docker/Dockerfile.
+find "$STAGE/node_modules" \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) \
+  -not -iname 'licen[cs]e*' -not -iname 'copying*' -type f -delete
 
 # The build output, and the manifest the server refuses to start without.
 cp -R "$ROOT/dist" "$STAGE/dist"

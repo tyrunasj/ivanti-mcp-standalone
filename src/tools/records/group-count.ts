@@ -13,6 +13,7 @@ import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { connectionFor } from '../shared/connection-for.js';
+import { assertFieldName } from '../shared/order-by.js';
 
 /** Each bucket is its own round trip, so the fan-out is capped. */
 const MAX_BUCKETS = 25;
@@ -80,7 +81,15 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
         const transport = connection.transport;
         const resolved = await resolveObject(deps, args.object);
         const { entity, entitySet } = resolved;
+        // Identity first: an unidentified caller must be refused for that, not told which fields
+        // the object has.
         const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
+
+        // Then the name, before it reaches a filter AS A FIELD NAME — the value beside it is
+        // quoted, the name is not. Unchecked, it was a way to write arbitrary OData into the
+        // clause and OR the own-records constraint away, and the pick-list walk that would have
+        // rejected an unknown name is skipped whenever the caller supplies `values`.
+        assertFieldName(args.groupBy, entity, 'groupBy');
 
         let values = args.values ?? [];
         let valuesFrom = 'caller';

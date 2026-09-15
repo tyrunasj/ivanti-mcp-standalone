@@ -12,6 +12,19 @@ import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { connectionFor } from '../shared/connection-for.js';
 
 /**
+ * Whether one of the pinned person's identifiers is what this row records as its owner.
+ *
+ * Case-folded, and runs of whitespace collapse: Ivanti assembles a display name from its parts and
+ * leaves the gap where a middle name is not set, so it stores `Becky   Smith` with three spaces.
+ * An absent identifier never matches — `undefined` and `''` are not an owner.
+ */
+function sameIdentifier(mine: string | undefined, onRow: string): boolean {
+  if (mine === undefined || mine === '' || onRow === '') return false;
+  const fold = (value: string): string => value.trim().replaceAll(/\s+/gu, ' ').toLowerCase();
+  return fold(mine) === fold(onRow);
+}
+
+/**
  * Casting a vote, which is only safe because of where it is cast.
  *
  * Ivanti has two ways to approve and they are not equivalent. **"Approve My Vote"** on the
@@ -95,12 +108,31 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
         }
 
         // The check the whole design rests on: this row is theirs, so the vote is theirs.
+        //
+        // `Owner` holds a different identifier depending on the row — a LOGIN on some, a DISPLAY
+        // NAME on others, and an EMAIL on others still (measured live: `tyrunasj@synergy.eu` on a
+        // request this server had just filed). `list_approvals` composes its filter over all of
+        // them, so matching the login alone here refused rows the listing had called theirs one
+        // call earlier, naming the same person on both sides of "not". `Owner_Valid` is the
+        // employee RecId and never varies, which makes it the one to trust; the spellings of
+        // `Owner` stay as a fallback for a row that carries no `Owner_Valid`.
+        //
+        // Still fail-closed: nothing but the pinned person's own identifiers can match.
         const owner = typeof vote['Owner'] === 'string' ? vote['Owner'] : '';
-        if (owner.toLowerCase() !== person.loginId.toLowerCase()) {
+        const ownerValid = typeof vote['Owner_Valid'] === 'string' ? vote['Owner_Valid'] : '';
+        const theirs =
+          sameIdentifier(person.recId, ownerValid) ||
+          sameIdentifier(person.loginId, owner) ||
+          sameIdentifier(person.primaryEmail, owner) ||
+          sameIdentifier(person.displayName, owner);
+
+        if (!theirs) {
+          const held = [person.loginId, person.primaryEmail].filter((id) => id !== undefined);
           return errorResult(
-            `That approval is ${owner === '' ? "somebody else's" : `waiting on ${owner}`}, not on ` +
-              `${person.displayName}. A vote can only be cast on one's own approval — otherwise ` +
-              "it would be recorded as that person's decision without them making it.",
+            `That approval is ${owner === '' ? 'not owned by anyone this server can read' : `waiting on ${owner}`}, ` +
+              `which is not ${person.displayName}${held.length === 0 ? '' : ` (${held.join(', ')})`}. ` +
+              "A vote can only be cast on one's own approval — otherwise it would be recorded as " +
+              "that person's decision without them making it.",
           );
         }
 

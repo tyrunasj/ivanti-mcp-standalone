@@ -95,19 +95,56 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
     if (existing !== undefined) return existing;
 
     const pending = (async (): Promise<CsdlDocument | undefined> => {
+      // Two phases, and they fail for different reasons. Fetching can fail because the tenant is
+      // having a bad moment, which must not be remembered. Parsing can only fail because Ivanti
+      // ANSWERED and the answer was not a schema — the fabricated field-less document it returns
+      // for an unknown entity set, or a WAF page — which is definitive and must be remembered, or
+      // every mistyped name costs a round trip on every call rather than once.
+      let body: string;
       try {
-        const document = parseCsdl(await transport.requestText(url));
+        body = await transport.requestText(url);
+      } catch (error: unknown) {
+        // Only a DEFINITIVE answer from Ivanti is cached. A 200 carrying the fabricated
+        // field-less document, or a 404, really does mean "no such entity", and caching it makes
+        // a mistyped name cost one round trip rather than one per call.
+        //
+        // Everything else is the tenant having a bad moment, and caching it turns that moment
+        // into a permanent, confidently-worded lie: the process answers "Ivanti has no Business
+        // Object named 'Incident#'" for the rest of its life, making no further request, logged
+        // at debug as `retryable: false`. Because `routes.metadata('incidents')` is byte-identical
+        // to the startup probe's URL, poisoning the seed kills the most-used object of all.
+        //
+        // The old test was `status === 0` alone, which missed every 5xx and every 401/403/429 —
+        // one app-pool recycle and the process answers "Ivanti has no Business Object named
+        // 'Incident#'" for the rest of its life, making no further request. And because
+        // `routes.metadata('incidents')` is byte-identical to the startup probe's URL, poisoning
+        // the seed kills the most-used object of all.
+        const retryable =
+          !(error instanceof IvantiApiError) ||
+          error.status === 0 ||
+          error.status >= 500 ||
+          error.status === 401 ||
+          error.status === 403 ||
+          error.status === 429;
+        if (retryable) documents.delete(url);
+        logger.debug('csdl unavailable', {
+          url,
+          retryable,
+          reason: error instanceof Error ? error.message.slice(0, 120) : 'unknown',
+        });
+        return undefined;
+      }
+
+      try {
+        const document = parseCsdl(body);
         logger.debug('csdl parsed', { url, entities: document.entities.size });
         return document;
       } catch (error: unknown) {
-        // A connection failure is not an answer: forget it so the next caller tries again. Any
-        // reply from Ivanti — including the fabricated empty document — is cached as "no", so a
-        // mistyped entity costs one round trip rather than one per call.
-        const transportFailure = error instanceof IvantiApiError && error.status === 0;
-        if (transportFailure) documents.delete(url);
-        logger.debug('csdl unavailable', {
+        // Ivanti's own answer, and it is not a schema. Cached: this is how a typo arrives, and it
+        // should cost one round trip rather than one per call.
+        logger.debug('csdl unusable', {
           url,
-          retryable: transportFailure,
+          retryable: false,
           reason: error instanceof Error ? error.message.slice(0, 120) : 'unknown',
         });
         return undefined;
@@ -187,7 +224,16 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
        * in one — right for `Incidents`, wrong here — so both are tried. The second is fetched
        * only when the first missed, and a graph that does not exist is cached as a miss.
        */
-      const graphs = [...new Set([toGuessedEntitySet(ref), `${ref.toLowerCase()}s`])];
+      // `toGuessedEntitySet` already handles the `#` dialect, so for a `#`-form ref the second
+      // candidate can only ever be a name with a fragment in it — a pointless authenticated round
+      // trip to a path that is not `$metadata`.
+      const graphs = [
+        ...new Set(
+          ref.includes('#')
+            ? [toGuessedEntitySet(ref)]
+            : [toGuessedEntitySet(ref), `${ref.toLowerCase()}s`],
+        ),
+      ];
 
       // Either the seed graph does not name it, or it named it without relationships — which is
       // what every non-root entity looks like there.

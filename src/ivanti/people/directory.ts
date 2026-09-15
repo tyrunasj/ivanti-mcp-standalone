@@ -3,7 +3,7 @@
 
 import type { Logger } from '../../logger.js';
 import type { IvantiTransport } from '../http/transport.js';
-import type { MetadataCatalog } from '../metadata/catalog.js';
+import { UnknownEntityError, type MetadataCatalog } from '../metadata/catalog.js';
 import { toEntitySet } from '../metadata/entity-names.js';
 import { buildQuery, quoteOdataString, withQuery } from '../odata/query.js';
 import { readCollection, type OdataRecord } from '../odata/response.js';
@@ -165,18 +165,38 @@ export function createPersonDirectory(deps: PersonDirectoryDeps): PersonDirector
   const { transport, metadata, logger } = deps;
   let present: Promise<string[]> | undefined;
 
-  /** Which person objects this tenant has. Asked once: the schema cannot change under us. */
+  /**
+   * Which person objects this tenant has. Asked once: the schema cannot change under us.
+   *
+   * "Absent" and "could not be reached" have to stay different, or the memo below turns one bad
+   * second into a permanent fact. `externalcontact` is not in the seed graph, so resolving it is
+   * its own fetch; a single 5xx on it used to be caught here, recorded as "this tenant has no
+   * such object", and never retried — after which every external contact is "no such person" for
+   * the life of the process, which in `enduser` mode means they cannot use the server at all.
+   * The catalog already distinguishes the two cases and forgets the retryable ones; memoising a
+   * list derived from a failure cancelled that.
+   */
   const personObjects = async (): Promise<string[]> => {
-    present ??= (async (): Promise<string[]> => {
+    const resolve = async (): Promise<string[]> => {
       const found: string[] = [];
       for (const object of PERSON_OBJECTS) {
-        // An absent object is the ordinary case for `externalcontact`, not a failure.
-        const entity = await metadata.entity(object).catch(() => undefined);
+        // An absent object is the ordinary case for `externalcontact`, not a failure — but only
+        // the catalog's own "this tenant does not have it" signal counts as absent. Anything
+        // else propagates, so nothing is memoised and the next caller tries again.
+        const entity = await metadata.entity(object).catch((error: unknown) => {
+          if (error instanceof UnknownEntityError) return undefined;
+          throw error;
+        });
         if (entity !== undefined) found.push(entity.name.toLowerCase());
       }
       logger.debug('person objects', { objects: found });
       return found;
-    })();
+    };
+
+    present ??= resolve().catch((error: unknown) => {
+      present = undefined;
+      throw error;
+    });
     return present;
   };
 
@@ -199,6 +219,17 @@ export function createPersonDirectory(deps: PersonDirectoryDeps): PersonDirector
       for (const object of objects) {
         const rows = await read(object, buildQuery({ filter: exactFilter(trimmed), top: 10 }));
         for (const row of rows) {
+          // `exactFilter` takes the OUTERMOST tokens for its FirstName/LastName clause, so a
+          // middle name does not break the match — but that also means "Mary Jane Watson" matches
+          // **Mary Watson**, a different employee, exactly. An exact hit short-circuits the loose
+          // search below, so nothing else would ever have looked at the token it dropped.
+          //
+          // A key match (LoginID, PrimaryEmail) is decisive on its own. A NAME match has to
+          // account for every token the claim carried — which still matches "Katherine Joseph" to
+          // "Katherine M Joseph", because every token given is present, and still refuses "Mary
+          // Jane Watson" → "Mary Watson", because `jane` is not.
+          if (matchKey(trimmed, row) === 'name' && !claimMatchesRow(trimmed, row)) continue;
+
           const candidate = toCandidate(row, object, trimmed);
           if (candidate !== undefined) exact.push(candidate);
         }

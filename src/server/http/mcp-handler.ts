@@ -85,6 +85,24 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
     return Array.isArray(header) ? header[0] : header;
   };
 
+  /**
+   * A session belongs to the identity that opened it.
+   *
+   * Another verified subject presenting its own valid token is not entitled to this conversation,
+   * to the records it has already been told about, or to ending it. One helper because all three
+   * methods need the same answer — it lived inline in the POST branch, which is how GET and
+   * DELETE came to skip it entirely.
+   */
+  const ownsSession = (
+    existing: { identity: CallerIdentity },
+    authorization: AuthorizationResult,
+    sessionId: string,
+  ): boolean => {
+    if (sameSubject(existing.identity, authorization)) return true;
+    logger.warn('session subject mismatch', { sessionId });
+    return false;
+  };
+
   return async (request, response, authorization): Promise<void> => {
     const subject = authorization.identity?.subject;
     const sessionId = sessionIdOf(request);
@@ -98,6 +116,15 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
       const existing = sessions.get(sessionId);
       if (existing === undefined) {
         sendRpcError(response, 404, 'Unknown or expired session');
+        return;
+      }
+
+      // The same gate as POST, and it has to be here too: this branch used to reach
+      // `handleRequest` without it, so a holder of a valid token for a DIFFERENT subject could
+      // send `DELETE /mcp` with somebody else's session id and `handleDeleteRequest` would close
+      // their conversation and answer 200. A GET likewise attached to their standalone stream.
+      if (!ownsSession(existing, authorization, sessionId)) {
+        sendRpcError(response, 403, 'This session belongs to another identity');
         return;
       }
 
@@ -131,11 +158,7 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
         sendRpcError(response, 404, 'Unknown or expired session');
         return;
       }
-      if (!sameSubject(existing.identity, authorization)) {
-        // A session belongs to the identity that opened it. Another verified subject presenting
-        // its own valid token is not entitled to this conversation — or to the records it has
-        // already been told about.
-        logger.warn('session subject mismatch', { sessionId });
+      if (!ownsSession(existing, authorization, sessionId)) {
         sendRpcError(response, 403, 'This session belongs to another identity');
         return;
       }

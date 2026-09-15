@@ -19,13 +19,18 @@ const GATED = configFixture({
 
 const PERSON = { RecId: 'e1', LoginID: 'JSmith', DisplayName: 'Jon Smith', Status: 'Active' };
 
-const tools = () => {
+const tools = (
+  overrides: Partial<Parameters<typeof configFixture>[0]> = {},
+  capability?: NonNullable<Parameters<typeof connectionFixture>[0]>['capability'],
+) => {
   const { connection, urls } = connectionFixture({
+    ...(capability === undefined ? {} : { capability }),
     entities: {
       incident: {
         fields: [
           field('RecId'),
           field('Subject'),
+          field('Status'),
           field('ProfileLink_RecID'),
           field('ProfileLink_Category'),
         ],
@@ -50,12 +55,21 @@ const tools = () => {
       employees: { value: [PERSON] },
     },
   });
-  const selected = selectTools(GATED, {
+  const selected = selectTools(
+    Object.keys(overrides).length === 0
+      ? GATED
+      : configFixture({
+          MCP_MODE: 'enduser',
+          ENDUSER_BUSINESS_OBJECTS: ['incident', 'change', 'servicereq'],
+          ...overrides,
+        }),
+    {
     serverName: 'ivanti-mcp',
     serverVersion: '0.1.0',
     logger: logger(),
-    ivanti: connection,
-  });
+      ivanti: connection,
+    },
+  );
   const byName = new Map(selected.map((tool) => [tool.name, tool]));
   const tool = (name: string) => byName.get(name)!;
 
@@ -105,6 +119,42 @@ describe('enduser mode gates every object-taking tool', () => {
     expect(text(result)).toContain('"returned": 1');
     // The answer says whose records these are, rather than implying they are everyone's.
     expect(text(result)).toContain('"scopedTo": "Jon Smith"');
+  });
+
+  /**
+   * The constraint has to reach the REQUEST, not merely be computed.
+   *
+   * `scopeToOwnRecords` was unit-tested on the string it returns, and the gate tests asserted on
+   * the rows that came back — but the fixture matches responses by URL substring and hands back
+   * its incident regardless of `$filter`, so `returned: 1` and `scopedTo` both survive the
+   * constraint being dropped. Removing it from all five call sites left 767/767 green and
+   * typecheck clean. In enduser mode a collection read has NO post-read ownership check, so the
+   * filter IS the boundary.
+   */
+  it.each([
+    ['list_records', { object: 'Incidents' }],
+    ['count_records', { object: 'Incidents' }],
+    ['fulltext_search_object', { object: 'Incidents', query: 'printer' }],
+    ['group_count', { object: 'Incidents', groupBy: 'Status', values: ['Active'] }],
+  ])('puts the own-records constraint in the URL %s sends', async (name, args) => {
+    const { tool, context, actAs, urls } = tools({}, { tier: 'session', identity: { role: 'x' } });
+    await actAs();
+    urls.length = 0;
+
+    await tool(name).handler(args, context);
+
+    // `customer-link` samples rows to learn which field holds a person, and that probe is
+    // deliberately unscoped — it is asking what the OBJECT looks like, not what the caller owns.
+    // The reads that answer the caller are the ones carrying a filter.
+    const reads = urls
+      .filter((url) => url.includes('incidents'))
+      .map((url) => decodeURIComponent(url))
+      .filter((url) => url.includes('$filter='));
+
+    expect(reads.length, `${name} sent no filtered read at all`).toBeGreaterThan(0);
+    for (const url of reads) {
+      expect(url, `${name} sent an unscoped read`).toContain("ProfileLink_RecID eq 'e1'");
+    }
   });
 
   it('refuses a relationship that reaches a gated object', async () => {
@@ -195,14 +245,38 @@ describe('enduser mode gates every object-taking tool', () => {
       'list_assigned_work',
       'list_saved_searches',
       'saved_search',
-      'list_quick_actions',
-      'preview_quick_action',
-      'run_quick_action',
       'preview_delete',
       'link_records',
       'unlink_records',
     ]) {
       expect(names, `${absent} should not exist in enduser mode`).not.toContain(absent);
+    }
+  });
+
+  /**
+   * The three quick-action tools are absent only because this fixture names no actions.
+   *
+   * They used to sit in the list above, which asserted they should not exist in `enduser` mode at
+   * all — and a real deployment that sets `ENDUSER_QUICK_ACTIONS` registers them, which is the
+   * shape CLAUDE.md documents as the supported way to let end users close their own tickets. The
+   * assertion was not merely incomplete, it was false.
+   */
+  it('registers the quick-action tools exactly when ENDUSER_QUICK_ACTIONS names something', () => {
+    const quickActions = ['list_quick_actions', 'preview_quick_action', 'run_quick_action'];
+
+    const { names: withNone } = tools({}, { tier: 'session', identity: { role: 'SelfService' } });
+    for (const name of quickActions) {
+      expect(withNone, `${name} must not exist when no action is allowed`).not.toContain(name);
+    }
+
+    // The session tier as well: these live on a workspace or a create form, which OData cannot
+    // reach, so `register-tools.ts:116` gates them on that first.
+    const { names: withSome } = tools(
+      { ENDUSER_QUICK_ACTIONS: ['Close From Self Service'] },
+      { tier: 'session', identity: { role: 'SelfService' } },
+    );
+    for (const name of quickActions) {
+      expect(withSome, `${name} must exist when an action is allowed`).toContain(name);
     }
   });
 

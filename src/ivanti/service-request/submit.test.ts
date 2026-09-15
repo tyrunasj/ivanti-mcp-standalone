@@ -224,6 +224,58 @@ describe('verifyStoredAnswers', () => {
     ]);
   });
 
+  /**
+   * A zone-less `YYYY-MM-DDTHH:MM` is the tenant's wall clock, not the server's.
+   *
+   * ECMAScript resolves a zone-less date-TIME string in the host's zone (a date-ONLY string is
+   * UTC, which is why the bare-date path never had this bug). So the same submit used to verify
+   * differently depending on where the process ran — and on a host in the tenant's own timezone,
+   * the documented "beside the tenant it talks to" deployment, a CORRECTLY stored value was
+   * reported as `storedDifferently`. A false mismatch on a good write sends a caller into a
+   * second, non-idempotent submit.
+   *
+   * TZ is pinned here rather than inherited: on a UTC runner the old behaviour and the right one
+   * agree, so a test that took the host's zone would pass in CI and prove nothing.
+   */
+  describe('a zone-less datetime is read in the tenant’s frame, not the host’s', () => {
+    const stored = [
+      {
+        ParameterName: 'ValidFrom',
+        ParameterValue: '2026-09-30T12:30:00.0000000Z',
+        SvcReqTmplParamLink_RecID: 'P1',
+      },
+    ];
+
+    /** Runs the check with the host pretending to be somewhere else entirely. */
+    async function underTimezone(zone: string, sent: string) {
+      const before = process.env.TZ;
+      process.env.TZ = zone;
+      try {
+        return await verifyStoredAnswers(withStored(stored), 'sr1', { P1: sent }, -120);
+      } finally {
+        process.env.TZ = before;
+      }
+    }
+
+    // UTC+2 tenant, 14:30 local == 12:30Z, which is exactly what Ivanti stored.
+    it.each(['UTC', 'Asia/Tokyo', 'America/Los_Angeles', 'Europe/Madrid'])(
+      'verifies a correct value on a host in %s',
+      async (zone) => {
+        const check = await underTimezone(zone, '2026-09-30T14:30');
+
+        expect(check.mismatches).toEqual([]);
+      },
+    );
+
+    // Narrowing check: the comparison must still catch a value that really did land wrong.
+    it('still catches a genuinely wrong instant', async () => {
+      const check = await underTimezone('Asia/Tokyo', '2026-09-30T09:15');
+
+      expect(check.mismatches).toHaveLength(1);
+    });
+
+  });
+
   it('catches a checkbox Ivanti declined to store', async () => {
     const check = await verifyStoredAnswers(
       withStored([

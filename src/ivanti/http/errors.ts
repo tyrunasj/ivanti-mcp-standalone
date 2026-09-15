@@ -94,7 +94,13 @@ export function truncate(body: string, maxBytes: number = ERROR_BODY_MAX_BYTES):
  * leak survived a round of testing and was found again.
  */
 const SENSITIVE_FIELDS =
-  /\\?"(SessionId|SessionKey|ConnectionString|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)\\?"\s*:\s*\\?"[^"\\]*\\?"/gi;
+  /\\?"(SessionId|SessionKey|ConnectionString|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)\\?"\s*:\s*\\?"(?:\\\\|[^"\\])*\\?"/gi;
+// The value class has to admit a BACKSLASH, or a value containing one fails to match at all and
+// the field is passed through whole. Measured on the nested shape above with a domain-qualified
+// login: `\"LoginId\":\"CORP\\\\jsmith\"` went unredacted while `SessionId` and `Hostname` either
+// side of it redacted correctly — so the body reaching the model still named the account.
+// `(?:\\\\|[^"\\])*` accepts a JSON-escaped backslash pair but never a lone one, which is what the
+// closing `\"` delimiter begins with, so the match still stops at the end of the value.
 
 /**
  * The same fields again, as XML elements.

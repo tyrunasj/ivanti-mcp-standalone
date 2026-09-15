@@ -47,6 +47,10 @@ export function createObjectGate(config: Config): ObjectGate {
 
   return {
     allowed,
-    allows: (ref: string): boolean => permitted.has(toCsdlEntity(ref).toLowerCase()),
+    // The name as given first, then the singularised guess — the same order the catalog resolves
+    // in, and for the same reason: the guess is wrong for any object whose name really does end
+    // in `s`.
+    allows: (ref: string): boolean =>
+      permitted.has(ref.toLowerCase()) || permitted.has(toCsdlEntity(ref).toLowerCase()),
   };
 }

@@ -52,16 +52,33 @@ describe('envSchema', () => {
 });
 
 describe('ENDUSER_BUSINESS_OBJECTS', () => {
-  it('normalises every naming dialect to one, so the allowlist cannot miss by spelling', () => {
+  /**
+   * `toCsdlEntity` strips a trailing `s`, which is right for `Incidents` and wrong for every
+   * object whose own CSDL name ends in one. `journal__notes`, `address`, `nrn_roomreservations`
+   * and `frs_surveyresults` are all real on this tenant. Collapsing to the guess alone either
+   * exited 78 telling the operator to type the name they had just typed, or started with the
+   * object permanently unreachable while every refusal listed it as allowed.
+   */
+  it.each(['journal__notes', 'address', 'nrn_roomreservations', 'frs_surveyresults'])(
+    'keeps %s as given, not just its singularised guess',
+    (object) => {
+      const config = envSchema.parse({ AUTH_MODE: 'none', ENDUSER_BUSINESS_OBJECTS: object });
+
+      expect(config.ENDUSER_BUSINESS_OBJECTS).toContain(object);
+    },
+  );
+
+  it('accepts every naming dialect, so the allowlist cannot miss by spelling', () => {
     const config = envSchema.parse({
       AUTH_MODE: 'none',
       ENDUSER_BUSINESS_OBJECTS: 'Incident#, Incidents , incident, CI#Computer',
     });
 
+    // Deduplicated, and the `#` dialect resolves rather than being carried: this list is read back
+    // to the caller in every refusal.
     expect(config.ENDUSER_BUSINESS_OBJECTS).toEqual([
       'incident',
-      'incident',
-      'incident',
+      'incidents',
       'ci__computer',
     ]);
   });

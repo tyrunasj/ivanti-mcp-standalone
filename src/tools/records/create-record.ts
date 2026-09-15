@@ -10,7 +10,7 @@ import {
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { referencedFieldNames } from '../../ivanti/odata/filter.js';
 import { describeSubtypes, findSubtypes } from '../../ivanti/metadata/subtypes.js';
-import type { IvantiToolDeps } from '../shared/deps.js';
+import { registersFormTools, registersLinkTools, type IvantiToolDeps } from '../shared/deps.js';
 import { explainFieldError } from '../shared/explain-field-error.js';
 import { explainRequiredFields } from '../shared/explain-required-fields.js';
 import { errorResult, jsonResult } from '../shared/result.js';
@@ -29,18 +29,24 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
     description:
       'Creates one record and returns what Ivanti actually stored.\n\n' +
       'FIELD NAMES ARE NOT GUESSABLE — an incident\'s description is `Symptom`. Call ' +
-      'get_object_metadata first, and get_pick_list_values for any field it marks `validated`: ' +
+      (registersFormTools(deps)
+        ? 'get_object_metadata first, and get_pick_list_values for any field it marks `validated`: '
+        : 'get_object_metadata first. A field it marks `validated` takes a value from a list: ') +
       'those take a value from a list, and this tool refuses one that is not on it rather than ' +
       'letting Ivanti accept the write and store nothing.\n\n' +
       'A PERSON IS NOT A NAME. A link is always a PAIR — `<Link>_RecID` holding the target\'s ' +
       'RecId and `<Link>_Category` naming the object it lives in — but WHICH link is which ' +
       'differs per object: on an incident the customer is `ProfileLink`, on a service request the ' +
       'same field is labelled "Contact Link", and a change has no `ProfileLink` at all. Call ' +
-      'get_link_fields for the object you are writing to rather than reusing a name that worked ' +
+      (registersFormTools(deps)
+        ? 'get_link_fields for the object you are writing to rather than reusing a name that worked '
+        : 'check the object\'s own metadata for the link rather than reusing a name that worked ') +
       'elsewhere.\n\n' +
       'Creating a child under a parent is the same shape — `ParentLink_RecID` plus ' +
       '`ParentLink_Category` — passed here, in the create, which wires the relationship in one ' +
-      'call. link_records is for records that already exist.\n\n' +
+      (registersLinkTools(deps)
+        ? 'call. link_records is for records that already exist.\n\n'
+        : 'call.\n\n') +
       'The record is read back before this reports success. A write Ivanti accepted but did not ' +
       'store is reported as a failure.' +
       (deps.ownRecordsOnly
@@ -94,8 +100,13 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // filed under someone else's name is the thing this mode exists to prevent.
         const owner = await ownershipFields(deps, context, target);
 
+        // The person's connection, not the service account's: `resolveValidatedWrite` reads the
+        // create form, runs `GetFormValidationListData` and reads cascade parents through it. On
+        // `deps.connection` those ran as the service account while the write itself went out on the
+        // person's SID — so a value only an admin's form offers was accepted, attached to its RecId
+        // and stored, then confirmed, and reported as validated for a role that never offers it.
         const resolved = await resolveValidatedWrite({
-          connection: deps.connection,
+          connection,
           logger: deps.logger,
           entity,
           entitySet,
@@ -140,7 +151,7 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         // Throws when a value did not take: the record exists, but not as asked.
         await confirmWrite(
-          deps.connection,
+          connection,
           entitySet,
           recId,
           resolved.confirm,

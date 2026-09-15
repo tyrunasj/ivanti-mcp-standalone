@@ -40,7 +40,20 @@ export function assertOrderBy(orderBy: string | undefined, entity: EntityMetadat
 
   for (const raw of orderBy.split(',')) {
     const clause = raw.trim();
-    if (clause === '') continue;
+    // An EMPTY clause used to be skipped, which quietly let the degenerate strings through — a
+    // trailing comma is the commonest way a generated list ends, and both callers send the
+    // caller's raw string rather than a re-join of what was validated here. Whatever Ivanti makes
+    // of `Priority asc,` it is not a sort it checked, and the tools then report the result under
+    // zeroNote's "THIS IS A REAL ZERO: the field and sort names were checked against the object
+    // before the request" — an invariant this function would not have enforced.
+    if (clause === '') {
+      throw new FieldNameError(
+        `'${orderBy}' has an empty sort clause — usually a stray or trailing comma. Ivanti does ` +
+          'not reject a malformed sort; it answers with no rows, which is indistinguishable from ' +
+          'a real empty result. Remove the comma.',
+        [orderBy],
+      );
+    }
 
     const parsed = CLAUSE.exec(clause);
     if (parsed?.groups === undefined) {
@@ -65,4 +78,38 @@ export function assertOrderBy(orderBy: string | undefined, entity: EntityMetadat
       [field],
     );
   }
+}
+
+/**
+ * One field name, checked against the object before it is interpolated anywhere.
+ *
+ * `group_count` takes a `groupBy` and puts it in a filter **as a field name**, unquoted — the
+ * value beside it is quoted, the name is not. Nothing validated it, and when the caller supplies
+ * `values` the pick-list walk that would otherwise have rejected an unknown field is skipped
+ * entirely. So `groupBy: "Status ne 'zzz' or Status"` produced
+ *
+ *   Status ne 'zzz' or Status eq '<value>' and (ProfileLink_RecID eq '<their recid>')
+ *
+ * and OData binds `and` tighter than `or`, so the own-records constraint applied to only the
+ * second disjunct. What escaped was counts rather than rows — the request sends `$top: 1` — but a
+ * count is a working equality oracle over other people's records.
+ *
+ * Refusing the name locally is the same shape as `assertOrderBy` and `assertSupportedFilter`, and
+ * for the same reason: Ivanti's answer to the malformed version is a successful-looking one.
+ */
+export function assertFieldName(name: string, entity: EntityMetadata, argument: string): void {
+  const names = visibleFields(entity).map((field) => field.name);
+  // Nothing to check against. `parseCsdl` drops field-less entity types — that is how a typo
+  // arrives — so an entity that reaches here with no visible fields is a narrow fixture rather
+  // than a tenant, and refusing every name would be inventing an answer we do not have.
+  if (names.length === 0) return;
+  if (names.some((known) => known.toLowerCase() === name.trim().toLowerCase())) return;
+
+  const close = suggestNames(name, names, 3);
+  throw new FieldNameError(
+    `${entity.name} has no field named '${name}', so \`${argument}\` cannot use it` +
+      (close.length > 0 ? ` (did you mean: ${close.join(', ')}?)` : '') +
+      '. Call get_object_metadata with a `search` for the right name.',
+    [name],
+  );
 }

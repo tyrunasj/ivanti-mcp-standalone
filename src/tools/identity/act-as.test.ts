@@ -16,6 +16,16 @@ import { impersonatedSessionFixture } from '../../ivanti/session/impersonated-se
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
+const ANN_MARIE = {
+  RecId: 'e9',
+  DisplayName: 'Ann Marie',
+  FirstName: 'Ann',
+  LastName: 'Marie',
+  LoginID: 'AMarie',
+  PrimaryEmail: 'amarie@example.com',
+  Status: 'Active',
+};
+
 const HAROLD = {
   RecId: 'e1',
   DisplayName: 'Harold Sanders',
@@ -315,4 +325,47 @@ describe('a failed impersonation must not bind the conversation', () => {
     expect(text(refused)).toContain('already acting for Someone Else');
     expect(open).not.toHaveBeenCalled();
   });
+
+  /**
+   * The confirmation step on a verified session is not a flag the caller can set.
+   *
+   * It exists because a token that matched only on a NAME has proved who the person is but not
+   * which record is theirs. The guard keyed on whether `person` was SUPPLIED rather than whether
+   * it identifies the candidate — and `chosenBy` only ever runs when there is more than one — so
+   * any non-empty string silenced it, including the name the tool's own schema invites.
+   */
+  describe('a verified name match confirms before it pins', () => {
+    const nameClaim = {
+      subject: 'ann-marie',
+      issuer: 'https://id.example',
+      scopes: [],
+      claims: { email: 'Ann Marie' },
+    };
+
+    it.each([
+      ['no argument at all', undefined],
+      ['a string that identifies nobody', 'x'],
+      ['the same name the token carried', 'Ann Marie'],
+    ])('asks for confirmation when %s is passed', async (_label, person) => {
+      const tool = setup({ $filter: { value: [ANN_MARIE] } });
+      const context = ctx(verifiedIdentity(nameClaim));
+
+      const result = body(await tool.handler(person === undefined ? {} : { person }, context));
+
+      expect(result['pinned']).toBe(false);
+      expect(String(result['question'])).toContain('confirm');
+    });
+
+    // The way through is to name the record, which is what the refusal asks for.
+    it.each([
+      ['their login', 'AMarie'],
+      ['their email address', 'amarie@example.com'],
+    ])('pins once %s is given', async (_label, person) => {
+      const tool = setup({ $filter: { value: [ANN_MARIE] } });
+      const context = ctx(verifiedIdentity(nameClaim));
+
+      expect(body(await tool.handler({ person }, context))['pinned']).toBe(true);
+    });
+  });
 });
+

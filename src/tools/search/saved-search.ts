@@ -23,8 +23,12 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
       'The definition is Ivanti\'s, so the answer matches what a person sees in the product — ' +
       'which is usually closer to what was asked than a filter composed from scratch.\n\n' +
       'A search that matches nothing answers with no rows at all, and that is a real answer.\n\n' +
-      'A name beginning "My" resolves against the account this server signs in as, never the ' +
-      'person asking; the result says so. Rows are trimmed to a compact set of fields — pass ' +
+      (deps.connection.capability.canImpersonate === true
+        ? 'A name beginning "My" resolves against the SESSION — which is the person act_as opened ' +
+          'it for, so those really are their records; the result says whose. '
+        : 'A name beginning "My" resolves against the account this server signs in as, never the ' +
+          'person asking; the result says so. ') +
+      'Rows are trimmed to a compact set of fields — pass ' +
       '`fields`, or `"*"` for whole records.\n\n' +
       'THERE IS NO `orderBy`: rows arrive in the order the saved search itself defines, which ' +
       'this server cannot change. For "the oldest" or "the most recent" of something, use ' +
@@ -47,6 +51,8 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
     handler: (args, context) =>
       runTool('saved_search', deps.logger, async () => {
         const transport = transportFor(deps.connection.transport, context);
+        // Whose session Ivanti will resolve "my" against — the person, where one is open.
+        const impersonating = context.impersonation?.session()?.loginId;
         const { entity, entitySet } = await resolveObject(deps, args.object);
 
         // `$select` is useless here in a way that looks like it worked: Ivanti keeps every key
@@ -73,12 +79,19 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
           search: args.name,
           returned: rows.length,
           ...(typeof total === 'number' ? { total } : {}),
+          // "My …" resolves against the SESSION, and under impersonation the session IS the
+          // person — `transportFor` sends only their SID, so Ivanti resolves "my" as them and the
+          // rows really are theirs. Saying otherwise told the model to disregard an answer that
+          // was exactly the question asked. `list_saved_searches` already gets this right.
           ...(answersForSignedInAccount(args.name)
             ? {
                 answeredFor:
-                  'This search resolves "my" against the account this server signs in as — the ' +
-                  'tenant API key\'s account, NOT the person asking. These are not their ' +
-                  'records. For a named person use list_assigned_work.',
+                  impersonating === undefined
+                    ? 'This search resolves "my" against the account this server signs in as — ' +
+                      'the tenant API key\'s account, NOT the person asking. These are not their ' +
+                      'records. For a named person use list_assigned_work.'
+                    : `This search resolves "my" against the session, which is ${impersonating} — ` +
+                      'so these ARE their records.',
               }
             : {}),
           rows: projectRows(rows, fields),

@@ -200,4 +200,71 @@ describe('createMetadataCatalog', () => {
 
     await expect(metadata.entity('Nonsense')).rejects.toThrow(UnknownEntityError);
   });
+
+  /**
+   * A bad moment must not become a permanent fact.
+   *
+   * The eviction test was `status === 0` alone, so every 5xx, every 401/403/429 and anything that
+   * was not an `IvantiApiError` at all was cached as "this entity does not exist" with no TTL.
+   * One app-pool recycle and the process answers "Ivanti has no Business Object named 'Incident#'"
+   * for the rest of its life, making no further request. Because the seed graph's URL is
+   * byte-identical to the startup probe's, poisoning it kills the most-used object of all.
+   */
+  describe('which failures are remembered', () => {
+    /** Fails every request while `down` is true, then serves a real document. */
+    function flaky(error: Error) {
+      let down = true;
+      const { transport, calls } = fakeTransport({});
+      const failing: IvantiTransport = {
+        ...transport,
+        requestText: (url: string) => {
+          calls.push(url);
+          return down
+            ? Promise.reject(error)
+            : Promise.resolve(csdl(entity('incident', NAV), entity('task')));
+        },
+      };
+      return {
+        catalog: createMetadataCatalog({ transport: failing, seedUrl: SEED_URL, logger: logger() }),
+        calls,
+        recover: () => {
+          down = false;
+        },
+      };
+    }
+
+    it.each([
+      ['a 503 while the tenant recycles', new IvantiApiError({ status: 503, method: 'GET', url: SEED_URL }, 'unavailable')],
+      ['a 429', new IvantiApiError({ status: 429, method: 'GET', url: SEED_URL }, 'slow down')],
+      ['a 401 from a proxy', new IvantiApiError({ status: 401, method: 'GET', url: SEED_URL }, 'nope')],
+      ['a transport failure', new IvantiApiError({ status: 0, method: 'GET', url: SEED_URL }, 'timeout')],
+      ['something that is not an IvantiApiError at all', new TypeError('terminated')],
+    ])('tries again after %s', async (_label, error) => {
+      const { catalog: subject, recover } = flaky(error);
+
+      await expect(subject.entity('incident')).rejects.toThrow(UnknownEntityError);
+
+      // Ivanti recovers a second later. Nothing about the first failure may outlive it.
+      recover();
+      await expect(subject.entity('incident')).resolves.toMatchObject({ name: 'incident' });
+    });
+
+    // The other direction, and the reason the cache exists: Ivanti answering 200 with its
+    // fabricated field-less document is a real "no such entity", and a mistyped name must cost
+    // one round trip rather than one per call.
+    it('keeps caching a definitive answer, so a typo is not re-asked', async () => {
+      // Ivanti's fabricated answer for an unknown entity set: valid CSDL, field-less type.
+      const { catalog: subject, calls } = catalog({
+        '/incidents/$metadata': csdl(entity('incident', NAV)),
+        '/nonexistents/$metadata': csdl('<EntityType Name="nonexistent" />'),
+      });
+
+      await expect(subject.entity('nonexistent')).rejects.toThrow(UnknownEntityError);
+      const afterFirst = calls.length;
+      await expect(subject.entity('nonexistent')).rejects.toThrow(UnknownEntityError);
+
+      expect(calls.length).toBe(afterFirst);
+    });
+  });
 });
+

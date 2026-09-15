@@ -137,16 +137,38 @@ export const envSchema = z.object({
    * object, and an allowlist that missed by dialect would fail open or closed for no reason a
    * reader could see.
    */
-  ENDUSER_BUSINESS_OBJECTS: commaSeparated
-    .default([])
-    .transform((objects) => objects.map((object) => toCsdlEntity(object).toLowerCase())),
+  ENDUSER_BUSINESS_OBJECTS: commaSeparated.default([]).transform((objects) =>
+    // BOTH spellings, not just the singularised guess. `toCsdlEntity` strips a trailing `s`,
+    // which is right for `Incidents` and wrong for every object whose own CSDL name ends in one —
+    // `journal__notes`, `address`, `nrn_roomreservations`, `frs_surveyresults` are all real here.
+    // Collapsing to the guess either exited 78 telling the operator to type the name they had
+    // just typed, or started with the object permanently unreachable while every refusal listed
+    // it as allowed. `catalog.ts` already fixed exactly this trap for `entity()`; keeping the raw
+    // form alongside the converted one is the same answer.
+    //
+    // The `#` dialect is dropped from the raw side: `toCsdlEntity` already resolves it, and
+    // `ENDUSER_BUSINESS_OBJECTS` is read back to the caller in every refusal, so the list should
+    // not carry spellings nothing will ever look up.
+    [
+      ...new Set(
+        objects.flatMap((object) => [
+          ...(object.includes('#') ? [] : [object.toLowerCase()]),
+          toCsdlEntity(object).toLowerCase(),
+        ]),
+      ),
+    ],
+  ),
 
   /**
    * The Ivanti role an impersonated `enduser` session opens under.
    *
-   * A tenant renames roles, so this is a setting rather than a constant, and it is resolved
-   * against the tenant's own roles at startup. The default is the role Ivanti ships for the
-   * mobile self-service portal.
+   * A tenant renames roles, so this is a setting rather than a constant. It is resolved against
+   * the person's OWN roles when `act_as` opens their session — per call, not at startup: a name
+   * this tenant does not use is reported in that call's `roleNote` and the session keeps whichever
+   * role Ivanti made active. `ENDUSER_BUSINESS_OBJECTS` is the one setting checked against the
+   * tenant at boot, and the asymmetry is deliberate: a wrong object silently narrows what an end
+   * user may do, where a wrong role says so on the first call. The default is the role Ivanti
+   * ships for the mobile self-service portal.
    *
    * It is named rather than derived on purpose. Ivanti flags its self-service roles
    * (`SelfServiceRole` on `GetUserData.userRoleList`), but several qualify and they are not

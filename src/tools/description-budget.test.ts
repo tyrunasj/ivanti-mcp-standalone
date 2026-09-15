@@ -65,7 +65,7 @@ const REFERENCE_URIS = [
 /** Roughly 30% above today's ~29 KB: room to say more, not room to stop thinking about it. */
 const MANIFEST_BUDGET = 38_000;
 
-const MODES = [
+const CONFIGS = [
   ['full', configFixture({ MCP_MODE: 'full' })],
   [
     'enduser',
@@ -77,7 +77,25 @@ const MODES = [
   ],
 ] as const;
 
-function manifest(config: (typeof MODES)[number][1]) {
+/**
+ * Mode × impersonation, because descriptions vary on BOTH and the widest is not the obvious one.
+ *
+ * The guard used to build one manifest with `canImpersonate: true`, under a comment asserting that
+ * was "the WIDEST manifest a caller can be sent". Impersonation descriptions are SHORTER —
+ * `run_quick_action` is 1,758 characters with it and 1,948 without, `act_as` 891 against 913 —
+ * so it measured the narrow one. Worse than under-measuring: the non-impersonation branch of a
+ * conditional description is never CONCATENATED in that build, so it contributed nothing at all
+ * and could have grown without bound while this test stayed green.
+ */
+const MODES = CONFIGS.flatMap(
+  ([mode, config]) =>
+    [
+      [`${mode} without impersonation`, config, false],
+      [`${mode} with impersonation`, config, true],
+    ] as const,
+);
+
+function manifest(config: (typeof MODES)[number][1], canImpersonate = true) {
   const context: ToolContext = {
     serverName: 'ivanti-mcp',
     serverVersion: '0.1.0',
@@ -85,9 +103,7 @@ function manifest(config: (typeof MODES)[number][1]) {
     // The admin tier, so every tool that can exist does — the widest manifest a caller sees.
     ivanti: connectionFixture({
       entities: { incident: {}, change: {}, servicereq: {}, employee: {}, journal__notes: {} },
-      // Impersonation on as well: descriptions vary with it, and this must measure the WIDEST
-      // manifest a caller can be sent, not a narrower one that happens to fit.
-      capability: { tier: 'admin', identity: { role: 'Admin' }, canImpersonate: true },
+      capability: { tier: 'admin', identity: { role: 'Admin' }, canImpersonate },
     }).connection,
   };
   return selectTools(config, context).map((tool) => ({
@@ -111,8 +127,8 @@ function readZodDescription(schema: unknown): string {
 }
 
 describe('tool description budget', () => {
-  it.each(MODES)('keeps every %s description under the truncation cap', (_mode, config) => {
-    const over = manifest(config)
+  it.each(MODES)('keeps every %s description under the truncation cap', (_mode, config, impersonating) => {
+    const over = manifest(config, impersonating)
       .filter((tool) => tool.length > DESCRIPTION_BUDGET)
       .sort((a, b) => b.length - a.length)
       .map((tool) => `${tool.name} is ${String(tool.length - DESCRIPTION_BUDGET)} over (${String(tool.length)})`);
@@ -125,8 +141,8 @@ describe('tool description budget', () => {
     ).toEqual([]);
   });
 
-  it.each(MODES)('keeps the whole %s manifest within its per-session cost', (mode, config) => {
-    const tools = manifest(config);
+  it.each(MODES)('keeps the whole %s manifest within its per-session cost', (mode, config, impersonating) => {
+    const tools = manifest(config, impersonating);
     const total = tools.reduce((sum, tool) => sum + tool.length, 0);
 
     expect(
@@ -136,8 +152,8 @@ describe('tool description budget', () => {
     ).toBeLessThanOrEqual(MANIFEST_BUDGET);
   });
 
-  it.each(MODES)('keeps every %s argument description proportionate', (_mode, config) => {
-    const over = manifest(config)
+  it.each(MODES)('keeps every %s argument description proportionate', (_mode, config, impersonating) => {
+    const over = manifest(config, impersonating)
       .flatMap((tool) => tool.parameters.map((p) => ({ ...p, tool: tool.name })))
       .filter((p) => p.length > PARAMETER_BUDGET)
       .map((p) => `${p.tool}.${p.parameter} is ${String(p.length)}`);
@@ -147,10 +163,13 @@ describe('tool description budget', () => {
     );
   });
 
-  it.each(MODES)('keeps the %s server instructions under the same cap as a description', (mode, config) => {
+  // CONFIGS, not MODES: this one needs the real `McpMode`, and it varies on impersonation for its
+  // own reason — `buildInstructions` says more when the server can act as the person, which the
+  // old fixture left out of the capability entirely and so never measured.
+  it.each(CONFIGS)('keeps the %s server instructions under the same cap as a description', (mode, config) => {
     const { connection } = connectionFixture({
       entities: { incident: {}, change: {}, servicereq: {} },
-      capability: { tier: 'admin', identity: { role: 'Admin' } },
+      capability: { tier: 'admin', identity: { role: 'Admin' }, canImpersonate: true },
     });
     const instructions =
       buildInstructions({
@@ -172,8 +191,8 @@ describe('tool description budget', () => {
   });
 
   it('reports the current spend, so growth is visible in the diff rather than only in a failure', () => {
-    const totals = MODES.map(([mode, config]) => {
-      const tools = manifest(config);
+    const totals = MODES.map(([mode, config, impersonating]) => {
+      const tools = manifest(config, impersonating);
       const total = tools.reduce((sum, tool) => sum + tool.length, 0);
       const largest = [...tools].sort((a, b) => b.length - a.length)[0];
       return { mode, tools: tools.length, total, largest: largest?.name, chars: largest?.length };
@@ -182,5 +201,21 @@ describe('tool description budget', () => {
     // Not an assertion about the numbers — a record of them. A reviewer seeing this line move a
     // long way in a diff is the point.
     expect(totals.every((row) => row.total > 0)).toBe(true);
+
+    // The numbers themselves, in the failure message of an assertion that cannot fail, so they
+    // are readable with `pnpm vitest --reporter=verbose` and quotable without guessing. CLAUDE.md
+    // restated them by hand and got them backwards.
+    expect(
+      totals.length,
+      `manifest spend (budget ${String(MANIFEST_BUDGET)}):\n` +
+        totals
+          .map(
+            (row) =>
+              `  ${row.mode}: ${String(row.total)} across ${String(row.tools)} tools; ` +
+              `longest ${String(row.largest)} at ${String(row.chars)}`,
+          )
+          .join('\n'),
+    ).toBe(MODES.length);
+
   });
 });

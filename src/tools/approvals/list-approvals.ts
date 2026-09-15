@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { buildQuery, MAX_TOP, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
 import { toEntitySet } from '../../ivanti/metadata/entity-names.js';
-import type { IvantiToolDeps } from '../shared/deps.js';
+import { registersFormTools, type IvantiToolDeps } from '../shared/deps.js';
 import { resolveSubject } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
@@ -35,7 +35,9 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
     description:
       "ONE PERSON'S approval queue — the service requests, changes and knowledge articles " +
       'waiting on them specifically.\n\n' +
-      'To act on one, use vote_on_approval — it casts the decision on the row that belongs to ' +
+      (registersFormTools(deps)
+        ? 'To act on one, use vote_on_approval — it casts the decision on the row that belongs to '
+        : 'Deciding one belongs to the person, in Ivanti — this credential cannot cast a vote on ') +
       'them, which is what makes it theirs. Get an explicit decision from them first.\n\n' +
       'Defaults to whoever this conversation is acting for; call `act_as` first.\n\n' +
       'NOT FOR TENANT-WIDE QUESTIONS. "How many changes are waiting for approval" is a count of ' +
@@ -252,9 +254,15 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
               }
             : {}),
           ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),
-          voting:
-            'vote_on_approval casts their decision, on their own approvals only. Ask them ' +
-            'explicitly first — an approval is a control somebody relies on.',
+          // Only where the tool it names is registered: at the `odata` tier `vote_on_approval`
+          // does not exist, and a model cannot tell that from having called it wrong.
+          ...(registersFormTools(deps)
+            ? {
+                voting:
+                  'vote_on_approval casts their decision, on their own approvals only. Ask them ' +
+                  'explicitly first — an approval is a control somebody relies on.',
+              }
+            : {}),
           // The write response says this; a later "did that go through?" reaches only this tool,
           // and a tester would have overclaimed from it had they not still held the write.
           reading:

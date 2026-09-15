@@ -33,10 +33,21 @@ export function projectRow(
 ): OdataRecord {
   const projected: OdataRecord = {};
 
+  // Case-insensitively, against the row's own keys, and emitting the ROW's spelling.
+  //
+  // This used to be `field in row`, which is case-sensitive, while `ignoredFieldNames` compares
+  // lowercased — so a name whose casing was wrong was dropped from every row AND left out of
+  // `ignoredFields`, which is precisely the pair of outcomes that machinery exists to prevent.
+  // Ivanti spells keys both ways (`RecId`, but `ProfileLink_RecID`), so a model normalising
+  // casing is routine rather than careless: `fields: "ProfileLink_RecId, subject"` returned rows
+  // carrying only RecId, with nothing saying anything had been left out.
+  const byLowercase = new Map(Object.keys(row).map((key) => [key.toLowerCase(), key]));
+
   for (const field of fields) {
-    if (!(field in row)) continue;
-    if (options.dropEmpty === true && isEmpty(row[field])) continue;
-    projected[field] = row[field];
+    const key = field in row ? field : byLowercase.get(field.toLowerCase());
+    if (key === undefined) continue;
+    if (options.dropEmpty === true && isEmpty(row[key])) continue;
+    projected[key] = row[key];
   }
 
   // Returning an empty object would look like a record with no data; the caller asked for fields

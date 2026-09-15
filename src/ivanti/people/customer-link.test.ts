@@ -2,7 +2,8 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { describe, expect, it } from 'vitest';
-import { connectionFixture, field } from '../connection.fixture.js';
+import { connectionFixture, entityFixture, field } from '../connection.fixture.js';
+import { createCustomerLinks } from './customer-link.js';
 
 const linkFields = (...prefixes: string[]) => [
   field('RecId'),
@@ -97,3 +98,67 @@ describe('createCustomerLinks', () => {
     expect(link).toBeUndefined();
   });
 });
+
+/**
+ * A guess made because the sample FAILED is not a fact about the tenant.
+ *
+ * A sampling error and a genuinely empty table are the same shape — no rows — and lead to the same
+ * fallback, the name ladder. But the answer is cached for the process lifetime, so one bad second
+ * fixed a guessed link field permanently, behind a `logger.debug` line the default LOG_LEVEL hides.
+ */
+describe('a sample that failed is not remembered', () => {
+  const entity = entityFixture('incident', {
+    fields: [field('RecId'), field('ProfileLink_RecID'), field('ProfileLink_Category')],
+  });
+
+  /** A transport whose sampling read fails `failures` times, then answers with real rows. */
+  function flaky(failures: number) {
+    let seen = 0;
+    const rows = { value: [{ ProfileLink_RecID: 'e1', ProfileLink_Category: 'Employee' }] };
+    const { connection } = connectionFixture({ entities: { incident: {}, employee: {} } });
+    const transport = {
+      ...connection.transport,
+      request: (url: string) => {
+        if (!url.includes('incidents')) return Promise.resolve({ value: [] });
+        seen += 1;
+        return seen <= failures
+          ? Promise.reject(new Error('Ivanti 500'))
+          : Promise.resolve(rows);
+      },
+    } as typeof connection.transport;
+
+    return {
+      links: createCustomerLinks({
+        transport,
+        personObjects: () => Promise.resolve(['employee']),
+        logger: { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
+      }),
+      reads: () => seen,
+    };
+  }
+
+  it('samples again on the next call', async () => {
+    const { links, reads } = flaky(1);
+
+    const guessed = await links.forEntity(entity, 'incidents');
+    const measured = await links.forEntity(entity, 'incidents');
+
+    expect(guessed?.foundBy).toBe('name');
+    expect(measured?.foundBy).toBe('data');
+    // And the casing the tenant actually stores, which the guess could not know.
+    expect(measured?.categoriesSeen).toEqual(['Employee']);
+    expect(reads()).toBe(2);
+  });
+
+  // The other direction, and why the cache exists: an answer that really was derived from the
+  // data is asked for once, not once per record operation.
+  it('still remembers an answer the sample actually produced', async () => {
+    const { links, reads } = flaky(0);
+
+    await links.forEntity(entity, 'incidents');
+    await links.forEntity(entity, 'incidents');
+
+    expect(reads()).toBe(1);
+  });
+});
+
