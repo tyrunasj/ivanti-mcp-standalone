@@ -80,12 +80,26 @@ settled against `stg-ivanti254`:
   without impersonation against 37,693 with, so the widest is the one WITHOUT, and the headroom is
   98 characters rather than 307.
 
-Two remain open, both needing a write against the tenant:
+A third was settled on 2026-09-15, and the answer is worse than either option the review offered:
+
+- **`RemoveSession` does not end the session in EITHER spelling.** Measured by driving
+  `openImpersonatedSession` itself: with a fully activated session, `Session.asmx/GetRoleWorkspaces`
+  still answers after `release()` with the composed SID *and* after a release with the bare middle
+  segment. It answers 200 with an empty body every time. So the composed-vs-bare question was the
+  wrong question — calling `release()` is still right (documented teardown, one request, a later
+  Ivanti version may honour it) but cannot be relied on, and an impersonated session lives until
+  the tenant timeout of 18,000 s. Finding 13's fix still matters — it makes the call happen on
+  every exit — but it prevents less than it looked like it would. In `docs/notes.md`.
+
+  Worth recording how this went wrong twice first: one probe dropped the `/HEAT` base path and
+  measured every session as dead, the next used `GetUserData`, which 500s permanently for some
+  accounts and so reads as dead for a session that is fine. Both would have produced a confident
+  wrong answer. Driving the server's own modules is what settled it.
+
+One remains open, needing a write against the tenant:
 
 - what becomes of an **abandoned staging record** (finding 15 now reports the files that reached
-  Ivanti rather than claiming none did, which is what is actually known);
-- whether **`RemoveSession`** wants the composed SID or the bare middle segment — if the bare id,
-  every release is a silent no-op, which would compound finding 13.
+  Ivanti rather than claiming none did, which is what is actually known).
 
 ## What was decided differently from the report
 

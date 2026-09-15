@@ -462,6 +462,31 @@ The reply is columns, not objects: the stored value is at the **lowest** index i
 `DisplayName` labels it, `RecId` identifies it, and an empty list with `SameAs` means "reuse that
 field's options". Measured live: Incident Status has 7 values, Priority 5, Source 13.
 
+**`CentralConfig/RemoveSession` does not end the session, in either spelling of the id.**
+Measured live 2026-09-15 by driving `openImpersonatedSession` itself rather than a hand-rolled
+handshake — the first two attempts at this measured the wrong thing twice, once by dropping the
+`/HEAT` base path and once by using `GetUserData`, which 500s permanently for some accounts and so
+reads as "dead" for a session that is fine.
+
+With a fully activated session and `Session.asmx/GetRoleWorkspaces` as the liveness test:
+
+| | workspace call works |
+|---|---|
+| before `release()` | yes |
+| after `release()` (composed `<host>#<id>#1`) | **yes** |
+| after `release(<bare middle segment>)` | **yes** |
+
+`RemoveSession` answers **200 with an empty body** every time, which is why nothing ever said so —
+and `release()` swallows non-2xx by design on the reasoning that a leaked session expires anyway.
+So the composed-vs-bare question the review raised is not the issue: neither form works.
+
+→ Two consequences. Calling `release()` is still right — it is the documented teardown, it costs
+one request, and a later Ivanti version may honour it — but it must not be relied on: an
+impersonated session lives until the tenant timeout, measured at **18,000 s** via
+`GetTenantTimeout`. And a deployment opening many short conversations accumulates sessions on the
+tenant for five hours regardless of how carefully it tidies up. If that ever matters, the lever is
+the tenant timeout, not this call.
+
 **`/api/rest/Attachment?ID=` accepts a SID cookie, so file bytes can follow the person.**
 Measured live 2026-09-14. `requestBinary` was the one transport method that did not go through
 `send`, so it ignored the SID it was built with and always sent `Authorization: rest_api_key=` —
