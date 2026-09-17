@@ -18,7 +18,7 @@ export const SDK_PACKAGE = '@modelcontextprotocol/sdk';
 
 export interface PackageMetadata {
   name: string;
-  version: string;
+  version: number;
 }
 
 export type PackageReader = (url: URL | string) => string;
