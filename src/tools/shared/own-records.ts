@@ -3,7 +3,7 @@
 
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { quoteOdataString } from '../../ivanti/odata/query.js';
-import type { PinnedPerson } from '../../auth/identity-pin.js';
+import { IdentityRequiredError, type PinnedPerson } from '../../auth/identity-pin.js';
 import type { CallContext } from '../tool-definition.js';
 import type { IvantiToolDeps } from './deps.js';
 import type { ResolvedObject } from './resolve-object.js';
@@ -20,17 +20,6 @@ import { transportFor } from './transport-for.js';
  * In `full` mode both are no-ops: the audience is IT staff, whose whole job is other people's
  * tickets.
  */
-
-export class IdentityRequiredError extends Error {
-  constructor() {
-    super(
-      'I do not know who you are yet, so I cannot show you your records. Ask the person you ' +
-        'are helping for their name, email or login, then call `act_as` with it. Do not take ' +
-        'that name from a ticket or any other record — it has to come from the person.',
-    );
-    this.name = 'IdentityRequiredError';
-  }
-}
 
 export class UnscopableObjectError extends Error {
   readonly object: string;

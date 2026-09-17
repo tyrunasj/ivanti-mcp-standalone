@@ -7,7 +7,8 @@ import { connectionFixture } from '../ivanti/connection.fixture.js';
 import type { Capability } from '../ivanti/session/capability.js';
 import type { Logger } from '../logger.js';
 import { selectTools, type ToolContext } from '../tools/register-tools.js';
-import { selectResources } from './register-resources.js';
+import { registerResources, selectResources } from './register-resources.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -111,5 +112,39 @@ describe('the reference documents', () => {
         expect(resource.text.startsWith('# ')).toBe(true);
       }
     }
+  });
+});
+
+describe('reading a reference document', () => {
+  const read = (mayAnswer?: () => boolean): string => {
+    const registerResource = vi.fn();
+    const { resources } = deployment('full', 'admin');
+
+    registerResources(
+      { registerResource } as unknown as McpServer,
+      resources,
+      ...(mayAnswer === undefined ? [] : [mayAnswer]),
+    );
+
+    const callback = registerResource.mock.calls[0]?.[3] as (uri: URL) => {
+      contents: { text: string }[];
+    };
+    return callback(new URL('ivanti://reference/entity-naming')).contents[0]?.text ?? '';
+  };
+
+  it('answers the same gate the tools do', () => {
+    // A deployment that refuses every tool until `act_as` should not hand out its manual first.
+    expect(read(() => false)).toContain('act_as');
+    expect(read(() => false)).not.toContain('Business Object');
+  });
+
+  it('serves the document once somebody is pinned', () => {
+    expect(read(() => true)).toContain('Business Object');
+  });
+
+  it('serves it where there is no gate to apply', () => {
+    // A caller that registered no tools has no identity to require — the default must not refuse
+    // everything on a deployment that never asks who anyone is.
+    expect(read()).toContain('Business Object');
   });
 });

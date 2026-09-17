@@ -240,7 +240,7 @@ name, rather than surfacing the typo when a user's first `create_record` fails.
 
 ---
 
-## 5. Identity in `enduser` mode
+## 5. Identity (`enduser` first; since 2026-09-17, both modes)
 
 When the user asks to see their tickets, the LLM **asks who they are** and reads/edits are
 filtered by that Customer. Under `oauth` the question is skipped and identity comes from
@@ -286,11 +286,69 @@ works until it has been called.
 
 | Mode | What `act_as` is | If it was never called |
 |---|---|---|
-| `enduser` | a **gate** | every record-returning tool refuses |
-| `full` | a **preference** — who "my" means | everything still works; "my" questions answer for the service account and say so |
+| `enduser` | a **gate**, and whose records these are | every tool but `act_as` refuses |
+| `full` | a **gate**, and who "my" means | every tool but `act_as` refuses |
 
-An IT agent legitimately works other people's tickets, so gating `full` mode on a pin would be
-wrong. One tool, two jobs, and the description has to differ or one of them is a lie.
+**Revised 2026-09-17: `full` is gated too.** This table read "a preference" for `full`, on the
+reasoning that an IT agent legitimately works other people's tickets. That is still true, and the
+pin still allows it: the gate decides **whether this conversation may answer at all**, not **whose
+records it may read**. An agent calls `act_as` for themselves and then works the queue exactly as
+before. What the gate ends is the *unattributed* conversation — a `full` deployment that answered
+before anyone said who was asking put the service account on every line of the audit log and on
+every write in Ivanti, and there was no later point at which that could be corrected.
+
+The gate lives in `registerTools`, the one place every call passes through. Tool by tool it would
+be forgettable, and a tool that forgot would not fail — it would answer, for nobody. `get_version`
+is gated with the rest: a version is an answer. Two things are outside it, and only two: `act_as`
+itself, and a deployment with no tenant configured, where `act_as` is not registered and the gate
+would refuse what nothing could ever satisfy.
+
+**A signed-in conversation pins itself (2026-09-17).** Where the identity is `verified`, the token
+already names the person, so requiring the model to call `act_as` and repeat what the issuer said
+is a round trip that can only go wrong. The gate attempts it once, on the first call that needs it,
+by running `act_as`'s own handler — never a second copy of rules about what a token may match, what
+it must confirm and what it refuses, because the two would differ and the weaker one would be the
+copy. An **asserted** session is untouched: there is nothing to pin from but a claim, and a claim
+has to be made deliberately.
+
+Lazily, and not at `initialize`, for two reasons. Pinning does real work against Ivanti — a
+directory lookup, and an impersonation handshake where that is configured — so a slow or
+unreachable tenant would fail the *connection* rather than one call. And a token that matched only
+on a name has to ask for confirmation, which needs somewhere to ask. One attempt per conversation,
+shared by concurrent callers, so a cold conversation that fires three calls runs one lookup and
+refuses none of them for losing the race.
+
+**Resources answer the same gate.** `ivanti://reference/…` carries no tenant data — six static
+documents — so gating them is consistency rather than containment, and it is done by passing the
+tools' own `mayAnswer` to `registerResources` rather than by a second copy of the condition. The
+refusal is returned *as the document* rather than thrown: clients routinely read every resource at
+connect time to display them, and a protocol error there would paint a fresh conversation with
+failures for documents that could leak nothing if they were served.
+
+### The conversation ends, and a stdio process has to be told (2026-09-17)
+
+The pin is per connection, which over HTTP is per conversation: the session store sweeps an idle
+session and the server goes with it, pin and all. A stdio process has no session — it is one
+connection for the life of the process — so a client that keeps the server running across
+conversations, which is the ordinary shape for an editor or a CLI, carried the first person's pin
+into every conversation that followed. The person outlived the conversation that named them, and
+under `enduser` the next conversation was answered with the first person's records.
+
+There is no protocol signal for "the user cleared the context", so two stand in for it. Neither is
+reachable by the model — a tool that could end a conversation could shed the pin, which is the one
+thing the pin exists to prevent:
+
+- **Silence.** No tool call for `MCP_IDENTITY_IDLE_TTL_SECONDS` (default 1800) ends it. Its own
+  setting rather than the session sweep's, which it borrowed for one release: that one bounds
+  memory held by a dead HTTP session and wants to be short, this one decides how long a person's
+  records stay reachable to whoever is at the keyboard. Bias it short — expiring too eagerly costs
+  one more `act_as`, expiring too late answers the next conversation with the last person's records.
+- **A fresh `initialize`** on a live connection — the client saying so itself. Exact, but only some
+  clients re-initialize rather than reconnect, so silence is the one that always arrives.
+
+Ending a conversation throws the pin away and hands back any impersonated Ivanti session, so the
+next one starts with nobody and is free to pin somebody else. Time is the one thing injected record
+text cannot forge, which is why this is safe where a model-callable `reset` would not be.
 
 **The three keys.** A person is matched on `LoginID`, on `PrimaryEmail`, or on
 `FirstName` + `LastName` — never on `DisplayName`, which is assembled and carries the middle name
@@ -519,6 +577,7 @@ surface as confusing *auth* failures rather than clear container errors:
 | `OAUTH_AUDIENCE` | Expected `aud`; defaults to `MCP_PUBLIC_URL` but set independently for real IdPs |
 | `BEARER_TOKEN_FILE` | `bearer` mode |
 | `MCP_SESSION_IDLE_TTL_SECONDS` | Default `1800`. Idle sessions are swept — `onsessionclosed` fires only on an explicit DELETE |
+| `MCP_IDENTITY_IDLE_TTL_SECONDS` | Default `1800`. A conversation quiet this long is over: the pinned person is forgotten. On stdio this is the only thing that ends one |
 | `MCP_MAX_SESSIONS` | Default `100`. Beyond it `initialize` gets 503; unbounded growth is a DoS surface under `none` |
 | `TRUSTED_PROXY_CIDR` | Required before `X-Forwarded-*` is honoured |
 

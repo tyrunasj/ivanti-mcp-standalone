@@ -14,6 +14,22 @@ describe('loadConfig', () => {
     expect(config.MCP_MODE).toBe('full');
   });
 
+  it('expires an identity on its own clock, not the HTTP session\'s', () => {
+    // The identity TTL borrowed MCP_SESSION_IDLE_TTL_SECONDS for one release. They answer
+    // different questions — one bounds memory held by a dead HTTP session, the other decides how
+    // long a person\'s records stay reachable to whoever is at the keyboard, and on stdio it is
+    // the only thing that ends a conversation at all. Tuning one must not move the other.
+    const config = loadConfig({ MCP_SESSION_IDLE_TTL_SECONDS: '60' });
+
+    expect(config.MCP_SESSION_IDLE_TTL_SECONDS).toBe(60);
+    expect(config.MCP_IDENTITY_IDLE_TTL_SECONDS).toBe(1800);
+
+    const tuned = loadConfig({ MCP_IDENTITY_IDLE_TTL_SECONDS: '300' });
+
+    expect(tuned.MCP_IDENTITY_IDLE_TTL_SECONDS).toBe(300);
+    expect(tuned.MCP_SESSION_IDLE_TTL_SECONDS).toBe(1800);
+  });
+
   it('resolves a file-backed secret before validating rules that depend on it', () => {
     const readFile = vi.fn().mockReturnValue('token-from-file\n');
 

@@ -67,6 +67,21 @@ export function releaseOnClose(server: McpServer, slot: ImpersonationSlot): void
   };
 }
 
+/**
+ * A fresh `initialize` on a live connection is a new conversation, so the previous one ends.
+ *
+ * Chains rather than replaces, for the same reason `releaseOnClose` does: the SDK sets its own
+ * handler and dropping it would trade one bug for another. A connection's *first* `initialize`
+ * fires this too, which is a no-op — there is nobody pinned yet to forget.
+ */
+export function endOnInitialize(server: McpServer, endConversation: () => Promise<void>): void {
+  const previous = server.server.oninitialized;
+  server.server.oninitialized = (): void => {
+    void endConversation();
+    previous?.call(server.server);
+  };
+}
+
 export function createServerFactory(config: Config, deps: ServerFactoryDeps): ServerFactory {
   // Built once, from process-wide facts. `canImpersonate` is the gate: a deployment whose
   // ConfigDB is unconfigured or unreachable gets no opener, so no connection gets a slot, so
@@ -126,13 +141,18 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
       const impersonation = opener === undefined ? undefined : createImpersonationSlot(opener);
       if (impersonation !== undefined) releaseOnClose(server, impersonation);
 
-      registerTools(
+      // Its own knob: on stdio this is the only thing that ends a conversation, and how long a
+      // person's records stay reachable is not the same question as how long a dead HTTP session
+      // may hold memory.
+      const { endConversation, mayAnswer } = registerTools(
         server,
         tools,
         { ...context, ...(impersonation === undefined ? {} : { impersonation }) },
         deps.logger,
+        config.MCP_IDENTITY_IDLE_TTL_SECONDS * 1000,
       );
-      registerResources(server, resources);
+      endOnInitialize(server, endConversation);
+      registerResources(server, resources, mayAnswer);
       return server;
     },
   };

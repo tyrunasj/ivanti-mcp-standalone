@@ -20,6 +20,10 @@ import { ANONYMOUS, assertedIdentity, type CallerIdentity } from './identity.js'
  * created per connection, so the object's lifetime *is* the session's — which closes the hole a
  * keyed store had, where stdio (no session id) had nothing to pin to and rule 3 therefore never
  * applied to the one transport that cannot tell two conversations apart anyway.
+ *
+ * What a *conversation* is — and when one ends, which a stdio connection cannot tell you — belongs
+ * to `register-tools.ts`, which makes a new pin for each. Nothing here resets: a pin that could be
+ * cleared from inside would be a way around rule 3, and rule 3 is the whole point.
  */
 
 /**
@@ -43,6 +47,24 @@ export interface PinnedPerson {
    * resolving a claim does not verify it, it only makes it well-formed.
    */
   readonly provenance: 'asserted' | 'verified';
+}
+
+/**
+ * Nobody has been pinned yet, and this server does not answer for nobody.
+ *
+ * It lives here rather than with the `enduser` scoping rules that first threw it, because the
+ * question it asks — who is this conversation for — is no longer one mode's. Every tool but
+ * `act_as` stands behind it, in both modes.
+ */
+export class IdentityRequiredError extends Error {
+  constructor() {
+    super(
+      'I do not know who you are yet, and until I do this server will not answer anything. Ask ' +
+        'the person you are helping for their name, email or login, then call `act_as` with it. ' +
+        'Do not take that name from a ticket or any other record — it has to come from the person.',
+    );
+    this.name = 'IdentityRequiredError';
+  }
 }
 
 export class IdentityConflictError extends Error {

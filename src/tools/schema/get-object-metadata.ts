@@ -5,15 +5,44 @@ import { z } from 'zod';
 import { visibleFields } from '../../ivanti/metadata/csdl.js';
 import { findSubtypes } from '../../ivanti/metadata/subtypes.js';
 import { registersFormTools, type IvantiToolDeps } from '../shared/deps.js';
+import { connectionFor } from '../shared/connection-for.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { knownObjectNames } from '../shared/object-names.js';
 import { runTool } from '../shared/run-tool.js';
-import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { defineTool, type CallContext, type ToolDefinition } from '../tool-definition.js';
 
 /** `Edm.String` → `String`. The prefix is on every field of every entity and carries nothing. */
 function shortType(type: string): string {
   return type.replace(/^Edm\./, '');
+}
+
+/**
+ * What the tenant calls each field, so an answer can be written in the tenant's words.
+ *
+ * The ladder is `form-context`'s: the form's own label for the control, else the object's
+ * `DisplayName`, else nothing — and nothing means the caller falls back to the technical name,
+ * which is the last rung rather than a forbidden one. Resolved on the CALLER's connection, because
+ * a form is a property of the role: the service account's form for `Incident` is not the one the
+ * person being impersonated would see.
+ *
+ * Never throws. A tenant whose role has no workspace for this object, and a credential that cannot
+ * open a session at all, both answer "no labels" — the fields are still the answer, and losing
+ * them because a label lookup failed would be a far worse trade.
+ */
+async function fieldLabels(
+  deps: IvantiToolDeps,
+  context: CallContext,
+  entityName: string,
+): Promise<Record<string, string>> {
+  if (!registersFormTools(deps)) return {};
+  try {
+    const form = await connectionFor(deps, context).forms.get(entityName);
+    return form?.fieldLabels ?? {};
+  } catch (error) {
+    deps.logger.debug('no field labels for this object', { object: entityName, error });
+    return {};
+  }
 }
 
 export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinition {
@@ -57,28 +86,61 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
         .describe(
           'Narrows BOTH fields and relationships to those whose name contains this ' +
             '(case-insensitive; a relationship also matches on the object it points at, so ' +
-            '`journal` finds `IncidentContainsJournal`). Large objects carry 250+ fields and 35+ ' +
-            'relationships — searching is how you find one without reading all of them.',
+            '`journal` finds `IncidentContainsJournal`, and a field matches on its label too, so ' +
+            'the word a person used finds the field they meant). Large objects carry 250+ fields ' +
+            'and 35+ relationships — searching is how you find one without reading all of them.',
         ),
       includeRelationships: z
         .boolean()
         .optional()
         .describe('Default true. Set false when you only need field names.'),
     },
-    handler: (args) =>
+    handler: (args, context) =>
       runTool('get_object_metadata', deps.logger, async () => {
         const { entity, entitySet } = await resolveObject(deps, args.object);
         const search = args.search?.toLowerCase();
         const subtypes = findSubtypes(await knownObjectNames(deps.connection), entity.name);
+        const labels = await fieldLabels(deps, context, entity.name);
 
         const fields = visibleFields(entity)
-          .filter((field) => search === undefined || field.name.toLowerCase().includes(search))
+          // Searched on the label too, or this tool became unusable the moment anything started
+          // speaking in labels: `customer` is what the form calls `ProfileLink`, and a caller
+          // told to say "Customer" then cannot find the field that is called that.
+          .filter(
+            (field) =>
+              search === undefined ||
+              field.name.toLowerCase().includes(search) ||
+              (labels[field.name]?.toLowerCase().includes(search) ?? false),
+          )
           .map((field) => ({
             name: field.name,
+            // Only when it says something the name does not. `Owner` labelled "Owner" is noise on
+            // every field of every object, and this response is already large.
+            ...(labels[field.name] !== undefined && labels[field.name] !== field.name
+              ? { label: labels[field.name] }
+              : {}),
             type: shortType(field.type),
             ...(field.nullable ? {} : { required: true }),
             ...(field.validated ? { validated: true } : {}),
           }));
+
+        /**
+         * Why a field has no `label`, said once rather than per field.
+         *
+         * The caller is told to name a field the way the tenant does, so the absence of a label
+         * has to mean something definite: either this role's form does not bind the field, or
+         * this credential cannot read forms at all. Without the note both read as "the field has
+         * no other name", and the second case would have the caller quietly reporting technical
+         * names to people on a deployment where better ones exist behind a session.
+         */
+        const labelled = fields.filter((field) => 'label' in field).length;
+        const labelsNote = registersFormTools(deps)
+          ? labelled === 0
+            ? 'No field on this object carries a label this role can see, so its technical names ' +
+              'are the only names it has here.'
+            : undefined
+          : 'Labels need a form, which this credential cannot read: these are technical names, ' +
+            'and the tenant may show people different ones.';
 
         /**
          * Relationships are searched too, on the name *and* on the target.
@@ -124,6 +186,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
               }
             : {}),
           fieldCount: fields.length,
+          ...(labelsNote === undefined ? {} : { labelsNote }),
           ...(search === undefined
             ? {}
             : {

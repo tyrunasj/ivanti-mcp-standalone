@@ -9,7 +9,7 @@ import type { Logger } from '../logger.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createImpersonationSlot } from '../auth/impersonation.js';
 import type { ImpersonatedSession } from '../ivanti/session/impersonated-session.js';
-import { createServerFactory, releaseOnClose } from './create-server.js';
+import { createServerFactory, endOnInitialize, releaseOnClose } from './create-server.js';
 import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
 
 const config = configFixture();
@@ -94,6 +94,33 @@ describe('the impersonated session\'s lifetime', () => {
 
     // No opener means no slot, so act_as keeps its existing meaning with no conditional in a tool.
     expect(factory.create(CALL)).toBeDefined();
+  });
+});
+
+describe('endOnInitialize', () => {
+  const server = (): McpServer => new McpServer({ name: 'test', version: '0' });
+
+  it('ends the conversation when the client initializes again', () => {
+    const end = vi.fn(() => Promise.resolve());
+    const target = server();
+
+    endOnInitialize(target, end);
+    target.server.oninitialized?.();
+
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it('chains rather than replacing an existing handler', () => {
+    const existing = vi.fn();
+    const end = vi.fn(() => Promise.resolve());
+    const target = server();
+    target.server.oninitialized = existing;
+
+    endOnInitialize(target, end);
+    target.server.oninitialized?.();
+
+    expect(existing).toHaveBeenCalledTimes(1);
+    expect(end).toHaveBeenCalledTimes(1);
   });
 });
 

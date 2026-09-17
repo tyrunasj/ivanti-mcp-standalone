@@ -107,15 +107,34 @@ export function selectResources(config: Config, context: ToolContext): ResourceD
 }
 
 /**
+ * What a document says before this conversation has said who it is helping.
+ *
+ * Returned as the document rather than thrown as a protocol error, and the difference is not
+ * cosmetic: clients routinely read every resource at connect time to show them, so throwing would
+ * paint a fresh conversation with errors — for six static documents that contain no tenant data
+ * and could leak nothing if they were served. The gate here is consistency, not containment, so
+ * it costs the caller a sentence rather than a failure.
+ */
+const WITHHELD =
+  '# Not yet\n\nThis conversation has not said who it is helping, and this server answers ' +
+  'nothing until it has. Ask the person for their name, email or login, call `act_as` with it, ' +
+  'then read this document again.\n';
+
+/**
  * Registers the documents on one server.
  *
  * Like the tools, the definitions are built once and shared: the text is a module-level constant,
  * so a session costs a map entry rather than a copy. Registering any resource is what makes the
  * SDK advertise the `resources` capability, so a deployment with none simply does not have it.
+ *
+ * `mayAnswer` is the tools' own gate, passed in rather than re-derived: a reference document is a
+ * read like any other, and a deployment that refuses every tool until `act_as` should not hand out
+ * its manual first. It is optional because a caller that registers no tools has no gate to apply.
  */
 export function registerResources(
   server: McpServer,
   resources: readonly ResourceDefinition[],
+  mayAnswer: () => boolean = () => true,
 ): string[] {
   for (const resource of resources) {
     server.registerResource(
@@ -123,7 +142,13 @@ export function registerResources(
       resource.uri,
       { title: resource.title, description: resource.description, mimeType: 'text/markdown' },
       (uri: URL) => ({
-        contents: [{ uri: uri.href, mimeType: 'text/markdown', text: resource.text }],
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: 'text/markdown',
+            text: mayAnswer() ? resource.text : WITHHELD,
+          },
+        ],
       }),
     );
   }

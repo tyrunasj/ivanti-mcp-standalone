@@ -129,7 +129,8 @@ in `tools/list`, so the model cannot call it at all.
 | Audience | IT staff | employees |
 | Tools | 41 | 34 |
 | Business Objects | all the credential can see | `ENDUSER_BUSINESS_OBJECTS` — a gate, not a hint; empty means none |
-| `act_as` | a preference: decides who "my" means | a gate: nothing returns a record until it resolves |
+| `act_as` | **a gate**, and decides who "my" means | **a gate**, and whose records these are |
+| Before `act_as` | every tool but `act_as` refuses | every tool but `act_as` refuses |
 | Records | anyone's — an analyst works other people's tickets | own records only |
 | Quick actions | everything the role offers | `ENDUSER_QUICK_ACTIONS`, by name, on own open records |
 | Ivanti role, when impersonating | whichever Ivanti made active, or `IVANTI_IMPERSONATION_ROLE`; `switch_role` can change it | `ENDUSER_ROLE` (default `SelfServiceMobile`), and no way out of it |

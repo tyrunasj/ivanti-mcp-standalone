@@ -17,6 +17,7 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   MCP_PUBLIC_URL: undefined,
   TRUSTED_ORIGINS: [],
   MCP_SESSION_IDLE_TTL_SECONDS: 1800,
+  MCP_IDENTITY_IDLE_TTL_SECONDS: 1800,
   MCP_MAX_SESSIONS: 100,
   BEARER_TOKEN: undefined,
   OAUTH_ISSUER: undefined,

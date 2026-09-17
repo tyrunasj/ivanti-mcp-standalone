@@ -67,8 +67,13 @@ const MUST_REFUSE: Record<string, Record<string, unknown>> = {
  * Tools that answer about the *schema*, which is tenant configuration and carries no record.
  *
  * `search_knowledge` is here on a judgement rather than a technicality: an article belongs to
- * nobody, and someone should be able to look for an answer before they say who they are. It
- * returns published articles only in this mode, which is what the self-service portal shows.
+ * nobody, and it returns published articles only in this mode, which is what the self-service
+ * portal shows.
+ *
+ * Since 2026-09-17 none of these is reachable before `act_as` either — `registerTools` gates every
+ * tool but that one, in both modes. This list is what each tool does *on its own*, which is what
+ * a handler called directly in a test meets, and it stays: the gate above it is one check in one
+ * place, and a guard that only holds while that check is there is not a guard.
  */
 const CARRIES_NO_RECORD = new Set([
   'get_version',
