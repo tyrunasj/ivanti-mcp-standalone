@@ -14,8 +14,10 @@
  * Let any of them drift and you publish `ivanti-mcp:1.2.3` whose /health reports something else,
  * or a chart that installs a different image than it claims. Nobody notices until an incident.
  *
- *   node scripts/check-version.mjs v1.2.3   # release guard: tag must match all three
- *   node scripts/check-version.mjs --check  # CI guard: the three must match each other
+ *   node scripts/check-version.mjs --check  # CI and release guard: the three must agree
+ *   node scripts/check-version.mjs v1.2.3   # the same, against a tag you are pushing by
+ *                                           # hand. The Release workflow does NOT use this:
+ *                                           # it creates the tag FROM package.json.
  *   node scripts/check-version.mjs --sync   # write package.json's version into Chart.yaml
  */
 import { readFileSync, writeFileSync } from 'node:fs';

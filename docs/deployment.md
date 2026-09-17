@@ -184,31 +184,59 @@ work: it walks the tenant's base paths against `$metadata` and opens the ASMX se
 
 ## Releasing
 
-Tag and push. The workflow refuses a tag that disagrees with `package.json`, because
-the server reports its version from the manifest — a mismatch would ship an image that
-misreports what it is.
+**Releasing and deploying are two buttons.** This section is the first one: an image on
+Docker Hub, a chart on ghcr.io, a tarball on the GitHub release. Nothing reaches a
+cluster until somebody deploys it.
+
+`package.json` is the only place a version is written by hand. The tag is an **output**
+of the release, not an input to it — pushing a tag yourself now triggers nothing.
 
 ```bash
 # One version, three files. Bump package.json, then sync the chart:
-npm pkg set version=0.2.0
+npm pkg set version=0.3.0
 pnpm version:sync                      # writes Chart.yaml version + appVersion
-git commit -am "Release 0.2.0" && git tag v0.2.0 && git push origin main v0.2.0
+git commit -am "Release 0.3.0" && git push
 ```
 
-`pnpm version:check` runs on every CI build and fails if the three disagree, so a
-half-finished bump is caught on `main` rather than at release time. The release job
-runs the same guard against the tag itself.
-
-The tag publishes, all from the one commit:
+Then **Actions → Release → Run workflow**. It reads `package.json`, refuses if
+`Chart.yaml` disagrees or if that version has already been released, runs the full
+check suite, publishes, and creates the tag and the GitHub Release itself at the end:
 
 | | Version comes from |
 |---|---|
-| `tyrunas/ivanti-mcp:0.2.0` (+ `0.2`, `0`, `latest`) | the tag |
-| `ivanti-mcp-0.2.0.tgz`, the Helm chart, pushed OCI | `--version`/`--app-version` from the tag |
-| `ivanti-mcp-0.2.0.tar.gz`, attached to the GitHub release | `package.json`, via `release-tarball.sh` |
+| `tyrunas/ivanti-mcp:0.3.0` (+ `0.3`, `0`, `latest`) | `package.json` |
+| `ivanti-mcp-0.3.0.tgz`, the Helm chart, pushed OCI | `Chart.yaml`, kept in step by `version:sync` |
+| `ivanti-mcp-0.3.0.tar.gz`, attached to the GitHub release | `package.json`, via `release-tarball.sh` |
+| the tag `v0.3.0` and the release | `package.json` |
 
-A prerelease tag (`v0.2.0-rc.1`) publishes its exact version only — no `latest`, no
+`pnpm version:check` runs on every CI build and fails if the three disagree, so a
+half-finished bump is caught on `main` rather than at release time.
+
+The tag is created **last**, at the commit that was built and signed. A run that dies
+halfway leaves a published image and no tag, which retries by pressing the button
+again; tagging first would leave an orphan tag to delete before a retry was possible.
+
+A prerelease version (`0.3.0-rc.1`) publishes its exact version only — no `latest`, no
 moving major/minor tags — so nobody pulls a release candidate by accident.
 
 Repository secrets required: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (a Docker Hub
 access token with Read/Write on `tyrunas/ivanti-mcp`).
+
+---
+
+## Deploying to k3s-home-lab
+
+The cluster runs this through ArgoCD, and **the release above does not touch it**.
+`argocd-apps/ivanti-mcp.yaml` in `tyrunasj/k3s-home-lab` is a multi-source Application:
+the chart from this repo at a release **tag**, the values from that repo at `main`.
+(The chart comes from git rather than the OCI package because
+`ghcr.io/tyrunasj/charts/ivanti-mcp` is private and ArgoCD holds no GHCR credential.)
+
+Deploying is **Actions → deploy-ivanti-mcp → Run workflow** in that repo, with a tag or
+nothing at all for the latest release. It verifies that `Chart.yaml` at that tag agrees
+with the tag — `appVersion` is the deployed image tag, since the chart's `values.yaml`
+leaves `image.tag` empty — then moves `targetRevision` and commits to `main`. ArgoCD
+(automated, `selfHeal`, `prune`) takes it from there.
+
+Values-only changes never come through here: edit
+`infrastructure/ivanti-mcp/values.yaml` and merge.
