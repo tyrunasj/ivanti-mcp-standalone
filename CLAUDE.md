@@ -7,13 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A standalone MCP server for Ivanti Neurons for ITSM, shipped as a Docker image and also
 runnable locally. Separate from the existing Overlord-hosted Ivanti MCP.
 
-Three documents, with different jobs:
+Five documents, with different jobs:
 - **`docs/initial-design.md`** — decisions and why.
 - **`docs/implementation-plan.md`** — the order of work, in stages.
 - **`docs/notes.md`** — traps: things that pass locally and fail elsewhere. **Add to it whenever
   you hit one**, rather than fixing it silently.
 - **`docs/configuration.md`** — how to configure the server against a real IdP, per provider,
   plus a symptom→cause table. `.env.example` is the reference; this is the guide.
+- **`docs/deployment.md`** — how to run it: a plain Node host, a container, Kubernetes, and the
+  release and deploy procedure in full. "Releasing and deploying" below is the summary.
 
 **`docs/initial-design.md` is the source of truth for design decisions.** It records what was
 decided, why, and — in §10 — which alternatives were rejected and for what reason. Read it
@@ -278,6 +280,54 @@ files stay. `scripts/release-tarball.sh` mirrors the prune, which is why the tar
 - **Verified on both**: Docker Desktop on macOS (arm64) and Ubuntu 26.04 / Docker 29.1.3 on x86_64,
   the latter beside the tenant it talks to.
 - Runs under `--read-only`, `--cap-drop ALL` and `no-new-privileges`; nothing is written to disk.
+
+## Releasing and deploying
+
+**Three buttons, and a version written in exactly one place.** That place is `package.json`;
+`pnpm version:sync` mirrors it into `Chart.yaml` (`version` *and* `appVersion`), and
+`scripts/check-version.mjs` fails the build when the three disagree. The git tag is an **output**
+of the release, not an input to it — pushing one by hand triggers nothing.
+
+```bash
+/ship --release                 # bumps the patch, syncs the chart, PR, merge to main
+# Actions -> Release             (this repo)        image + chart + tarball, then the tag
+# Actions -> deploy-ivanti-mcp   (k3s-home-lab)     moves targetRevision; ArgoCD syncs
+```
+
+**`release.yml` runs on `workflow_dispatch` only.** It reads the version from `package.json`,
+refuses one that has already been released, and creates the tag itself at the end — at the commit
+it built and signed. Last, not first, and that is load-bearing: a run that dies halfway leaves a
+published image and no tag, which retries by pressing the button again, where tagging first would
+leave an orphan tag to delete before a retry was possible. `docker/metadata-action`'s semver
+patterns read `github.ref_name`, which on a manual run is the *branch*, so every tag carries
+`value=` explicitly — without it the image publishes as `main`.
+
+**Releasing is not deploying, and the split is deliberate.** Release publishes to Docker Hub and
+ghcr.io and touches no cluster. `deploy-ivanti-mcp` in `tyrunasj/k3s-home-lab` validates a release
+tag, checks `Chart.yaml` **at that tag** agrees with it — `appVersion` is the image tag the chart
+deploys, since `values.yaml` leaves `image.tag` empty, so drift there runs an image nobody chose
+while ArgoCD reports Synced — then moves `targetRevision` in `argocd-apps/ivanti-mcp.yaml` and
+commits to `main`. Values-only changes never go through a release at all: edit
+`infrastructure/ivanti-mcp/values.yaml` and merge.
+
+**The check list lives in `.github/actions/checks` and both workflows use it.** It used to be
+written twice — nine checks in `ci.yml`, four of them in `release.yml` — so a release published
+without ever running `check:examples` or `check:licenses`, which validate `.env.example` and
+`THIRD-PARTY-NOTICES.md`: two files that ship **inside the tarball the release uploads**. Two
+lists that look alike at a glance is how that stayed invisible, and it mattered more once
+releasing moved to a button with a branch picker, because the tree being published need never
+have been the tree CI saw. A composite action rather than a reusable workflow, because a reusable
+workflow is another job — another runner, another filesystem — and the release needs the `dist/`
+those checks leave behind. Every check carries `if: ${{ !cancelled() }}`, so one run reports every
+failure rather than stopping at the first.
+
+**`main` is protected, and the protection applies to this account too.** A pull request is
+required, `Checks` and `Image` must both be green, branches must be up to date before merging
+(`strict`), and force-pushes and deletions are refused. `enforce_admins` is **on**, so there is no
+bypass: a broken `main` is fixed through a PR whose checks pass, or by turning that setting off
+deliberately and turning it back. Verified by driving it — a PR carrying a one-line type error
+failed `Checks`, skipped `Image`, and the merge was refused with *"the base branch policy
+prohibits the merge"*.
 
 ## Commands
 
