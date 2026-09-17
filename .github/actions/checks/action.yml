@@ -1,0 +1,78 @@
+name: Checks
+description: >
+  Every check this repository runs, in one place, for both the pull-request gate
+  and the release gate.
+
+# ONE LIST, TWO CALLERS. It lived in `ci.yml`, and `release.yml` carried a
+# SUBSET of it — lint, typecheck, test, build and nothing else. So a release
+# published without ever running `check:examples` or `check:licenses`, both of
+# which validate files that ship INSIDE the tarball: `.env.example` and
+# `THIRD-PARTY-NOTICES.md`. That gap was invisible precisely because the two
+# lists looked alike at a glance.
+#
+# A composite action rather than a reusable workflow, because a reusable
+# workflow is another JOB — another runner, another filesystem — and the release
+# needs the `dist/` these checks produce. Here it is the same job, so `pnpm
+# build` runs once and the tarball step downstream uses what it left behind.
+#
+# The caller does its own `actions/checkout`: an action that checked out the
+# repository would be deciding the caller's ref for it.
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+
+    - run: pnpm install --frozen-lockfile
+      shell: bash
+
+    # package.json, Chart.yaml `version` and Chart.yaml `appVersion` must agree.
+    # `appVersion` is the image tag the chart deploys by default, so drift here
+    # ships one version and runs another.
+    - run: node scripts/check-version.mjs --check
+      shell: bash
+
+    # All of them, and all of them even when an earlier one fails: one round
+    # trip beats seven. A failed step still fails the job — `if:` here only
+    # stops the REST from being skipped, it does not forgive anything.
+    - run: pnpm lint
+      shell: bash
+      if: ${{ !cancelled() }}
+
+    # Not redundant with `build`: the build config excludes tests and fixtures,
+    # so this is the only thing that types them.
+    - run: pnpm typecheck
+      shell: bash
+      if: ${{ !cancelled() }}
+
+    - run: pnpm test
+      shell: bash
+      if: ${{ !cancelled() }}
+
+    # The one build in the job. The release tarball ships the `dist/` this
+    # leaves behind rather than making a second one.
+    - run: pnpm build
+      shell: bash
+      if: ${{ !cancelled() }}
+
+    # Examples get copied before they get read, so one that exits 78 is worse
+    # than none. Drives the real loadConfig; needs dist/, hence after build.
+    - run: pnpm check:examples
+      shell: bash
+      if: ${{ !cancelled() }}
+
+    # Every source file carries the notice, and the third-party list matches the
+    # tree that actually ships — THIRD-PARTY-NOTICES.md travels in the tarball.
+    - run: pnpm check:licenses
+      shell: bash
+      if: ${{ !cancelled() }}
+
+    # A COPY whose source is .dockerignored fails only at image build time,
+    # minutes later, with an error that reads like a missing file.
+    - run: pnpm check:docker
+      shell: bash
+      if: ${{ !cancelled() }}

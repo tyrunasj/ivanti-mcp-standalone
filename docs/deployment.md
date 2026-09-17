@@ -198,9 +198,11 @@ pnpm version:sync                      # writes Chart.yaml version + appVersion
 git commit -am "Release 0.3.0" && git push
 ```
 
-Then **Actions → Release → Run workflow**. It reads `package.json`, refuses if
-`Chart.yaml` disagrees or if that version has already been released, runs the full
-check suite, publishes, and creates the tag and the GitHub Release itself at the end:
+Then **Actions → Release → Run workflow**. It reads `package.json`, refuses if that
+version has already been released, runs **the same checks CI runs** — they are one
+list, in `.github/actions/checks`, shared by both so the release gate cannot drift
+into a weaker subset of the pull-request gate — then publishes and creates the tag
+and the GitHub Release itself at the end:
 
 | | Version comes from |
 |---|---|

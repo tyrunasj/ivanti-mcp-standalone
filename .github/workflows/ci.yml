@@ -10,55 +10,28 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
 
 jobs:
   verify:
     name: Checks
     runs-on: ubuntu-latest
+    # A hung install or a registry that never answers should cost minutes, not
+    # the six hours GitHub allows by default.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # Catch a half-finished bump here rather than at release time: package.json,
-      # Chart.yaml version and Chart.yaml appVersion must already agree on main.
-      - run: node scripts/check-version.mjs --check
-
-      # All four, and all of them even when an earlier one fails: one round trip
-      # beats four. `typecheck` is not redundant with `build` — the build config
-      # excludes tests and fixtures, so this is the only thing that types them.
-      - run: pnpm lint
-        if: ${{ !cancelled() }}
-      - run: pnpm typecheck
-        if: ${{ !cancelled() }}
-      - run: pnpm test
-        if: ${{ !cancelled() }}
-      - run: pnpm build
-        if: ${{ !cancelled() }}
-
-      # Examples get copied before they get read, so one that exits 78 is worse
-      # than none. Drives the real loadConfig; needs dist/, hence after build.
-      - run: pnpm check:examples
-        if: ${{ !cancelled() }}
-
-      # Every source file carries the notice, and the third-party list matches
-      # the tree that actually ships.
-      - run: pnpm check:licenses
-        if: ${{ !cancelled() }}
-
-      # A COPY whose source is .dockerignored fails only at build time, minutes
-      # later in the image job, with an error that reads like a missing file.
-      - run: pnpm check:docker
-        if: ${{ !cancelled() }}
+      # The whole check list, shared with release.yml so the release gate cannot
+      # drift into being a weaker subset of this one. See the action's header.
+      - uses: ./.github/actions/checks
 
       # The tarball is a release artefact, but building it here means a change that
-      # breaks relocation is caught on the PR rather than at tag time.
+      # breaks relocation is caught on the PR rather than at release time. It stays
+      # OUT of the shared action on purpose: the release builds this for real a few
+      # steps later, and building it twice there is the duplication the action exists
+      # to avoid.
       - run: ./scripts/release-tarball.sh "${RUNNER_TEMP}/release"
         if: ${{ !cancelled() }}
 
@@ -66,6 +39,7 @@ jobs:
     name: Image
     runs-on: ubuntu-latest
     needs: verify
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -74,7 +48,9 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
-      # CI BUILDS BUT NEVER PUBLISHES. Only a tag publishes, in release.yml.
+      # CI BUILDS BUT NEVER PUBLISHES. Publishing is release.yml, which runs on a
+      # button and takes its version from package.json — no tag, and nothing here,
+      # ever pushes an image.
       #
       # What is worth checking on every commit is that the image still builds for
       # both architectures — arm64 goes through QEMU here and is the one that
@@ -93,6 +69,6 @@ jobs:
           push: false
           tags: ivanti-mcp:ci
           cache-from: type=gha
-          # Warms the cache the release build reads, so a tag does not rebuild
+          # Warms the cache the release build reads, so a release does not rebuild
           # both architectures from scratch.
           cache-to: type=gha,mode=max

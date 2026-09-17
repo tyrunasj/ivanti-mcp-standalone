@@ -14,6 +14,29 @@ name: Release
 # ⚠️ Pushing a tag by hand now triggers NOTHING. That is the point: a tag is
 # an output of this workflow, not an input to it.
 #
+# ──────────── One job, deliberately ────────────
+#
+#   The checks and the publish were two jobs, and jobs do not share a
+#   filesystem: the second re-ran `checkout`, `setup-node`, `pnpm install` and
+#   `pnpm build` to get back the `dist/` the first had already produced. That
+#   is ~10s and five steps of pure repetition, and it doubled the teardown the
+#   UI shows, since every `uses:` adds a `Post Run` step PER JOB.
+#
+#   One job, in gate-then-publish order, buys the same guarantee for free: a
+#   failing step stops the job, and every publishing step is below every
+#   checking one. `dist/` is built ONCE, by the check that proves it builds,
+#   and the tarball step downstream uses that same tree.
+#
+#   The cost is one status row instead of two. For a button pressed by hand,
+#   green or not green is the whole question.
+#
+#   The checks themselves are NOT written here. They live in
+#   .github/actions/checks and are shared with ci.yml, because this workflow
+#   used to carry a subset of that list — four of the nine — and published
+#   without ever running `check:examples` or `check:licenses`, which validate
+#   `.env.example` and `THIRD-PARTY-NOTICES.md`: two files that ship inside the
+#   tarball this workflow uploads.
+#
 # The tag is created LAST, by the release step. A run that dies halfway leaves
 # a published image and no tag, which retries cleanly by pressing the button
 # again; tagging first would leave an orphan tag that has to be deleted before
@@ -32,35 +55,31 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-permissions:
-  contents: read
-
 env:
   IMAGE: tyrunas/ivanti-mcp
 
 jobs:
-  verify:
-    name: Checks
+  release:
+    name: Release
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
+    # A hung multi-arch build or a registry that never answers should cost
+    # minutes, not the six hours GitHub allows by default.
+    timeout-minutes: 30
+    permissions:
+      contents: write   # create the tag and the GitHub release
+      id-token: write   # keyless signing, no key to store or rotate
+      packages: write   # push the Helm chart to ghcr.io
     steps:
+      # ──────────── Gate ────────────
+      # Nothing below this block runs unless all of it passes.
+
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
-
-      # package.json is the source of truth; this asserts Chart.yaml `version`
-      # and `appVersion` already agree with it. `appVersion` is the default
-      # image tag, so drift there silently deploys the wrong image.
-      - run: node scripts/check-version.mjs --check
-
+      # FIRST, and before the checks on purpose: the likeliest reason a release
+      # run fails is that package.json was never bumped, and that answer costs
+      # two seconds rather than thirty. It needs no dependencies — `node -p` and
+      # `git ls-remote` run on what the runner already has, which is why this can
+      # sit above the step that installs anything.
       - id: version
         name: Resolve the version, and refuse a version already released
         run: |
@@ -83,31 +102,22 @@ jobs:
             echo "tag=${tag}"
             echo "prerelease=${prerelease}"
           } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "VERSION=${version}"
+            echo "TAG=${tag}"
+          } >> "$GITHUB_ENV"
+
           echo "Releasing ${tag} (prerelease: ${prerelease}) from ${GITHUB_SHA}"
 
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
+      # Every check this repository runs, shared with ci.yml so this gate cannot
+      # drift into a weaker subset of that one. It also leaves the `dist/` the
+      # release tarball ships, which is why nothing below rebuilds it.
+      - uses: ./.github/actions/checks
 
-  publish:
-    name: Publish
-    runs-on: ubuntu-latest
-    needs: verify
-    permissions:
-      contents: write   # create the tag and the GitHub release
-      id-token: write   # keyless signing, no key to store or rotate
-      packages: write   # push the Helm chart to ghcr.io
-    env:
-      VERSION: ${{ needs.verify.outputs.version }}
-      TAG: ${{ needs.verify.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+      # ──────────── Publish ────────────
+      # The registry toolchain is installed here rather than at the top so a
+      # failing test does not first spend eleven seconds on QEMU.
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -140,21 +150,23 @@ jobs:
       # patterns read `github.ref_name`, which on a manual run is the BRANCH —
       # so the image would publish as `main`.
       - id: meta
+        name: Compose the image tags and labels
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=semver,pattern={{version}},value=${{ needs.verify.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.verify.outputs.tag }}
-            type=semver,pattern={{major}},value=${{ needs.verify.outputs.tag }}
-            type=raw,value=latest,enable=${{ needs.verify.outputs.prerelease == 'false' }}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.tag }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.prerelease == 'false' }}
           labels: |
             org.opencontainers.image.title=Ivanti MCP
             org.opencontainers.image.description=MCP server for Ivanti Neurons for ITSM
             org.opencontainers.image.licenses=UNLICENSED
-            org.opencontainers.image.version=${{ needs.verify.outputs.version }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
       - id: build
+        name: Build and push the image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -171,17 +183,18 @@ jobs:
       - name: Sign the image
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
         env:
-          IMAGE: ${{ env.IMAGE }}
           DIGEST: ${{ steps.build.outputs.digest }}
 
-      # The same commit, as a tree that runs on a plain Node host.
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      # The same commit, as a tree that runs on a plain Node host. It packages
+      # the `dist/` built by the gate above and installs its own production
+      # dependencies into the staging directory.
+      #
       # No `head -1`: the script prints the path on stdout and nothing else. It used
       # to print pnpm's progress there too, so `head -1` captured a log line as the
       # filename — the upload then matched nothing AND still exited 0, which is why
       # the file is asserted here rather than trusted.
       - id: tarball
+        name: Build the release tarball
         run: |
           set -euo pipefail
           path="$(./scripts/release-tarball.sh "${RUNNER_TEMP}/release")"
@@ -208,6 +221,7 @@ jobs:
       #
       # `target_commitish` is required: the tag does not exist yet.
       - id: notes
+        name: Generate the release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -225,13 +239,14 @@ jobs:
       # This step creates the tag, at the commit that was actually built and
       # signed. Everything above has already published, so a green run here means
       # the tag and the artifacts describe the same tree.
-      - uses: softprops/action-gh-release@v2
+      - name: Tag it and publish the GitHub release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.verify.outputs.tag }}
+          tag_name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: ${{ needs.verify.outputs.tag }}
-          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
-          make_latest: ${{ needs.verify.outputs.prerelease == 'false' }}
+          name: ${{ steps.version.outputs.tag }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.version.outputs.prerelease == 'false' }}
           files: ${{ steps.tarball.outputs.path }}
           body: |
             ${{ steps.notes.outputs.body }}
@@ -240,16 +255,16 @@ jobs:
 
             ## Deploy
 
-            **Container** — `docker pull ${{ env.IMAGE }}:${{ needs.verify.outputs.version }}`
+            **Container** — `docker pull ${{ env.IMAGE }}:${{ steps.version.outputs.version }}`
             Multi-arch (amd64, arm64), distroless, runs as uid 65532.
             Signed with cosign; verify with:
             ```
-            cosign verify ${{ env.IMAGE }}:${{ needs.verify.outputs.version }} \
+            cosign verify ${{ env.IMAGE }}:${{ steps.version.outputs.version }} \
               --certificate-identity-regexp='^https://github.com/${{ github.repository }}/' \
               --certificate-oidc-issuer=https://token.actions.githubusercontent.com
             ```
 
-            **Kubernetes** — `helm install ivanti-mcp oci://ghcr.io/${{ github.repository_owner }}/charts/ivanti-mcp --version ${{ needs.verify.outputs.version }}`
+            **Kubernetes** — `helm install ivanti-mcp oci://ghcr.io/${{ github.repository_owner }}/charts/ivanti-mcp --version ${{ steps.version.outputs.version }}`
             One release is one tenant and one audience. See `charts/ivanti-mcp/README.md`.
 
             **Plain Node host** — download the tarball below, unpack it, and run
