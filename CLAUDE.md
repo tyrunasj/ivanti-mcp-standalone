@@ -89,7 +89,7 @@ A delete answers **204 for an id that never existed**, so existence is checked b
 `upload_attachment` takes base64 capped at 2 MB: bytes cross the model's context twice, and the
 hosted-upload-page flow overlord has is deliberately not ported — this server may be stdio-only.
 
-**`act_as` says who the conversation is helping, and `enduser` mode will not answer without it.**
+**`act_as` says who the conversation is helping, and NOTHING else answers until it has.**
 One tool, called once per conversation — not an argument on every tool, which fails silently the
 first time the model forgets it and then answers for the service account. Matching is on
 `LoginID`, `PrimaryEmail` and `FirstName` + `LastName` across `employee` *and* `externalcontact`;
@@ -100,10 +100,39 @@ Ivanti's keyword search is a substring match and **over-matches**: `"John"` retu
 **and Scott Johnson**. Candidates are therefore re-filtered client-side on whole-token equality,
 which drops the stranger and still matches "Katherine Joseph" to "Katherine M Joseph".
 
-The mode decides what the tool *is*: a **gate** in `enduser`, where nothing returns a record until
-it succeeds, and a **preference** in `full`, where it only decides who "my" means — an IT agent
-legitimately works other people's tickets. A `Terminated` record is refused; `New` and `On Leave`
-pin with a flag. Resolving a claim never makes it true: the provenance stays `asserted`.
+A `Terminated` record is refused; `New` and `On Leave` pin with a flag. Resolving a claim never
+makes it true: the provenance stays `asserted`.
+
+**The gate is in `registerTools`, and it covers every tool but `act_as` — in both modes.** It was
+once a gate in `enduser` and a preference in `full`; `full` is gated too since 2026-09-17, because
+gating decides *whether this conversation may answer*, not *whose records it may read*. An IT agent
+calls `act_as` for themselves and works the whole queue exactly as before; what ends is the
+conversation that answers for nobody and stamps the service account on the audit log instead.
+`get_version` is gated with the rest — a version is an answer. The two things outside it are
+`act_as` itself and a deployment with no tenant, where `act_as` is not registered and the gate
+would refuse what nothing could satisfy. It lives at the one place every call passes through: tool
+by tool it would be forgettable, and a tool that forgot would not fail, it would answer.
+
+**A signed-in conversation pins itself, on the first call that needs it.** Where the identity is
+`verified` the token already names the person, so the gate runs `act_as`'s own handler once rather
+than making the model repeat what the issuer said — never a second copy of the matching rules, and
+lazily rather than at `initialize`, where a slow tenant would fail the connection and a token that
+matched only on a name would have nowhere to ask for confirmation. An asserted session is
+untouched: a claim has to be made deliberately. A verified claim that matches nobody in Ivanti is
+logged at **warn** with the claim, because an administrator has to create that record and nothing
+else reported it; an unverified claim is never logged at all.
+
+**A conversation ends when it goes quiet, which is what a stdio process gets instead of a sweep.**
+Over HTTP a conversation is a session and the store sweeps it. A stdio process has one connection
+for its whole life, so a client that keeps the server running across conversations — an editor, a
+CLI — carried the first person's pin into every conversation that followed. Two signals end one
+now, neither reachable by the model, because a tool that could end a conversation could shed the
+pin: no tool call for `MCP_IDENTITY_IDLE_TTL_SECONDS`, or a fresh `initialize` on the live
+connection. That is its own setting and not the session sweep's, which it borrowed for one
+release — how long a person's records stay reachable is not how long a dead session may hold
+memory. Ending one throws the pin away and hands
+back the impersonated Ivanti session, so the next may pin somebody else. Time is the one thing
+injected ticket text cannot forge, which is why this is safe where a `reset` tool would not be.
 
 **The field tying a record to a person is discovered, never named.** An incident uses
 `ProfileLink_RecID`, a service request has that *and* `AlternateContactLink_RecID`, and a change
@@ -152,16 +181,24 @@ from there rather than from here, which is how this paragraph came to have them 
 
 | deployment | total | tools | longest description |
 |---|---|---|---|
-| `full`, no impersonation | **37,902** | 41 | `run_quick_action` at **1,948** |
-| `full`, impersonating | 37,693 | 41 | `search` at 1,882 |
-| `enduser`, no impersonation | 33,975 | 34 | `run_quick_action` at 1,948 |
-| `enduser`, impersonating | 33,785 | 34 | `search` at 1,882 |
+| `full`, no impersonation | **37,927** | 41 | `run_quick_action` at **1,948** |
+| `full`, impersonating | 37,786 | 41 | `search` at 1,882 |
+| `enduser`, no impersonation | 33,868 | 34 | `run_quick_action` at 1,948 |
+| `enduser`, impersonating | 33,678 | 34 | `search` at 1,882 |
 
 So the widest manifest is the one WITHOUT impersonation — `act_as` and `run_quick_action` both say
-*less* when Ivanti stamps the person — leaving **98 characters** of the 38,000 budget and **52** of
+*less* when Ivanti stamps the person — leaving **73 characters** of the 38,000 budget and **52** of
 `run_quick_action`'s 2,000 cap. Against that, 24,023 characters across the six reference documents,
 fetched only on demand. The next addition fails the build by design, which is imminent rather than
 theoretical.
+
+**A resource answers the same identity gate the tools do.** `registerTools` publishes `mayAnswer`
+and `registerResources` takes it, rather than re-deriving "is somebody pinned" and "does this
+deployment require it" — two conditions, and a second copy is a second thing to get wrong. The
+refusal is served *as the document* rather than thrown, and that is not cosmetic: clients routinely
+read every resource at connect time to display them, so throwing would paint a fresh conversation
+with errors for six static documents that carry no tenant data and could leak nothing if they were
+served. The gate here is consistency, not containment, so it costs a sentence rather than a failure.
 
 **Resources narrow the way tools do**, and for the same reason: a document naming a tool this
 deployment does not register is worse than no document, because a model cannot tell "not
@@ -172,6 +209,41 @@ mode × tier combinations and fails if any registered document names an unregist
 anything Ivanti resolves "for the current user" answers for that account and not for whoever is
 asking. Told this once at connect time, a model stops reporting one person's queue as another's;
 `src/server/instructions.ts` builds it from the capability profile.
+
+**It also carries the one narration rule: answer in the tenant's words, not the system's.** A
+RecId, a field key like `ProfileLink_RecID`, an object name like `frs_hc_calllog` — these are what
+the *model* needs for its next call and what the *person* can do nothing with, and they leak from
+every tool that returns a row. So it is said once, globally, where nothing has to repeat it: the
+manifest has 98 characters of headroom and could not afford to say it forty-one times, and a
+resource is a pull most sessions never make.
+
+**The rule is a ladder, not a ban** — the same ladder `form-context.ts` already resolves: the
+form's label for the field, else its display name, else the technical key. The key is the **last
+rung, not a forbidden one**: at `odata` tier a field has no other name, and a rule that forbade it
+outright would be unfollowable exactly where it is hardest to follow. Two carve-outs are explicit.
+A login or email may be shown **to tell two people of one name apart**, because `act_as` refuses an
+ambiguous verified match without one — a rule that hid it would hide the only thing that resolves
+the ambiguity. And the paragraph *above* it teaches the very names it forbids showing: those are
+for addressing Ivanti, and the two sit adjacent so the distinction reads as one idea.
+
+**`get_object_metadata` had to start answering with labels for any of it to be followable.**
+`ResolvedForm.fieldLabels` had been computed since it existed and read by **nothing** — so "name a
+field the way the tenant does" was, for fields, an instruction with no source. It now returns
+`label` per field (omitted when it merely repeats the name, which most do), **searches on the label
+as well as the name** — or a caller told to say "Customer" could not find `ProfileLink` — and
+carries a `labelsNote` distinguishing "this role's form labels nothing" from "this credential
+cannot read forms at all". Resolved on `connectionFor(...)`, because a form belongs to the **role**:
+the service account's form for `Incident` is not the one the impersonated person sees. It never
+throws — the fields are the answer, and losing them to a failed label lookup would be a bad trade.
+
+**The instructions budget is nearly spent, and the guard was measuring the wrong deployment.**
+It varied mode × impersonation but pinned the tier to `admin`, which is not the widest: `enduser`
+on an `odata` credential stood at **2,013** — over the cap, and untested, because the tier decides
+whether the identity paragraph names an account and adds a sentence of its own. `DEPLOYMENTS` now
+crosses mode × tier × impersonation, and the room for the new rule was bought by tightening three
+existing paragraphs rather than by raising the number. The identity gate's sentence cost 20 more
+and was paid for the same way, out of the `odata` paragraph: worst case is **1,962 of 2,000**, at
+`full` / `session` / impersonating.
 
 ## Container
 

@@ -169,6 +169,26 @@ until the idle sweep. This is the *normal* case, which makes `MCP_SESSION_IDLE_T
 load-bearing rather than defensive — without it every re-authentication leaks a session
 permanently, and `MCP_MAX_SESSIONS` would eventually be reached by ordinary use.
 
+**Elicitation exists in this SDK and is unused — an open investigation, not a trap.**
+Protocol `2025-11-25` (what SDK 1.30 implements) gives the server `server.elicitInput(...)`, which
+asks the **user** a question directly instead of asking the model to ask. That is interesting for
+exactly one thing here: the whole threat `act_as` is built against is a name that came from a
+record rather than from the person, and today the only defence is a sentence in the tool
+description telling the model where the name must come from. A name collected by elicitation
+provably came from the human.
+
+What to establish before building on it:
+- **Which clients implement it.** The SDK throws `Client does not support elicitation` when the
+  client did not declare the capability at `initialize`, and `getClientCapabilities()` reports it —
+  so support is detectable and the fallback to today's prompt is writable. A version that *depends*
+  on it is unusable everywhere it is absent, which is most places today.
+- **What a decline looks like** versus a timeout versus a transport that dropped — three different
+  situations that must not collapse into one refusal.
+- **How it behaves under stdio**, where there is no browser and the client is a terminal.
+- **Whether it is worth it at all** once the identity is verified: a signed-in conversation pins
+  itself from the token, so elicitation would only strengthen the *asserted* path — which is
+  explicitly an accepted risk (design §5), the same one the phone line has.
+
 **Session state is in-memory.**
 `SessionStore` is a `Map` in the process. Restart drops every session (clients re-`initialize`,
 so it reconnects rather than errors), and **replicas need sticky routing by `Mcp-Session-Id`** or

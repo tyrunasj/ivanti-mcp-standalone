@@ -46,6 +46,19 @@ export const envSchema = z.object({
 
   /** Idle sessions are closed after this long — clients often vanish without a DELETE. */
   MCP_SESSION_IDLE_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
+  /**
+   * How long a conversation may go quiet before the pinned identity is forgotten.
+   *
+   * Separate from the session TTL, which it once borrowed, because the two answer different
+   * questions about different things. That one bounds server memory and wants to be short; this
+   * one decides how long a person's records stay reachable to whoever is at the keyboard, and on
+   * stdio — one connection for the life of the process — it is the ONLY thing that ends a
+   * conversation. Tuning one should not silently move the other.
+   *
+   * Biased short on purpose: expiring too eagerly costs one more `act_as`, expiring too late
+   * answers the next conversation with the last person's records.
+   */
+  MCP_IDENTITY_IDLE_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
   /** Ceiling on concurrent sessions: unbounded growth is a DoS surface in `none` mode. */
   MCP_MAX_SESSIONS: z.coerce.number().int().positive().default(100),
 

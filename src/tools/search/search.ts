@@ -7,7 +7,8 @@ import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { IdentityRequiredError, scopeToOwnRecords } from '../shared/own-records.js';
+import { scopeToOwnRecords } from '../shared/own-records.js';
+import { IdentityRequiredError } from '../../auth/identity-pin.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { encodeRecordId, recordRecId, recordSummary, recordTitle } from './record-identity.js';

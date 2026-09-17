@@ -36,9 +36,26 @@ const HAROLD = {
   Status: 'Active',
 };
 
-function setup(responses: Record<string, unknown>, ownRecordsOnly = true) {
+function setup(responses: Record<string, unknown>, ownRecordsOnly = true, log: Logger = logger()) {
   const { connection } = connectionFixture({ entities: { employee: {} }, responses });
-  return createActAsTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly, actions: OPEN_ACTIONS });
+  return createActAsTool({ connection, gate: OPEN_GATE, logger: log, ownRecordsOnly, actions: OPEN_ACTIONS });
+}
+
+/** A logger that keeps what it was told, so a test can assert on the record rather than a spy. */
+function recording() {
+  const lines: { level: string; message: string; fields?: Record<string, unknown> }[] = [];
+  const keep =
+    (level: string) =>
+    (message: string, fields?: Record<string, unknown>): void => {
+      lines.push({ level, message, ...(fields === undefined ? {} : { fields }) });
+    };
+  const log: Logger = {
+    debug: keep('debug'),
+    info: keep('info'),
+    warn: keep('warn'),
+    error: keep('error'),
+  };
+  return { log, lines };
 }
 
 const ctx = (identity = ANONYMOUS): CallContext => ({
@@ -194,6 +211,34 @@ describe('act_as', () => {
       expect(body(result)['pinned']).toBe(false);
       expect(text(result)).toContain('confirm');
       expect(context.pin?.person()).toBeUndefined();
+    });
+
+    it('warns operations when the signed-in account matches nobody in Ivanti', async () => {
+      // The token is valid and the person is real; Ivanti simply holds no record for them. Nothing
+      // else reports that, so a misprovisioned employee was invisible until they complained.
+      const { log, lines } = recording();
+      const tool = setup({ $filter: { value: [] }, $search: { value: [] } }, true, log);
+
+      const result = await tool.handler({}, ctx(VERIFIED));
+
+      expect(result.isError).toBe(true);
+      expect(lines).toContainEqual({
+        level: 'warn',
+        message: 'the signed-in account matches nobody in ivanti',
+        // The claim, because that is what an administrator has to create a record for.
+        fields: { subject: 'opaque-pairwise-id', claim: 'HSanders@saasitdemo.com' },
+      });
+    });
+
+    it('never logs the name an UNVERIFIED caller claimed, even when it matches nobody', async () => {
+      // An audit line that records a claim as a fact is worse than one that records nothing.
+      const { log, lines } = recording();
+      const tool = setup({ $filter: { value: [] }, $search: { value: [] } }, true, log);
+
+      await tool.handler({ person: 'Harold Sanders' }, ctx());
+
+      expect(lines.filter((line) => line.level === 'warn')).toEqual([]);
+      expect(JSON.stringify(lines)).not.toContain('Harold');
     });
 
     it('explains itself when the token names nobody', async () => {

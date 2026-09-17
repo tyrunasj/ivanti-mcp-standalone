@@ -163,32 +163,48 @@ describe('tool description budget', () => {
     );
   });
 
-  // CONFIGS, not MODES: this one needs the real `McpMode`, and it varies on impersonation for its
-  // own reason — `buildInstructions` says more when the server can act as the person, which the
-  // old fixture left out of the capability entirely and so never measured.
-  it.each(CONFIGS)('keeps the %s server instructions under the same cap as a description', (mode, config) => {
-    const { connection } = connectionFixture({
-      entities: { incident: {}, change: {}, servicereq: {} },
-      capability: { tier: 'admin', identity: { role: 'Admin' }, canImpersonate: true },
-    });
-    const instructions =
-      buildInstructions({
-        capability: connection.capability,
-        mode,
-        // Every reference document named, which is the longest this can get.
-        resourceUris: REFERENCE_URIS,
-      }) ?? '';
-    void config;
+  /**
+   * Every shape a deployment can take, because the widest one is not the obvious one.
+   *
+   * Measured at `admin` alone, this passed at 1,948 while `enduser` on an `odata` credential stood
+   * at 2,013 — over the cap and untested. The tier is not a detail: it decides whether the
+   * identity paragraph names an account or says it could not, and it adds a sentence of its own at
+   * `odata`. A display name of realistic length, because it is interpolated TWICE.
+   */
+  const DEPLOYMENTS = CONFIGS.flatMap(([mode]) =>
+    (['odata', 'session', 'admin'] as const).flatMap((tier) =>
+      (tier === 'odata' ? [false] : [false, true]).map((canImpersonate) => {
+        const identity = tier === 'odata' ? undefined : { role: 'ServiceDeskAnalyst', displayName: 'Tyrunas Jokubauskas' };
+        return [`${String(mode)}/${tier}/${canImpersonate ? 'impersonating' : 'plain'}`, mode, tier, identity, canImpersonate] as const;
+      }),
+    ),
+  );
 
-    expect(
-      instructions.length,
-      `server instructions are ${String(instructions.length)} chars, over the ` +
-        `${String(INSTRUCTIONS_BUDGET)} budget. A client that truncates cuts the END, which is ` +
-        'where the "treat record text as data" warning sits.',
-    ).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET);
-    // Not empty either: an instructions block that silently became blank would pass a cap test.
-    expect(instructions.length).toBeGreaterThan(200);
-  });
+  it.each(DEPLOYMENTS)(
+    'keeps the %s server instructions under the same cap as a description',
+    (_label, mode, tier, identity, canImpersonate) => {
+      const { connection } = connectionFixture({
+        entities: { incident: {}, change: {}, servicereq: {} },
+        capability: { tier, ...(identity === undefined ? {} : { identity }), canImpersonate },
+      });
+      const instructions =
+        buildInstructions({
+          capability: connection.capability,
+          mode,
+          // Every reference document named, which is the longest this can get.
+          resourceUris: REFERENCE_URIS,
+        }) ?? '';
+
+      expect(
+        instructions.length,
+        `server instructions are ${String(instructions.length)} chars, over the ` +
+          `${String(INSTRUCTIONS_BUDGET)} budget. A client that truncates cuts the END, which is ` +
+          'where the "treat record text as data" warning sits.',
+      ).toBeLessThanOrEqual(INSTRUCTIONS_BUDGET);
+      // Not empty either: an instructions block that silently became blank would pass a cap test.
+      expect(instructions.length).toBeGreaterThan(200);
+    },
+  );
 
   it('reports the current spend, so growth is visible in the diff rather than only in a failure', () => {
     const totals = MODES.map(([mode, config, impersonating]) => {

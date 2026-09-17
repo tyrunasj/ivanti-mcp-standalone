@@ -2,6 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Config } from '../config/env-schema.js';
 import type { IvantiConnection } from '../ivanti/connect.js';
 import type { Logger } from '../logger.js';
@@ -49,8 +50,12 @@ import { createActionGate } from './shared/action-gate.js';
 import { createActAsTool } from './identity/act-as.js';
 import { switchRoleTool } from './identity/switch-role.js';
 import { auditFields } from '../auth/identity.js';
-import { createSessionPin } from '../auth/identity-pin.js';
+import { createSessionPin, IdentityRequiredError } from '../auth/identity-pin.js';
+import { errorResult } from './shared/result.js';
 import type { CallContext, ToolDefinition } from './tool-definition.js';
+
+/** The one tool that answers before anyone is pinned, because it is what does the pinning. */
+const ACT_AS = 'act_as';
 
 export interface ToolContext {
   serverName: string;
@@ -199,31 +204,202 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
  * sessions are open. Only the small closure that carries the context is per session, which is
  * what makes identity a per-conversation fact rather than a global.
  *
- * Every call is audited here because this is the one place they all pass through. Arguments are
- * never logged — they carry ticket text and personal data — so the record is what was called, by
- * which session, on whose behalf, and how that was established.
+ * Every call is audited here, and gated here, because this is the one place they all pass
+ * through. Arguments are never logged — they carry ticket text and personal data — so the record
+ * is what was called, by which session, on whose behalf, and how that was established.
+ */
+export interface RegisteredTools {
+  /** The names registered, in the order they were given. */
+  names: string[];
+  /**
+   * Ends the conversation: the pin is thrown away and the next call starts with nobody.
+   *
+   * Handed out rather than exposed on the pin, because a tool holds a `SessionPin` and must never
+   * be able to end the conversation it is bound by — that would be a way out of the pin, which is
+   * the one thing the pin exists to prevent. Only the caller that built the connection gets this.
+   */
+  endConversation: () => Promise<void>;
+  /**
+   * Whether this conversation may be answered at all — false until `act_as` has pinned somebody.
+   *
+   * Published so that anything else registered on the same server asks the same question rather
+   * than re-deriving it: "is there an identity" and "does this deployment require one" are two
+   * conditions, and a second copy of them is a second thing to get wrong.
+   */
+  mayAnswer: () => boolean;
+}
+
+/**
+ * How a conversation ends, and why a stdio process has to be told.
+ *
+ * Over HTTP a conversation *is* a session: the store sweeps it once it goes quiet and the whole
+ * server — pin included — is thrown away with it. A stdio process has no such thing. It is one
+ * connection for the life of the process, so a client that keeps the server running across
+ * conversations, which is the ordinary shape, carried the first person's pin into every
+ * conversation that followed: the person outlived the conversation that named them.
+ *
+ * Two signals end one, and neither is within the model's reach — a tool that could end a
+ * conversation could shed the pin, which is the one thing the pin exists to prevent:
+ *
+ * - **Silence.** No tool call for `idleMs` — `MCP_IDENTITY_IDLE_TTL_SECONDS`. Its own setting,
+ *   not the session sweep's: how long a person's records stay reachable to whoever is at the
+ *   keyboard is not the same question as how long a dead HTTP session may hold memory.
+ * - **A fresh `initialize`.** The client saying so itself, which is exact but arrives only from
+ *   clients that re-initialize rather than reconnect. Silence is the one that always arrives.
  */
 export function registerTools(
   server: McpServer,
   tools: readonly ToolDefinition[],
   context: CallContext,
   logger: Logger,
-): string[] {
-  // One pin per server, and a server is one connection — so the identity a conversation settles
-  // on cannot reach another, and stdio (which has no session id to key a map by) is covered by
-  // the same object as everything else.
-  const bound: CallContext = { ...context, pin: createSessionPin(context.identity) };
+  /** Omitted means a conversation never goes stale on its own — the shape every test wants. */
+  idleMs?: number,
+): RegisteredTools {
+  // One pin per conversation, and a new conversation gets a new one: re-creating is the whole of
+  // "this conversation is over", and it leaves the pin's own rules with no reset to be tricked
+  // into. `bound` is re-made with it so handlers read the current pin rather than a captured one.
+  let pin = createSessionPin(context.identity);
+  let bound: CallContext = { ...context, pin };
+  let lastCallAt = Date.now();
+  // Which conversation a running call belongs to. A handler captures the pin it was given, so one
+  // that is still running when its conversation ends is holding a discarded object — and `act_as`
+  // would pin THAT one and report success, leaving the model certain it had an identity while
+  // every later call refused. Counting is cheaper than making forty-one handlers re-read a pin.
+  let conversation = 0;
+  // The one in-flight attempt to pin a signed-in conversation, shared by concurrent callers.
+  let signingIn: Promise<CallToolResult> | undefined;
+
+  const session = context.sessionId === undefined ? {} : { sessionId: context.sessionId };
+
+  const endConversation = async (reason: 'idle' | 'reinitialized'): Promise<void> => {
+    const held = pin.person() !== undefined;
+    pin = createSessionPin(context.identity);
+    bound = { ...context, pin };
+    conversation += 1;
+    signingIn = undefined;
+    if (!held) return;
+
+    // The person is never named here: on an asserted pin it is a claim, and an audit line that
+    // records a claim as a fact is worse than one that records nothing.
+    logger.info('conversation ended; identity forgotten', { reason, ...session });
+    // Given back, not left to expire: the next person cannot open a session while this one holds
+    // the slot, and `act_as` would refuse them by naming somebody they never asked about.
+    await context.impersonation?.release();
+  };
+
+  // `act_as` is the only tool that answers before an identity is pinned — and a deployment that
+  // does not register it cannot require one. With no tenant configured the only tool is
+  // `get_version`, and gating that would leave a server able to answer nothing at all.
+  const identityRequired = tools.some((tool) => tool.name === ACT_AS);
+  const mayAnswer = (): boolean => !identityRequired || pin.person() !== undefined;
+
+  const actAs = tools.find((tool) => tool.name === ACT_AS);
+
+  /**
+   * A **signed-in** conversation pins itself, on the first call that needs it.
+   *
+   * The token already names the person, so making the model call `act_as` to repeat what the
+   * issuer said is a round trip that can only go wrong. It runs here rather than at `initialize`
+   * for two reasons: pinning does real work against Ivanti — a directory lookup, and an
+   * impersonation handshake where that is configured — so a slow or unreachable tenant would fail
+   * the *connection* rather than a call; and a token that matched only on a name has to ask for
+   * confirmation, which needs somewhere to ask.
+   *
+   * `act_as`'s own handler does it, never a second copy: the rules about what a token may match,
+   * what it must confirm, and what it refuses are subtle enough that two implementations would
+   * differ, and the weaker one would be this one. An asserted session is untouched — there is
+   * nothing to pin from but a claim, and a claim has to be made deliberately.
+   *
+   * Returns what `act_as` said when it did not pin, so the caller reports that rather than a
+   * generic refusal; `undefined` means it was not attempted or it worked.
+   */
+  const pinFromToken = async (): Promise<CallToolResult | undefined> => {
+    if (actAs === undefined || pin.identity().provenance !== 'verified') return undefined;
+
+    // One attempt per conversation, shared by concurrent callers — the same shape the Ivanti
+    // session handshake has, and for the same reason: a cold conversation that fired two calls
+    // would otherwise run two lookups, and the loser would be refused for losing.
+    if (signingIn === undefined) {
+      logger.info('resolving the signed-in identity without being asked', {
+        ...session,
+        ...auditFields(pin.identity()),
+      });
+      signingIn = Promise.resolve(actAs.handler({}, bound));
+    }
+
+    const answer = await signingIn;
+    if (mayAnswer()) return undefined;
+
+    // It could not pin: the token names nobody in Ivanti, or matched a record that has to be
+    // confirmed first. Its explanation is the useful one, but the call the caller actually made
+    // did not happen — so it is marked as the failure it is, and said to be about identity rather
+    // than about what they asked for.
+    return {
+      ...answer,
+      isError: true,
+      content: [
+        {
+          type: 'text' as const,
+          text:
+            'Before answering that, this conversation had to work out who you are from the ' +
+            'signed-in token, and could not:',
+        },
+        ...answer.content,
+      ],
+    };
+  };
 
   for (const tool of tools) {
-    server.registerTool(tool.name, tool.config, (args: Record<string, unknown>) => {
+    server.registerTool(tool.name, tool.config, async (args: Record<string, unknown>) => {
+      const at = Date.now();
+      const quiet = idleMs !== undefined && at - lastCallAt >= idleMs;
+      lastCallAt = at;
+      if (quiet) await endConversation('idle');
+
+      // Read after any expiry above, so a call that ends the previous conversation belongs to the
+      // new one rather than being refused by its own arrival.
+      const startedIn = conversation;
+
       logger.info('tool called', {
         tool: tool.name,
-        ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
-        ...auditFields(bound.pin?.identity() ?? context.identity),
+        ...session,
+        ...auditFields(pin.identity()),
       });
-      return tool.handler(args, bound);
+
+      // The gate, at the one place every call passes through. Tool by tool it would be
+      // forgettable, and a tool that forgot would not fail — it would answer, for nobody.
+      if (tool.name !== ACT_AS && !mayAnswer()) {
+        const unresolved = await pinFromToken();
+
+        if (!mayAnswer()) {
+          logger.info('tool refused on identity', {
+            tool: tool.name,
+            reason: 'IdentityRequiredError',
+          });
+          return unresolved ?? errorResult(new IdentityRequiredError().message);
+        }
+      }
+
+      const result = await tool.handler(args, bound);
+
+      // Ended underneath us. The result was computed for a conversation that is over, and for
+      // `act_as` it was computed against a pin nothing reads any more — so it is refused rather
+      // than reported, which is the difference between "call me again" and a silent lie.
+      if (conversation !== startedIn) {
+        logger.info('result discarded; the conversation ended first', { tool: tool.name, ...session });
+        return errorResult(
+          'This conversation ended while that call was running, so its result was discarded. ' +
+            'Call `act_as` again to say who you are helping, then retry.',
+        );
+      }
+
+      return result;
     });
   }
 
-  return tools.map((tool) => tool.name);
+  return {
+    names: tools.map((tool) => tool.name),
+    endConversation: () => endConversation('reinitialized'),
+    mayAnswer,
+  };
 }

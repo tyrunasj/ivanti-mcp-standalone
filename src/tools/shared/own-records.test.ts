@@ -7,7 +7,6 @@ import { OPEN_GATE } from './object-gate.js';
 import { OPEN_ACTIONS } from './action-gate.js';
 import type { Logger } from '../../logger.js';
 import {
-  IdentityRequiredError,
   NotYourRecordError,
   UnscopableObjectError,
   assertOwnRecord,
@@ -17,6 +16,7 @@ import {
   ownershipFields,
   scopeToOwnRecords,
 } from './own-records.js';
+import { IdentityRequiredError } from '../../auth/identity-pin.js';
 import { IvantiApiError } from '../../ivanti/http/errors.js';
 import { resolveObject } from './resolve-object.js';
 import { createSessionPin } from '../../auth/identity-pin.js';

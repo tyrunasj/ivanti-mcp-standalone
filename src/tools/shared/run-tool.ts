@@ -19,13 +19,16 @@ import { RequiredFieldsError } from './explain-required-fields.js';
 import { ObjectNotAllowedError } from './object-gate.js';
 import { ActionNotAllowedError } from './action-gate.js';
 import {
-  IdentityRequiredError,
   NotYourQueueError,
   NotYourRecordError,
   RecordClosedError,
   UnscopableObjectError,
 } from './own-records.js';
-import { IdentityConflictError, VerifiedSessionError } from '../../auth/identity-pin.js';
+import {
+  IdentityConflictError,
+  IdentityRequiredError,
+  VerifiedSessionError,
+} from '../../auth/identity-pin.js';
 import { SubmitRefusedError } from '../../ivanti/service-request/submit.js';
 import {
   AttachmentTypeRefusedError,
