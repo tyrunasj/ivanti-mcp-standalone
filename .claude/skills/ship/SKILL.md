@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Ship the current working-tree changes — run every check, branch, commit, push, open a PR, merge it, and return to the base branch. Use when the user says "ship it", "ship this", or invokes /ship. Accepts an optional branch/topic name and the flags --no-merge, --local, --no-delete-branch.
+description: Ship the current working-tree changes — run every check, branch, commit, push, open a PR, merge it, and return to the base branch. Use when the user says "ship it", "ship this", or invokes /ship. Accepts an optional branch/topic name and the flags --release, --no-merge, --local, --no-delete-branch.
 ---
 
 # Ship
@@ -17,6 +17,7 @@ each step — but do stop and report at any guard below rather than working arou
 | | |
 |---|---|
 | `<topic>` | Optional. Branch becomes `ship/<topic-slug>`. Otherwise derive a slug from the diff. |
+| `--release [bump]` | Bump the version as part of this ship. `bump` is `patch` (default), `minor` or `major`. |
 | `--no-merge` | Open the PR and stop. For work that needs review. |
 | `--local` | No push, no PR: branch, commit, merge back to base with `--no-ff`. Use when there is no remote. |
 | `--no-delete-branch` | Keep the branch after merging. |
@@ -28,7 +29,8 @@ exactly as it was found.
 
 1. **`git rev-parse --git-dir`** succeeds — otherwise there is no repo to ship from.
 2. **The working tree has changes.** `git status --porcelain` non-empty. A clean tree means there
-   is nothing to ship; say so rather than opening an empty PR.
+   is nothing to ship; say so rather than opening an empty PR. **`--release` is the exception**:
+   the bump is itself the change, so a clean tree is a legitimate release-only ship.
 3. **HEAD is not detached.** `git branch --show-current` is non-empty.
 4. **Record the base branch now** — it is the PR target and where you return at the end. Never
    assume `main`; read it.
@@ -58,7 +60,37 @@ commit, no stash.
 Adapt the commands if the repo's `package.json` does not define these scripts, but never silently
 skip a check that exists.
 
-## 3. Branch and commit
+## 3. Bump the version — `--release` only
+
+Skip this entire step without `--release`.
+
+**After the checks, before the commit.** The checks verify the code; the bump is bookkeeping laid
+on a tree that has already passed. Nothing in the suite asserts a literal version, so re-running
+it after the bump would prove nothing that `version:check` does not.
+
+```bash
+npm version patch --no-git-tag-version   # or minor / major — patch unless the user said otherwise
+pnpm version:sync                        # mirrors it into Chart.yaml: version + appVersion
+pnpm version:check                       # the three must now agree, or stop
+```
+
+- **`patch` is the default.** `0.2.1` → `0.2.2`. Use `minor` or `major` only when the user asks
+  for one in this invocation; never infer the bump size from the size of the diff.
+- **One commit, not two.** The bump is staged with the rest of the change by the `git add -A` in
+  the next step. Do not commit it separately.
+- The commit subject and PR title become `Release <version>` — that is what this ship is.
+- If `pnpm version:check` fails, **stop and report**. A half-synced bump on the base branch fails
+  CI for everyone, and the Release workflow refuses it.
+- Adapt if the repo is shaped differently, but never invent: if there is no `version:sync` script
+  or no `version` field in `package.json`, say so and ship without the bump rather than guessing
+  which files hold a version.
+
+**`--release` does not release.** It lands the bump on the base branch; that is all. Publishing is
+the Release workflow (Actions → Release → Run workflow), which reads the version from
+`package.json` and creates the tag itself. Say so in the report, so nobody waits for a tag that
+nothing is going to push.
+
+## 4. Branch and commit
 
 ```bash
 git switch -c ship/<slug>
@@ -75,7 +107,7 @@ git commit
   should not be committed — a stray secret, a build artefact, a scratch file — stop and report
   instead of committing it. `.gitignore` is not a substitute for looking.
 
-## 4. Push and open the PR
+## 5. Push and open the PR
 
 ```bash
 git push -u origin ship/<slug>
@@ -87,7 +119,7 @@ gh pr create --base <base> --head ship/<slug> --title "…" --body "…"
   know — and the PR attribution the session's instructions specify.
 - With `--no-merge`, print the PR URL and stop here.
 
-## 5. Merge
+## 6. Merge
 
 ```bash
 gh pr merge <url> --squash --delete-branch
@@ -100,7 +132,7 @@ gh pr merge <url> --squash --delete-branch
 - If the repo runs CI that must pass first, prefer `--auto` so the merge happens when CI goes
   green, and tell the user it is queued rather than done.
 
-## 6. Return to a usable state
+## 7. Return to a usable state
 
 ```bash
 git switch <base>
@@ -109,11 +141,14 @@ git pull --ff-only
 
 Leaving the user on a deleted branch is the most common way this kind of automation annoys people.
 
-## 7. Report
+## 8. Report
 
 State plainly: the branch, the PR URL, the merge result, and the check results. If anything was
 skipped or fell back (no remote, `gh` missing, merge queued behind CI), say so explicitly — a
 half-completed ship reported as success is worse than a clear failure.
+
+With `--release`, also state the new version and that **nothing is published yet** — name the
+Release workflow as the next step.
 
 ## Guard rails
 
