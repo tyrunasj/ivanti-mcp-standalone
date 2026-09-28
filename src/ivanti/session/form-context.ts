@@ -48,6 +48,30 @@ export interface ResolvedForm {
    * "Customer is required" is only useful alongside this.
    */
   linkFields: Record<string, string>;
+  /**
+   * The fields a required rule governs — NOT the fields required right now.
+   *
+   * Ivanti's requirements are conditional on the record's own state: measured on this tenant, an
+   * incident reaches `Logged` with none of these set and `Active` only with `Category`, `Owner`
+   * and `OwnerTeam`, and clearing the owner while it sits at `Active` is refused. The form ships
+   * the field LIST (`BusObjectRequiredRules`) and not the conditions, so this answers "which of
+   * these can become required" and anything reading it must say so rather than implying the
+   * stronger claim. It still beats the alternative, which is learning it from a refusal that
+   * names one field at a time, after the write.
+   */
+  requiredRuleFields: readonly string[];
+  /**
+   * The fields a read-only rule governs — conditional in exactly the way `requiredRuleFields` is,
+   * which cost a release to learn.
+   *
+   * It was read as "these cannot be written" and used to refuse writes locally. That refused a
+   * CORRECT create: `BusObjectReadOnlyRules` on this tenant's problem names `Subject`,
+   * `Description` and `Category` — and `Category` is `nullable: false`, so the one field the
+   * schema calls mandatory was also on the read-only list. Ivanti accepted all three; the guard
+   * did not. A rule that governs a field says nothing about whether it applies right now, and the
+   * conditions are not in this payload for either list.
+   */
+  readOnlyFields: readonly string[];
 }
 
 export interface FormContext {
@@ -77,7 +101,19 @@ interface FormViewData {
     };
     /** `ProfileLink_RecID` → `ProfileLink`, the other way round from how it is written. */
     LinkIdMap?: Record<string, string>;
+    /** Field names a required rule governs; the rules' CONDITIONS are not in this payload. */
+    BusObjectRequiredRules?: unknown;
+    BusObjectReadOnlyRules?: unknown;
   };
+}
+
+/**
+ * Both rule keys arrive as a plain array of field names — but they are Ivanti's, so an absent key,
+ * a null and a payload shaped some other way all have to read as "this form says nothing" rather
+ * than throwing. A form that cannot answer is the ordinary case, not a failure.
+ */
+function fieldNameList(value: unknown): readonly string[] {
+  return Array.isArray(value) ? value.filter((name): name is string => typeof name === 'string' && name !== '') : [];
 }
 
 export function createFormContext(
@@ -168,6 +204,8 @@ export function createFormContext(
       displayNames,
       fieldLabels,
       linkFields,
+      requiredRuleFields: fieldNameList(view.formDef?.BusObjectRequiredRules),
+      readOnlyFields: fieldNameList(view.formDef?.BusObjectReadOnlyRules),
     };
   };
 

@@ -81,3 +81,61 @@ describe('field labels', () => {
     expect(form?.displayNames.description).toBe('Symptom');
   });
 });
+
+/**
+ * The rule lists Ivanti ships beside the fields, which nothing read until 2026-09-17.
+ *
+ * They answer different questions and must not be conflated: the read-only list is exact, while
+ * the required list names the fields a rule GOVERNS and never the condition.
+ */
+describe('required and read-only rules', () => {
+  const withRules = (extra: Record<string, unknown>) => ({
+    FormMeta: { Name: 'Incident.Header', Controls: {} },
+    TableMeta: { TableRef: 'Incident#', ValidatedFields: {}, Fields: {} },
+    ...extra,
+  });
+
+  it('reads both lists off the form', async () => {
+    const forms = createFormContext(
+      session(withRules({
+        BusObjectRequiredRules: ['Category', 'Owner', 'OwnerTeam', 'Status'],
+        BusObjectReadOnlyRules: ['Priority', 'CreatedBy'],
+      })),
+      workspaces,
+      logger(),
+    );
+
+    const form = await forms.get('Incident#');
+
+    expect(form?.requiredRuleFields).toEqual(['Category', 'Owner', 'OwnerTeam', 'Status']);
+    expect(form?.readOnlyFields).toEqual(['Priority', 'CreatedBy']);
+  });
+
+  /** A form that says nothing is the ordinary case for a role with a narrow workspace. */
+  it('answers empty rather than throwing when the keys are absent', async () => {
+    const form = await createFormContext(session(withRules({})), workspaces, logger()).get('Incident#');
+
+    expect(form?.requiredRuleFields).toEqual([]);
+    expect(form?.readOnlyFields).toEqual([]);
+  });
+
+  it('ignores anything in them that is not a field name', async () => {
+    const form = await createFormContext(
+      session(withRules({ BusObjectRequiredRules: ['Owner', '', null, 7, { Name: 'Status' }] })),
+      workspaces,
+      logger(),
+    ).get('Incident#');
+
+    expect(form?.requiredRuleFields).toEqual(['Owner']);
+  });
+
+  it('treats a payload that is not a list as silence, not as a failure', async () => {
+    const form = await createFormContext(
+      session(withRules({ BusObjectReadOnlyRules: { Priority: true } })),
+      workspaces,
+      logger(),
+    ).get('Incident#');
+
+    expect(form?.readOnlyFields).toEqual([]);
+  });
+});

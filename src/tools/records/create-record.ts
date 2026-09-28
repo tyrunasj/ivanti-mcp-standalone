@@ -21,6 +21,8 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { projectWritten } from '../shared/project-written.js';
 import { connectionFor } from '../shared/connection-for.js';
+import { assertKnownFields } from '../shared/known-fields.js';
+import { sessionStampedFields, sessionStampNote } from '../shared/session-stamp.js';
 
 export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -31,8 +33,8 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
       'FIELD NAMES ARE NOT GUESSABLE — an incident\'s description is `Symptom`. Call ' +
       (registersFormTools(deps)
         ? 'get_object_metadata first, and get_pick_list_values for any field it marks `validated`: '
-        : 'get_object_metadata first. A field it marks `validated` takes a value from a list: ') +
-      'those take a value from a list, and this tool refuses one that is not on it rather than ' +
+        : 'get_object_metadata first. A field it marks `validated` ') +
+      'takes a value from a list, and this tool refuses one that is not on it rather than ' +
       'letting Ivanti accept the write and store nothing.\n\n' +
       'A PERSON IS NOT A NAME. A link is always a PAIR — `<Link>_RecID` holding the target\'s ' +
       'RecId and `<Link>_Category` naming the object it lives in — but WHICH link is which ' +
@@ -48,7 +50,8 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         ? 'call. link_records is for records that already exist.\n\n'
         : 'call.\n\n') +
       'The record is read back before this reports success. A write Ivanti accepted but did not ' +
-      'store is reported as a failure.' +
+      'store is reported as a failure.\n\n' +
+      'THE CUSTOMER IS NOT THE ASSIGNEE: ivanti://reference/write-recipes.' +
       (deps.ownRecordsOnly
         ? '\n\nA REQUEST GOES TO THE CATALOG; A FAULT IS AN INCIDENT. "I need a laptop / access" ' +
           'is a request — check list_request_offerings first, for the questions, routing and ' +
@@ -105,6 +108,12 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // `deps.connection` those ran as the service account while the write itself went out on the
         // person's SID — so a value only an admin's form offers was accepted, attached to its RecId
         // and stored, then confirmed, and reported as validated for a role that never offers it.
+        // Before the request, and before the picklist work: the schema is already in hand, so a
+        // field this object does not have is a caller's typo rather than a round trip. The form is
+        // cached and comes along to translate a LABEL written where the field was meant.
+        const writeForm = await connection.forms.get(toObjectId(entity.name)).catch(() => undefined);
+        assertKnownFields(Object.keys(args.fields), entity, writeForm);
+
         const resolved = await resolveValidatedWrite({
           connection,
           logger: deps.logger,
@@ -135,7 +144,7 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
               .get(toObjectId(entity.name))
               .catch(() => undefined);
             throw (
-              explainRequiredFields(error, form) ??
+              explainRequiredFields(error, form, Object.keys(args.fields)) ??
               explainFieldError(error, entity, referencedFieldNames({ fields: Object.keys(body) })) ??
               error
             );
@@ -161,10 +170,18 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         deps.logger.info('ivanti record created', { object: entitySet });
 
+        // Named from the stored record, never from a list of field names: `Owner` is this
+        // tenant's spelling of the assignment and another tenant's is its own.
+        const acting = context.impersonation?.session()?.loginId ?? context.pin?.person()?.loginId;
+        const stamped = sessionStampedFields(created, Object.keys(args.fields), acting);
+
         return jsonResult({
           object: entitySet,
           recId,
           ...(Object.keys(owner).length === 0 ? {} : { filedFor: context.pin?.person()?.displayName }),
+          ...(stamped.length === 0 || acting === undefined
+            ? {}
+            : { stampedFromTheSession: stamped, note: sessionStampNote(stamped, acting) }),
           record: projectWritten(created, args.returnFields, Object.keys(args.fields)),
         });
       }),

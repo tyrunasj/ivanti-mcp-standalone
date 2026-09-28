@@ -244,8 +244,17 @@ on an `odata` credential stood at **2,013** — over the cap, and untested, beca
 whether the identity paragraph names an account and adds a sentence of its own. `DEPLOYMENTS` now
 crosses mode × tier × impersonation, and the room for the new rule was bought by tightening three
 existing paragraphs rather than by raising the number. The identity gate's sentence cost 20 more
-and was paid for the same way, out of the `odata` paragraph: worst case is **1,962 of 2,000**, at
-`full` / `session` / impersonating.
+and was paid for the same way, out of the `odata` paragraph.
+
+**Read the widest deployment off the measurement, not off this paragraph — twice now it has been
+the one nobody expected.** Worst case is **1,963 of 2,000**, at `full` / `odata` / *no*
+impersonation: the tier that adds a sentence of its own beats the one that names an account, so
+`full` / `session` / impersonating — recorded here as the worst case until 2026-09-17, and wrong
+by then — is 1,961. The rule *"Never name a tool to a person; ask in plain words"* was added the
+same day for a net **-1**, paid by making the field ladder's last rung parallel (`else the key`)
+and dropping an emphasis the sentence around it already carried twice. It closed the one leak the
+narration rule had: tool names were not in its list, so a model obeyed it and still opened with
+*"I need to call `act_as`"*.
 
 ## Container
 
@@ -564,6 +573,38 @@ translated. All of it is per object *and* per form: `ProfileLink` is "Customer" 
 object's field names as the general rule — `get_link_fields` and `get_object_metadata` answer for
 the object at hand.
 
+**The form ships the required and read-only rules, and they are different in kind.**
+`FindFormViewData` returns `BusObjectRequiredRules` (13 fields on this tenant's incident) and
+`BusObjectReadOnlyRules` (20, including `Priority`), which `form-context.ts` now reads alongside
+the validated fields — no extra call, the form was already being fetched. **Required is a list of
+the fields a rule GOVERNS, never the condition**, so `get_object_metadata` reports
+`required: 'sometimes'` and `readOnly: 'sometimes'`, and says the conditions are not knowable; the
+schema's own `nullable: false` stays `required: true`, which is absolute. **Both lists are
+conditional, and reading the read-only one as absolute cost a working feature.** A guard was built
+on it that refused a write locally — and it refused a CORRECT create: `BusObjectReadOnlyRules` on
+this tenant's problem names `Subject`, `Description` and `Category`, Ivanti accepts all three, and
+`Category` is the one field that object's schema calls mandatory. The guard is gone; the flag
+stays as information. Neither list says what applies to the record in hand, so read a value back
+rather than assuming yours was stored.
+**A refusal names only what Ivanti checked before stopping** — measured at one field on one create
+and three on another — so a required-field error now carries the whole governed list, because
+"fix what it named, retry" otherwise loops.
+
+**A field name is checked against the schema BEFORE the write, not explained after it.**
+`assertKnownFields` refuses a name the object does not have, using the metadata `resolveObject`
+already fetched — `explainFieldError` had the same list and consulted it only in the `catch`. Two
+kinds of wrong name get different answers, because the fixes differ: a name that is nothing gets
+the nearest real fields, and a name that is the tenant's LABEL gets the field it labels
+(`Description` → *write `Symptom`*), since "no such field" would read as "this object cannot hold
+a description". Suggestions fall back to edit distance, because `suggestNames` ranks by
+containment — right for `Type` → `CIType`, blind to `Sympton` → `Symptom`. It never refuses on an
+empty field list: an unknown entity set makes Ivanti fabricate a field-less type, and refusing
+every field of it would bury the real error, which is the object name. **This exists because the
+rule was already written twice — in the manifest and in the server instructions — and a caller
+still wrote `Status` onto an `externalcontact` after fetching the 94 fields it does have.** A
+third copy of a rule that lost twice was the weaker fix; the check that cannot be skipped was the
+stronger one.
+
 **Ivanti's write refusals speak a different language.** A required-field message names the
 *display* name (`Incident.Description` is `Symptom`) and sometimes names a link rather than a
 field (`Incident.Customer` is `ProfileLink_RecID` + `ProfileLink_Category`).
@@ -701,3 +742,14 @@ fires only on an explicit DELETE. Being in-memory, replicas would need sticky ro
   records into none with no error. `assertOrderBy` refuses it locally, the way
   `assertSupportedFilter` does — the two are the only client-side refusals, and both exist because
   Ivanti's answer is a successful empty result.
+- **Every tool's arguments are CLOSED, and a zero-argument tool is the one exception.**
+  Zod parses non-strictly and the SDK hands the handler the parsed value, so an argument spelled
+  wrongly never arrives and nothing says it went missing. `orderby` for `orderBy` therefore
+  returned rows in Ivanti's own order while `assertOrderBy` guarded a parameter that never
+  reached it — the same failure as a silently-dropped `$filter` function, one layer higher.
+  `strictInput` closes the shape in `defineTool`, so a tool added later is covered without anyone
+  remembering; the refusal names the near miss (`z.strictObject(shape, { error })`, since
+  `.strict()` ignores its parameters). `get_version` stays open because clients send a dummy
+  property to a tool that takes nothing. **Read a tool's arguments with `declaredArguments`, never
+  by enumerating `inputSchema`** — that is a raw shape for one tool and a `ZodObject` for the rest,
+  and the guard that enumerated it measured zero parameters and passed.

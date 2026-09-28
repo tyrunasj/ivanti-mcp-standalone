@@ -2,6 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { describe, expect, it, vi } from 'vitest';
+import { formFixture } from './form.fixture.js';
 import type { Logger } from '../../logger.js';
 import type { IvantiSession } from './asmx-session.js';
 import { createFormContext } from './form-context.js';
@@ -117,15 +118,12 @@ describe('createFormContext', () => {
 });
 
 describe('readPickLists', () => {
-  const form = {
+  const form = formFixture({
     layoutName: 'IncidentLayout.SD',
     viewName: 'formView',
     formName: 'Incident.Admin.Header',
     validatedFields: FORM.formDef.TableMeta.ValidatedFields,
-    displayNames: {},
-    fieldLabels: {},
-    linkFields: {},
-  };
+  });
 
   it('decodes columns into values, taking the lowest index as the value', async () => {
     const { session: live } = session({

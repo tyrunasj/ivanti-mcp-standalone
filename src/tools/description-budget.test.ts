@@ -7,6 +7,7 @@ import { connectionFixture } from '../ivanti/connection.fixture.js';
 import type { Logger } from '../logger.js';
 import { buildInstructions } from '../server/instructions.js';
 import { selectTools, type ToolContext } from './register-tools.js';
+import { declaredArguments } from './strict-input.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -109,8 +110,11 @@ function manifest(config: (typeof MODES)[number][1], canImpersonate = true) {
   return selectTools(config, context).map((tool) => ({
     name: tool.name,
     length: tool.config.description.length,
+    // `declaredArguments`, not `Object.entries` on the schema: the shapes are CLOSED now, so the
+    // schema is a ZodObject and enumerating it yields zod's own internals — zero parameters, no
+    // failures, and a budget nobody was measuring.
     parameters: Object.entries(
-      (tool.config.inputSchema ?? {}) as Record<string, { description?: string }>,
+      declaredArguments(tool.config.inputSchema) as Record<string, { description?: string }>,
     ).map(([parameter, schema]) => ({
       parameter,
       // Zod carries the text on the schema itself; `.describe()` is what puts it there.

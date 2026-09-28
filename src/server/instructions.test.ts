@@ -87,7 +87,7 @@ describe('buildInstructions', () => {
 
     const label = instructions.indexOf('label get_object_metadata gives it');
     const display = instructions.indexOf('else its display name');
-    const key = instructions.indexOf('only if it has neither, the key');
+    const key = instructions.indexOf('else the key');
 
     // Each present, and in this order — a ladder quoted out of order teaches the wrong fallback.
     expect(label).toBeGreaterThan(-1);
