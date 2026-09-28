@@ -1,244 +1,202 @@
 # Deployment
 
-Three shapes, one build. A tagged release publishes a multi-arch image, a Helm chart
-and a self-contained tarball from the same commit, so all three are the same code.
+Three shapes, one build. A release publishes a multi-arch image, a Helm chart and a self-contained
+tarball from the same commit.
 
 | | Runs as | Transport | Get it with |
 |---|---|---|---|
 | **Plain Node host** | a systemd service | stdio or HTTP | the release tarball |
-| **Container** | `docker run` / compose | either | `tyrunas/ivanti-mcp` |
+| **Container** | `docker run` / compose | either | `tyrunas/ivanti-mcp` on Docker Hub |
 | **Kubernetes** | a Deployment | HTTP only | `oci://ghcr.io/tyrunasj/charts/ivanti-mcp` |
 
-The image is on Docker Hub and the chart is on ghcr.io, which is deliberate. `helm push`
-derives the repository from the chart name, so pushing `ivanti-mcp` into the `tyrunas`
-namespace would target `tyrunas/ivanti-mcp:<version>` — the coordinate the image already
-occupies — and the chart would silently replace it. Docker Hub is only `user/repo`, with
-no free namespace to move to; ghcr.io nests, so the chart lives under `charts/` and needs
-no renaming.
+**The image and the chart live in different registries on purpose.** `helm push` derives the
+repository from the chart name, so pushing `ivanti-mcp` to Docker Hub's `tyrunas` namespace would
+overwrite the image; ghcr.io nests, so the chart lives under `charts/`.
 
-**The ghcr package must be made public once, by hand.** A package pushed by
-`GITHUB_TOKEN` is private by default, so an anonymous `helm pull` gets a 403 until
-someone flips it: *the repository → Packages → `charts/ivanti-mcp` → Package settings →
-Change visibility → Public*. It is a one-time setting; later pushes keep it. The image on
-Docker Hub is already public.
+**The chart package is private** (checked 2026-09-28), as every package pushed by `GITHUB_TOKEN`
+starts. Until it is made public, an anonymous `helm pull` or `helm install` answers 403 — which is
+also why the home-lab deploy reads the chart from git. Making it public is a one-time setting:
+*repository → Packages → `charts/ivanti-mcp` → Package settings → Change visibility → Public*. The
+Docker Hub image is public.
 
-Whatever the shape, two rules hold. **One instance serves one tenant** — staging, UAT
-and production are three deployments, not three tenants in one process. And **one
-instance serves one audience**: `full` and `enduser` are different products, and
-mixing them is how an employee ends up holding an analyst's tool surface.
+Everywhere: **one instance serves one tenant** (staging, UAT and production are three deployments)
+and **one audience** (`full` and `enduser` are different products — mixing them hands an employee
+an analyst's tools). Every setting is in `.env.example`; an incomplete configuration exits **78**
+and lists every problem at once.
 
-Configuration is the same everywhere and is documented in `.env.example`. The server
-fails closed: an incomplete configuration exits **78** (`EX_CONFIG`) and prints every
-problem at once rather than the first.
-
----
+In the commands below, set `VERSION` to a release from
+<https://github.com/tyrunasj/ivanti-mcp-standalone/releases>.
 
 ## 1. Plain Node host
 
-Needs Node 22 and nothing else — no pnpm, no compiler, no network access to a registry.
+Node 22 and nothing else — no pnpm, no compiler, no registry access.
 
 ```bash
-curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v0.1.0/ivanti-mcp-0.1.0.tar.gz
+curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v$VERSION/ivanti-mcp-$VERSION.tar.gz
 sudo install -d -o ivanti-mcp -g ivanti-mcp /opt/ivanti-mcp
-sudo tar xzf ivanti-mcp-0.1.0.tar.gz --strip-components=1 -C /opt/ivanti-mcp
+sudo tar xzf ivanti-mcp-$VERSION.tar.gz --strip-components=1 -C /opt/ivanti-mcp
 sudo chown -R ivanti-mcp:ivanti-mcp /opt/ivanti-mcp
 node /opt/ivanti-mcp/dist/index.js
 ```
 
-The tarball carries its own production dependencies, laid out as **real directories**
-rather than pnpm's default symlink store — that store points into a content-addressed
-cache and does not survive being moved to another machine.
+The tarball carries its production dependencies as real directories — pnpm's symlink store does not
+survive moving machines. As a service: copy `deploy/systemd/ivanti-mcp.service` to
+`/etc/systemd/system/`, with configuration in `/etc/ivanti-mcp/env` (`0640`, `root:ivanti-mcp`). The
+unit runs unprivileged, read-only, with no capabilities and a syscall filter.
 
-For a service, copy `deploy/systemd/ivanti-mcp.service` to `/etc/systemd/system/` and
-put the configuration in `/etc/ivanti-mcp/env` (mode `0640`, owned `root:ivanti-mcp`).
-The unit mirrors the container's posture: unprivileged, read-only filesystem, no
-capabilities, syscall-filtered.
+- **Set `STDIO_TRANSPORT_ON=false` for a service** — systemd hands it a stdin, and stdio would wait
+  on it forever.
+- **`MemoryDenyWriteExecute` is deliberately not set** — Node's JIT needs writable-then-executable
+  pages, and the failure looks like a segfault.
+- **`RestartPreventExitStatus=78`** — a configuration error will still be one in five seconds.
 
-**Set `STDIO_TRANSPORT_ON=false` for a service.** systemd hands the process a stdin,
-and the stdio transport will sit on it waiting for a JSON-RPC stream that never comes.
-
-Two things the unit deliberately does *not* do:
-
-- **`MemoryDenyWriteExecute` is not set.** Node's JIT maps pages writable and then
-  executable; under that directive the process dies in a way that looks like a
-  segfault rather than a policy denial.
-- **`RestartPreventExitStatus=78`.** A configuration error will be a configuration
-  error again in five seconds; restarting just fills the journal.
-
-Rebuilding from source instead:
-
-```bash
-pnpm install --frozen-lockfile && pnpm build && pnpm start
-```
-
----
+From source: `pnpm install --frozen-lockfile && pnpm build && pnpm start`.
 
 ## 2. Container
 
 ```bash
-docker pull tyrunas/ivanti-mcp:0.1.0
-```
-
-Multi-arch (`linux/amd64`, `linux/arm64`), distroless, runs as uid 65532. **55.4 MB to pull** on
-amd64 and 55.0 MB on arm64, measured on the published manifest — 52.6 MB of that is the distroless
-Node base, so the server itself is the small part. The ~235 MB that `docker images` reports is the
-uncompressed on-disk size, not the download.
-There is no shell and no package manager in it — nothing to exec into and nothing to
-install from, which is the point.
-
-```bash
 docker run -d --name ivanti-mcp --restart unless-stopped \
-  --env-file .env \
-  -p 3000:3000 \
+  --env-file .env -p 3000:3000 \
   -v "$PWD/secrets:/run/secrets:ro" \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
-  tyrunas/ivanti-mcp:0.1.0
+  tyrunas/ivanti-mcp:$VERSION
 ```
 
-Images are signed with cosign, keylessly, so there is no key to rotate or leak:
+Multi-arch (`amd64`, `arm64`), distroless, uid 65532, no shell and no package manager. **~55 MB to
+pull**, of which 52.6 MB is the distroless Node base; the ~235 MB `docker images` prints is the
+uncompressed size. Images are signed keylessly with cosign:
 
 ```bash
-cosign verify tyrunas/ivanti-mcp:0.1.0 \
+cosign verify tyrunas/ivanti-mcp:$VERSION \
   --certificate-identity-regexp='^https://github.com/tyrunasj/ivanti-mcp-standalone/' \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com
 ```
 
-Tags: `1.2.3`, `1.2`, `1` and `latest` for a final release; a prerelease publishes its
-exact version only, so nobody pulls an rc by accident. Every `main` build also pushes
-`main` and `sha-<short>`. Pin a digest in production.
+Tags: `1.2.3`, `1.2`, `1` and `latest` for a release; a prerelease publishes its exact version only.
+Every `main` build also pushes `main` and `sha-<short>`. Pin a digest in production.
 
-Three things that bite, all of them recorded in `notes.md` after they bit:
+Three things that bite, all recorded in `notes.md`:
 
-- **`MCP_BIND` must be `0.0.0.0` inside a container.** Loopback there is the
-  container's own, and the port publishes nothing.
-- **A mounted secret keeps its host ownership**, and the image runs as 65532. A file
-  written by your own account at mode 600 is unreadable inside, and the server exits
-  78 with `EACCES` — which reads like a missing file rather than a permission.
-- **The tenant hostname must resolve *inside* the container.** Split-horizon DNS has
-  handed a container a LAN address it could not route to, failing every startup probe
-  as a connection error. Pin it with `--add-host`.
+- **`MCP_BIND=0.0.0.0` inside a container** — its loopback is its own.
+- **A mounted secret keeps its host ownership**, and the image runs as 65532: a mode-600 file you
+  own is unreadable inside, and the exit-78 `EACCES` reads like a missing file.
+- **The tenant hostname must resolve inside the container** — split-horizon DNS has handed one a LAN
+  address it could not route to. Pin it with `--add-host`.
 
----
+### How the image is built
+
+Everything is in `docker/` (`Dockerfile`, `compose.yaml`, `healthcheck.mjs`), but the **build
+context is the repository root**, and `.dockerignore` stays there:
+
+```bash
+docker build -f docker/Dockerfile -t ivanti-mcp .
+docker compose -f docker/compose.yaml up
+```
+
+Three stages: build → production dependencies → distroless runtime. Alpine is not smaller —
+`node:22-alpine` is 57.7 MB compressed and brings a shell and a package manager. `compose.yaml`
+builds from source and is for working on the server; to run a published build with compose, the
+Handbook's configurator emits one pinned to the image.
+
+- **Dependencies install with `--node-linker=hoisted`**, because pnpm's symlinked `node_modules`
+  does not survive a `COPY` between stages.
+- **The dependency stage prunes `*.d.ts`, `*.md` and `*.map`** (10 MB of 28) — nothing a running
+  process reads, since this image does not pass `--enable-source-maps`. Licence files stay.
+  `scripts/release-tarball.sh` mirrors the prune, which is why the tarball is ~3 MB.
+- **`package.json` ships next to `dist/`** — the server reads its version from it and refuses to
+  start without it.
+- **The health check is a Node script**, since there is no shell or curl. It exits 0 when HTTP is
+  off: reporting a stdio deployment unhealthy for running as configured would be worse than not
+  checking.
+- Verified on Docker Desktop on macOS (arm64) and Docker 29.1.3 on Ubuntu 26.04 (x86_64).
 
 ## 3. Kubernetes
 
 ```bash
 helm install ivanti-mcp oci://ghcr.io/tyrunasj/charts/ivanti-mcp \
-  --version 0.1.0 \
+  --version $VERSION \
   --set server.publicUrl=https://mcp.example.com/mcp \
   --set 'server.trustedOrigins={https://claude.ai}' \
   --set ivanti.baseUrl=https://your-tenant.example.com \
   --set secrets.existingSecret=ivanti-mcp-secrets
 ```
 
-The chart forces `STDIO_TRANSPORT_ON=false`, `HTTP_TRANSPORT_ON=true` and
-`MCP_BIND=0.0.0.0` — none of those is a choice in a pod, so none of them is a value.
+(Anonymous access needs the chart package made public — see the top of this page.)
 
-**It refuses to render rather than letting you find out later.** The server exits 78 on
-a bad configuration; the chart moves that failure earlier still, to `helm install`:
+The chart forces `STDIO_TRANSPORT_ON=false`, `HTTP_TRANSPORT_ON=true` and `MCP_BIND=0.0.0.0` — none
+is a choice in a pod. **It refuses to render** what the server would refuse to start with, moving
+the failure to `helm install`:
 
 | Refused | Because |
 |---|---|
 | no `server.publicUrl`, or one with a trailing slash | compared verbatim against the token audience |
-| no `server.trustedOrigins` | origin validation is what stops DNS rebinding |
-| `replicaCount > 1` without `sessionAffinity.enabled` | see below |
-| `mode=enduser` with an empty allowlist | fail-closed, but almost certainly not what you meant |
-| `authMode=oauth` with no issuer | discovery happens at boot, so this fails at boot |
-| `authMode=none` with an ingress enabled | publishes the whole tool surface unauthenticated |
+| no `server.trustedOrigins` | origin validation stops DNS rebinding |
+| `replicaCount > 1` without `sessionAffinity.enabled` | sessions are in memory — below |
+| `mode=enduser` with an empty allowlist | fail-closed, but almost certainly not meant |
+| `authMode=oauth` with no issuer | discovery happens at boot |
+| `authMode=none` with an ingress | publishes the tool surface unauthenticated |
 
-### Replicas
-
-**Default 1, and that is not laziness.** HTTP sessions live in memory — one `McpServer`
-per `Mcp-Session-Id`, created on `initialize`. Scale to two and roughly half of every
-conversation's requests land on a pod that has never heard of that session. It presents
-as intermittent client bugs, which is the worst way for it to present.
-
-More than one replica needs consistent hashing on that header at the ingress. The chart
-will not let you set `replicaCount: 2` without saying so explicitly:
-
-```bash
---set replicaCount=3 --set sessionAffinity.enabled=true
-```
-
-which adds `nginx.ingress.kubernetes.io/upstream-hash-by: "$http_mcp_session_id"`.
-Confirm your ingress controller honours it; the chart cannot.
-
-### Secrets
-
-Use `secrets.existingSecret` with keys `ivanti-api-key` and, for bearer auth,
-`bearer-token`. They are mounted at `/run/secrets` with `defaultMode: 0400`, and the
-pod sets `fsGroup: 65532` so the image's own user can read them — the `EACCES` trap
-from the container section, closed by default.
-
-`secrets.create=true` exists for development and puts the values in Helm history,
-where `helm get values` will show them.
-
-### Probes
-
-`/health` is unauthenticated and always answers 200, so liveness and readiness are
-plain `httpGet` — which is also the only option, since a distroless image has no curl.
-The startup probe is generous (two minutes by default) because boot does real network
-work: it walks the tenant's base paths against `$metadata` and opens the ASMX session.
-
----
+- **One replica by default.** Sessions live in memory, one `McpServer` per `Mcp-Session-Id`; with
+  two pods about half of each conversation lands on one that has never seen it, which looks like
+  intermittent client bugs. More needs consistent hashing on that header:
+  `--set replicaCount=3 --set sessionAffinity.enabled=true` adds
+  `nginx.ingress.kubernetes.io/upstream-hash-by: "$http_mcp_session_id"` — confirm your ingress
+  honours it.
+- **Secrets:** `secrets.existingSecret` with keys `ivanti-api-key` and, for bearer auth,
+  `bearer-token`, mounted at `/run/secrets` (`0400`) with `fsGroup: 65532` so the image's user can
+  read them. `secrets.create=true` is for development — it puts the values in Helm history.
+- **Probes:** `/health` is unauthenticated and always 200, so liveness and readiness are plain
+  `httpGet`. The startup probe allows two minutes, because boot probes the tenant and opens the
+  ASMX session.
 
 ## Releasing
 
-**Releasing and deploying are two buttons.** This section is the first one: an image on
-Docker Hub, a chart on ghcr.io, a tarball on the GitHub release. Nothing reaches a
-cluster until somebody deploys it.
+**Releasing and deploying are separate buttons.** Releasing publishes an image to Docker Hub, a
+chart to ghcr.io and a tarball to the GitHub release; nothing reaches a cluster until it is deployed.
 
-`package.json` is the only place a version is written by hand. The tag is an **output**
-of the release, not an input to it — pushing a tag yourself now triggers nothing.
+`package.json` is the only place a version is written. `pnpm version:sync` mirrors it into
+`Chart.yaml` (`version` and `appVersion`), and `pnpm version:check`, run on every CI build, fails if
+the three disagree. **The tag is an output of the release** — pushing one by hand triggers nothing.
 
 ```bash
-# One version, three files. Bump package.json, then sync the chart:
-npm pkg set version=0.3.0
-pnpm version:sync                      # writes Chart.yaml version + appVersion
-git commit -am "Release 0.3.0" && git push
+/ship --release                 # bumps the patch, syncs the chart, PR, merge to main
+# Actions → Release             (this repo)        image + chart + tarball, then the tag
+# Actions → deploy-ivanti-mcp   (k3s-home-lab)     moves targetRevision; ArgoCD syncs
 ```
 
-Then **Actions → Release → Run workflow**. It reads `package.json`, refuses if that
-version has already been released, runs **the same checks CI runs** — they are one
-list, in `.github/actions/checks`, shared by both so the release gate cannot drift
-into a weaker subset of the pull-request gate — then publishes and creates the tag
-and the GitHub Release itself at the end:
+The **Release** workflow (`workflow_dispatch` only) reads `package.json`, refuses a version already
+released, runs the same checks as CI, publishes, and **creates the tag last**, at the commit it built
+and signed — so a run that dies halfway retries by pressing the button again instead of leaving an
+orphan tag. Every `docker/metadata-action` tag carries an explicit `value=`: its semver patterns read
+`github.ref_name`, which on a manual run is the branch, and the image would publish as `main`. A
+prerelease (`0.3.0-rc.1`) publishes its exact version only.
 
-| | Version comes from |
+| Artifact | Version from |
 |---|---|
-| `tyrunas/ivanti-mcp:0.3.0` (+ `0.3`, `0`, `latest`) | `package.json` |
-| `ivanti-mcp-0.3.0.tgz`, the Helm chart, pushed OCI | `Chart.yaml`, kept in step by `version:sync` |
-| `ivanti-mcp-0.3.0.tar.gz`, attached to the GitHub release | `package.json`, via `release-tarball.sh` |
-| the tag `v0.3.0` and the release | `package.json` |
+| `tyrunas/ivanti-mcp:<v>` (+ `<major.minor>`, `<major>`, `latest`) | `package.json` |
+| the chart, pushed OCI | `Chart.yaml`, kept in step by `version:sync` |
+| `ivanti-mcp-<v>.tar.gz` on the release | `package.json`, via `release-tarball.sh` |
+| the tag `v<v>` and the GitHub release | `package.json` |
 
-`pnpm version:check` runs on every CI build and fails if the three disagree, so a
-half-finished bump is caught on `main` rather than at release time.
+**CI and Release share one check list**, `.github/actions/checks`. It used to be written twice, and
+the release ran a subset that skipped `check:examples` and `check:licenses` — which validate two
+files the tarball ships. It is a composite action, not a reusable workflow, because the release
+needs the `dist/` the checks leave behind. Every check runs even after one fails.
 
-The tag is created **last**, at the commit that was built and signed. A run that dies
-halfway leaves a published image and no tag, which retries by pressing the button
-again; tagging first would leave an orphan tag to delete before a retry was possible.
+**`main` is protected, admins included.** A PR is required; `Checks` and `Image` must be green; the
+branch must be up to date; force-pushes and deletions are refused; there is no bypass.
 
-A prerelease version (`0.3.0-rc.1`) publishes its exact version only — no `latest`, no
-moving major/minor tags — so nobody pulls a release candidate by accident.
-
-Repository secrets required: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (a Docker Hub
-access token with Read/Write on `tyrunas/ivanti-mcp`).
-
----
+Repository secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (Read/Write on `tyrunas/ivanti-mcp`).
 
 ## Deploying to k3s-home-lab
 
-The cluster runs this through ArgoCD, and **the release above does not touch it**.
-`argocd-apps/ivanti-mcp.yaml` in `tyrunasj/k3s-home-lab` is a multi-source Application:
-the chart from this repo at a release **tag**, the values from that repo at `main`.
-(The chart comes from git rather than the OCI package because
-`ghcr.io/tyrunasj/charts/ivanti-mcp` is private and ArgoCD holds no GHCR credential.)
+The cluster runs this through ArgoCD, and **releasing does not touch it**. `argocd-apps/ivanti-mcp.yaml`
+in `tyrunasj/k3s-home-lab` is a multi-source Application: the chart from this repo at a release
+**tag** (from git, because the ghcr package is private), the values from that repo at `main`.
 
-Deploying is **Actions → deploy-ivanti-mcp → Run workflow** in that repo, with a tag or
-nothing at all for the latest release. It verifies that `Chart.yaml` at that tag agrees
-with the tag — `appVersion` is the deployed image tag, since the chart's `values.yaml`
-leaves `image.tag` empty — then moves `targetRevision` and commits to `main`. ArgoCD
-(automated, `selfHeal`, `prune`) takes it from there.
-
-Values-only changes never come through here: edit
+Deploying is **Actions → deploy-ivanti-mcp → Run workflow** there, with a tag or empty for the
+latest. It checks that `Chart.yaml` at that tag agrees with the tag — `appVersion` *is* the deployed
+image tag, since `values.yaml` leaves `image.tag` empty, and drift would run an image nobody chose
+while ArgoCD reports Synced — then moves `targetRevision` and commits. ArgoCD (automated, `selfHeal`,
+`prune`) does the rest. Values-only changes skip all of this: edit
 `infrastructure/ivanti-mcp/values.yaml` and merge.

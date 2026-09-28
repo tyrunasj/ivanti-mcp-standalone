@@ -1,7 +1,7 @@
 # 2026-09-14 review — what was done
 
 All **38 findings** from [`2026-09-14-full-review.md`](./2026-09-14-full-review.md) are addressed,
-across fifteen commits on `review/findings-2026-09-14`. Nothing is pushed or merged.
+across fifteen commits on `review/findings-2026-09-14`, merged to `main` in #28 (`456793c`).
 
 The report itself is deliberately unedited. A findings list rewritten to match its fixes stops
 being evidence of what was wrong, and the reasoning in it is what makes the fixes reviewable.

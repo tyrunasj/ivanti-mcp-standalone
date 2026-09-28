@@ -30,11 +30,19 @@ runs:
     - run: pnpm install --frozen-lockfile
       shell: bash
 
-    # package.json, Chart.yaml `version` and Chart.yaml `appVersion` must agree.
+    # package.json, Chart.yaml `version` and `appVersion`, and the handbook's
+    # `const VERSION` must agree.
     # `appVersion` is the image tag the chart deploys by default, so drift here
     # ships one version and runs another.
     - run: node scripts/check-version.mjs --check
       shell: bash
+
+    # The handbook embeds a snapshot of the tool manifest. It drifted for weeks —
+    # telling readers `act_as` was optional after it had become mandatory —
+    # because nothing regenerated it. `pnpm handbook:sync` does.
+    - run: pnpm handbook:check
+      shell: bash
+      if: ${{ !cancelled() }}
 
     # All of them, and all of them even when an earlier one fails: one round
     # trip beats seven. A failed step still fails the job — `if:` here only
