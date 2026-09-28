@@ -19,6 +19,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { projectWritten } from '../shared/project-written.js';
 import { connectionFor } from '../shared/connection-for.js';
+import { assertKnownFields } from '../shared/known-fields.js';
 
 export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -97,6 +98,12 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         // The person's connection — see create-record.ts. Validating against the service
         // account's form while writing on the person's SID validates the wrong thing.
+        // Before the request, and before the picklist work: the schema is already in hand, so a
+        // field this object does not have is a caller's typo rather than a round trip. The form is
+        // cached and comes along to translate a LABEL written where the field was meant.
+        const writeForm = await connection.forms.get(toObjectId(entity.name)).catch(() => undefined);
+        assertKnownFields(Object.keys(args.fields), entity, writeForm);
+
         const resolved = await resolveValidatedWrite({
           connection,
           logger: deps.logger,
@@ -118,7 +125,7 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
               .get(toObjectId(entity.name))
               .catch(() => undefined);
             throw (
-              explainRequiredFields(error, form) ??
+              explainRequiredFields(error, form, Object.keys(args.fields)) ??
               explainFieldError(error, entity, referencedFieldNames({ fields: Object.keys(body) })) ??
               error
             );

@@ -3,6 +3,7 @@
 
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { z, ZodRawShape } from 'zod';
+import { strictInput } from './strict-input.js';
 import { ANONYMOUS, type CallerIdentity } from '../auth/identity.js';
 import { createSessionPin, type SessionPin } from '../auth/identity-pin.js';
 import type { ImpersonationSlot } from '../auth/impersonation.js';
@@ -53,7 +54,11 @@ export interface ToolDefinition {
   config: {
     title: string;
     description: string;
-    inputSchema: ZodRawShape;
+    /**
+     * A closed object schema, so an argument this tool does not declare is refused rather than
+     * silently dropped — `strictInput` builds it, and leaves a zero-argument tool as a raw shape.
+     */
+    inputSchema: ZodRawShape | z.ZodObject<ZodRawShape>;
     annotations: ToolAnnotations;
   };
   /**
@@ -106,7 +111,9 @@ export function defineTool<Shape extends ZodRawShape>(spec: ToolSpec<Shape>): To
     config: {
       title: spec.title,
       description: spec.description,
-      inputSchema: spec.inputSchema,
+      // Closed here rather than at each definition site: a tool added later cannot forget it,
+      // and forgetting would not fail — it would answer, with the argument thrown away.
+      inputSchema: strictInput(spec.inputSchema),
       annotations: spec.annotations,
     },
     // A fresh pin per call when there is no context, so one test's identity cannot leak into

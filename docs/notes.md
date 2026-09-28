@@ -169,6 +169,60 @@ until the idle sweep. This is the *normal* case, which makes `MCP_SESSION_IDLE_T
 load-bearing rather than defensive — without it every re-authentication leaks a session
 permanently, and `MCP_MAX_SESSIONS` would eventually be reached by ordinary use.
 
+**An argument name the schema does not have is dropped in silence, and `orderBy` is the one that
+costs an answer.** zod parses tool arguments non-strictly, so an unknown key is stripped before the
+handler runs — no error, no warning, nothing in the response to say it happened. For most
+parameters that degrades to a wider answer. For `orderBy` it produces a **confidently wrong** one:
+the OData literal is `$orderby`, all lowercase, so `orderby` is the natural spelling to reach for,
+and passing it returns rows in Ivanti's own RecId order while the caller believes they are sorted.
+Measured 2026-09-17 on `list_records`: `orderby: 'CreatedDateTime desc'` and
+`orderby: 'CreatedDateTime'` returned the **same five rows in the same order**, dates running
+2026-09, 2025-10, 2025-12, 2025-07 — and `orderby: 'NoSuchFieldAtAll desc'` was accepted too.
+`assertOrderBy` never ran, because it guards a parameter that never arrived; the description's
+promise that "the field name is checked before the request" is true only of the spelling that
+reaches the handler.
+
+The damage is the shape this repo already refuses elsewhere: "the latest ten" answered with ten
+arbitrary rows is `$filter`'s silently-dropped functions again, one layer higher.
+
+**Fixed the same day by closing the shapes, not by accepting the alias.** `strictInput` in
+`defineTool` builds `z.strictObject`, so the SDK refuses before the handler runs and every tool is
+covered without anyone remembering to cover it. Three things were measured rather than assumed:
+
+- **The SDK accepts a `ZodObject` where it accepts a raw shape** (`normalizeObjectSchema`), and
+  `tools/list` then carries `"additionalProperties": false` — 40 of 41 tools, 78,723 bytes of
+  manifest. The model is told the shape is closed, rather than only discovering it on a refusal.
+- **Zod's own message is `Unrecognized key: "orderby"` and cannot be improved by `.strict()`**,
+  whose parameters are ignored — `z.strictObject(shape, { error })` is the form that takes a
+  customiser, and it receives `issue.keys`. The message names the near miss, and `suggestNames`
+  had to be asked SECOND: it skips a candidate matching case-insensitively, on the reasoning that
+  "an exact match was never the problem" — true of an entity name, false of an argument, where
+  the case IS the problem.
+- **A zero-argument tool is left open on purpose.** Its shape is `{}`, which the SDK does not
+  treat as a schema at all, and clients send a dummy property rather than an empty object for a
+  tool that takes nothing — this session's own client sent `{ random_string: 'probe' }` to
+  `get_version`. Closing that would refuse a correct call.
+
+**Closing the shapes blinded an existing guard, which is the part worth remembering.**
+`description-budget.test.ts` read parameter descriptions with `Object.entries(tool.config.inputSchema)`.
+That works on a raw shape and returns zod's internals on a `ZodObject`, so the argument budget
+measured **zero parameters and passed** — green, and guarding nothing. `declaredArguments` now
+reads the shape back out of either form. A test that enumerates a data structure is a test that
+fails silently when the structure changes shape.
+
+**The narration rule covers Ivanti's names and forgets the server's own.** "Answer in the
+tenant's words, not the system's" names RecIds, field keys and object names — so a model obeys it
+perfectly and still opens the conversation with *"I need to call `act_as` before anything
+answers"*. The instructions themselves invite it: they say to *"ask them for their name, email or
+login and call `act_as` with it"*, and a model repeating that sentence back to a person hands them
+the plumbing instead of a question. `act_as`, `get_version`, `ivanti://reference/…` are the same
+kind of string as `ProfileLink_RecID` — they address this server, they do not describe it. The
+person should hear *"Who am I helping? Your name, email or Ivanti login."* and nothing about a
+tool. Observed 2026-09-17, driving the server: the very first turn leaked the tool name twice.
+The fix belongs in the narration paragraph, which costs a clause rather than a rule — the
+widest deployment (`full`/`odata`, no impersonation) stands at 1,964 of 2,000, so it is paid
+for out of an existing paragraph.
+
 **Elicitation exists in this SDK and is unused — an open investigation, not a trap.**
 Protocol `2025-11-25` (what SDK 1.30 implements) gives the server `server.elicitInput(...)`, which
 asks the **user** a question directly instead of asking the model to ask. That is interesting for
@@ -1177,6 +1231,70 @@ the same reason.** `GetPackageDataSDA` and `GetUploadTicket` refuse an un-activa
 accept an activated one; the service is not special. Kept because an earlier entry generalised
 one service's 551 into "the ASMX boundary" — the wrong lesson from a true measurement.
 *(Measured 2026-09-14.)*
+
+**The form already carries the required and read-only rules, and nothing reads them.**
+`FindFormViewData` — the call `form-context.ts` makes for validated fields — returns far more than
+the four keys the interface declares. Measured on Incident, 2026-09-17:
+
+| key | what it holds here |
+|---|---|
+| `BusObjectRequiredRules` | 13 field names: `Category`, `CauseCode`, `Resolution`, `Service`, `Owner`, `ResolvedBy`, `AlternateContactLink`, `OwnerTeam`, `Status`, `Subject`, `Symptom`, `ProfileLink_RecID`, `ProfileLink` |
+| `BusObjectReadOnlyRules` | 20, including `Priority`, `CauseCode`, `Resolution`, `CreatedBy`, `LastModBy`, `ActualCategory` — **also conditional**, see below |
+| `FieldsNotEditable` | `{}` on this tenant |
+| also present | `RuleMeta`, `LinkValidationFields`, `FieldValidationTableRights`, `FormAllowInsert/Update/View`, `FormAllowEditInFinalState`, `FormCellExpressions` |
+
+It is a **list of the fields governed by required rules, not the rules themselves** — the
+conditions are not in the payload. So it answers "which fields can become required" and not "is
+this one required right now", and a tool must say which of those two it is answering. That still
+beats the status quo, which is finding out from a refusal: `explainRequiredFields` translates
+Ivanti's message *after* the write, and **a refusal names only what Ivanti checked before
+stopping** — measured, a create carrying only `Subject` was refused with three fields named while
+a nearly-complete one was refused with a single `Category`. So being told about one missing field
+is no evidence the rest are satisfied, and "fix what it named, retry" can loop.
+
+The conditionality is real and was measured, not inferred: an incident at `Logged` needs no owner,
+the same incident at `Active` requires `Owner` **and** `OwnerTeam`, and clearing the owner while
+the record sits at `Active` is refused.
+
+**`BusObjectReadOnlyRules` is conditional too, and reading it as absolute broke a working write.**
+It looks exact — a list of fields, no expressions — so a guard was built that refused any write
+naming one, on the reasoning that Ivanti accepts such a write, answers 200 and stores its own
+value. Measured the same day: `problem`'s list names `Subject`, `Description` and `Category`, and
+a create carrying all three **succeeds** (problem 10230). `Category` is `nullable: false` on that
+object, so the guard refused the one field the schema calls mandatory, and the refusal was
+indistinguishable from a real one because it was phrased with the same confidence. The guard was
+removed and the flag kept as `readOnly: 'sometimes'`.
+
+The lesson is narrower than "don't trust the form": **both keys have the same shape and the same
+meaning — the fields a rule governs — and a flat list of names is not evidence that the rule is
+unconditional.** The required one announced its conditionality (`Owner` is obviously not always
+required); the read-only one did not, and that is exactly why it was believed.
+
+**Ivanti stamps `Owner` from the signed-in session, so an impersonated create assigns the ticket
+to the person who raised it.** Nothing sends `Owner` — the create carried Subject, Symptom, the
+customer pair, Service, Category and Source, and Ivanti filled the rest. Measured 2026-09-17 with
+two creates acting for the same person, one with the ConfigDB pair and one without:
+
+| | impersonation ON (as Harold Sanders) | impersonation OFF |
+|---|---|---|
+| `Owner` | `HSanders` | `tyrunasj` (the service account) |
+| `OwnerTeam` | `IT` | `Service Desk` |
+| `CreatedBy` / `LastModBy` | `HSanders` | `tyrunasj` |
+
+`OwnerTeam` follows the session user's own team, so the record lands in whatever queue that person
+belongs to rather than the one that should handle it. The authorship story is the good half — this
+is exactly the `CreatedBy` behaviour impersonation exists for. The ownership half is a defect, and
+it is worst precisely where impersonation matters most: in `enduser` mode every self-raised ticket
+comes back **owned by the requester**, which means it reaches no queue and no analyst ever sees it.
+It is invisible from inside the code, because nothing in this repo mentions `Owner` on a create.
+
+**A delete under an impersonated non-admin session answers `400 ISM_4000 Invalid Request
+Payload`.** Harold Sanders could not delete the incident his own session had just created; the
+identical delete as `tyrunasj` (Admin) succeeded. The payload was the same in both, so this is a
+permissions answer wearing a malformed-request costume — the same dialect problem as get-by-key
+answering `400` for a record that does not exist. `delete_record` reported the failure rather than
+claiming success, which is what stopped a test record being silently left behind — but a caller
+reading the error would go looking for a bug in their request.
 
 ## Observability
 

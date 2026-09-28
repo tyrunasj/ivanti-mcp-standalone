@@ -69,4 +69,30 @@ create still consumes one and the numbers are not contiguous.
 
 Priority may be recalculated from Urgency and Impact, so a Priority you send can differ from the
 one stored. Read it back rather than assuming.
+
+## The customer is not the assignee
+
+They are different fields and they answer different questions. The link pair — \`ProfileLink_RecID\`
+plus \`ProfileLink_Category\` on an incident here, labelled "Customer" — says who the record is
+FOR. The assignment says who will work it, and **nothing you send decides it**: Ivanti fills it
+from the SIGNED-IN SESSION.
+
+Where this server signs in AS the person (impersonation), a record raised for someone therefore
+comes back assigned to that same person, in that person's own team — so it sits in nobody's queue
+and no analyst sees it. Measured on this tenant, acting as one employee: a create carrying no
+assignment stored \`Owner\` as that employee and \`OwnerTeam\` as their team, and advanced the
+record to \`Active\`. The identical create without impersonation stored the service account.
+
+Two things follow:
+
+- **Supply the status the tenant starts records in** and the assignment is left empty — measured,
+  the same create then stored \`Owner\` as null and stayed at that status. This is the shape a
+  queue can pick up.
+- **The assignment cannot be cleared afterwards while the record sits at a status that requires
+  it.** Ivanti answers \`requires Owner\`, so "create now, unassign later" does not work. Decide
+  at create time.
+
+Authorship is the opposite case and needs no action: \`CreatedBy\` naming the person is exactly
+what acting for someone is for. The create's confirmation lists every field Ivanti stamped with
+them, so the two can be told apart on the record rather than guessed at.
 `.trim();

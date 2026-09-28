@@ -54,6 +54,7 @@ function describe(displayName: string, form: ResolvedForm | undefined): string {
 export function explainRequiredFields(
   error: unknown,
   form: ResolvedForm | undefined,
+  written: readonly string[] = [],
 ): RequiredFieldsError | undefined {
   if (!(error instanceof IvantiApiError)) return undefined;
 
@@ -64,7 +65,46 @@ export function explainRequiredFields(
   return new RequiredFieldsError(
     `Ivanti refused the write: it requires ${unique.map((name) => describe(name, form)).join('; ')}. ` +
       'Nothing was written. These rules are conditional — a status change can require fields that ' +
-      'nothing asked for before — so set them in the same call.',
+      'nothing asked for before — so set them in the same call.' +
+      alsoGoverned(unique, form, written),
     unique,
+  );
+}
+
+/**
+ * The rest of the fields a required rule governs, so the retry is one call rather than several.
+ *
+ * **A refusal names what Ivanti got as far as checking, which need not be all of it.** Measured on
+ * this tenant: a create carrying only `Subject` was refused with three fields named, while one
+ * carrying almost everything was refused with a single `Category` — so the caller cannot tell a
+ * nearly-complete write from one that will fail again, and a refusal naming one field is not
+ * evidence that one field is all that is missing. The form ships the whole list, so the first
+ * refusal can carry it.
+ *
+ * It is offered as candidates and never as a requirement, because the form gives the fields a rule
+ * governs and NOT the condition — several of these will not apply to the state this record is
+ * heading for, and presenting them as required would trade one wrong certainty for another.
+ */
+function alsoGoverned(
+  named: readonly string[],
+  form: ResolvedForm | undefined,
+  written: readonly string[],
+): string {
+  if (form === undefined || form.requiredRuleFields.length === 0) return '';
+
+  const resolved = new Set(named.map((name) => (form.displayNames[name.toLowerCase()] ?? name).toLowerCase()));
+  const already = new Set(written.map((name) => name.toLowerCase()));
+
+  const rest = form.requiredRuleFields.filter(
+    (field) => !resolved.has(field.toLowerCase()) && !already.has(field.toLowerCase()),
+  );
+  if (rest.length === 0) return '';
+
+  return (
+    ` This object has required rules on ${rest.map((field) => `\`${field}\``).join(', ')} as well, ` +
+    'and a refusal names only what Ivanti checked before stopping — so being told about one is no ' +
+    'evidence the rest are satisfied. Check these against the state you are writing before ' +
+    'retrying, rather than discovering them a round trip at a time. Which of them actually apply ' +
+    'depends on that state; the form does not say.'
   );
 }

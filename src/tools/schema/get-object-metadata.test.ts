@@ -7,6 +7,7 @@ import { OPEN_GATE } from '../shared/object-gate.js';
 import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import type { Logger } from '../../logger.js';
 import { createGetObjectMetadataTool } from './get-object-metadata.js';
+import { formFixture } from '../../ivanti/session/form.fixture.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -33,13 +34,17 @@ const tool = () => {
  * this tool reports, not how `form-context` walks workspace → layout → view, which owns that
  * question and its own tests. The tier has to leave `odata`, because a form needs a session.
  */
-const labelledTool = (fieldLabels: Record<string, string>, get?: () => Promise<never>) => {
+const labelledTool = (
+  fieldLabels: Record<string, string>,
+  get?: () => Promise<never>,
+  rules: { requiredRuleFields?: readonly string[]; readOnlyFields?: readonly string[] } = {},
+) => {
   const { connection } = connectionFixture({
     entities: { incident: INCIDENT },
     capability: { tier: 'session' },
   });
   const forms = {
-    get: get ?? (() => Promise.resolve({ layoutName: 'l', viewName: 'v', formName: 'f', validatedFields: {}, displayNames: {}, fieldLabels, linkFields: {} })),
+    get: get ?? (() => Promise.resolve(formFixture({ fieldLabels, ...rules }))),
   };
   return createGetObjectMetadataTool({
     connection: { ...connection, forms },
@@ -149,5 +154,44 @@ describe('get_object_metadata', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('Did you mean');
+  });
+});
+
+describe('required and read-only rules', () => {
+  const payloadOf = async (rules: { requiredRuleFields?: readonly string[]; readOnlyFields?: readonly string[] }) =>
+    payload(await labelledTool({}, undefined, rules).handler({ object: 'Incident#' }));
+
+  const fieldsOf = (body: Payload) => (body['fields'] as { name: string; required?: unknown; readOnly?: unknown }[]);
+
+  it("marks a governed field 'sometimes', which is weaker than the schema's own true", async () => {
+    const fields = fieldsOf(await payloadOf({ requiredRuleFields: ['Status', 'Priority'] }));
+
+    expect(fields.find((f) => f.name === 'Status')?.required).toBe('sometimes');
+    // RecId is nullable: false in the schema — an absolute answer, not a conditional one.
+    expect(fields.find((f) => f.name === 'RecId')?.required).toBe(true);
+    // Untouched by any rule.
+    expect(fields.find((f) => f.name === 'Subject')).not.toHaveProperty('required');
+  });
+
+  /**
+   * Conditional, not absolute: a problem lists `Category` read-only and accepts it on a create,
+   * and `Category` is the one field its schema calls mandatory.
+   */
+  it("marks a governed field 'sometimes' rather than claiming the write will fail", async () => {
+    const fields = fieldsOf(await payloadOf({ readOnlyFields: ['Priority'] }));
+
+    expect(fields.find((f) => f.name === 'Priority')?.readOnly).toBe('sometimes');
+    expect(fields.find((f) => f.name === 'Subject')).not.toHaveProperty('readOnly');
+  });
+
+  it('explains once that the two flags differ in kind', async () => {
+    const note = (await payloadOf({ requiredRuleFields: ['Status'], readOnlyFields: ['Priority'] }))['rulesNote'];
+
+    expect(note).toContain('never the conditions');
+    expect(note).toContain('never as "this write will be refused"');
+  });
+
+  it('says nothing when the form ships no rules', async () => {
+    expect(await payloadOf({})).not.toHaveProperty('rulesNote');
   });
 });

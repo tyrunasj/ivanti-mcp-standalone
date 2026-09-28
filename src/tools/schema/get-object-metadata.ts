@@ -30,18 +30,33 @@ function shortType(type: string): string {
  * open a session at all, both answer "no labels" — the fields are still the answer, and losing
  * them because a label lookup failed would be a far worse trade.
  */
-async function fieldLabels(
+interface FormFacts {
+  labels: Record<string, string>;
+  /** Fields a required rule governs — which is not the same as fields required now. */
+  sometimesRequired: ReadonlySet<string>;
+  /** Fields a read-only rule governs — conditional in the same way, and for the same reason. */
+  readOnly: ReadonlySet<string>;
+}
+
+const NO_FORM: FormFacts = { labels: {}, sometimesRequired: new Set(), readOnly: new Set() };
+
+async function formFacts(
   deps: IvantiToolDeps,
   context: CallContext,
   entityName: string,
-): Promise<Record<string, string>> {
-  if (!registersFormTools(deps)) return {};
+): Promise<FormFacts> {
+  if (!registersFormTools(deps)) return NO_FORM;
   try {
     const form = await connectionFor(deps, context).forms.get(entityName);
-    return form?.fieldLabels ?? {};
+    if (form === undefined) return NO_FORM;
+    return {
+      labels: form.fieldLabels,
+      sometimesRequired: new Set(form.requiredRuleFields),
+      readOnly: new Set(form.readOnlyFields),
+    };
   } catch (error) {
-    deps.logger.debug('no field labels for this object', { object: entityName, error });
-    return {};
+    deps.logger.debug('no form for this object', { object: entityName, error });
+    return NO_FORM;
   }
 }
 
@@ -100,7 +115,8 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
         const { entity, entitySet } = await resolveObject(deps, args.object);
         const search = args.search?.toLowerCase();
         const subtypes = findSubtypes(await knownObjectNames(deps.connection), entity.name);
-        const labels = await fieldLabels(deps, context, entity.name);
+        const form = await formFacts(deps, context, entity.name);
+        const labels = form.labels;
 
         const fields = visibleFields(entity)
           // Searched on the label too, or this tool became unusable the moment anything started
@@ -120,7 +136,14 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
               ? { label: labels[field.name] }
               : {}),
             type: shortType(field.type),
-            ...(field.nullable ? {} : { required: true }),
+            // `true` is the schema's own answer and absolute; `'sometimes'` is the form's, and
+            // means a rule governs the field without saying under what condition.
+            ...(field.nullable
+              ? form.sometimesRequired.has(field.name)
+                ? { required: 'sometimes' as const }
+                : {}
+              : { required: true as const }),
+            ...(form.readOnly.has(field.name) ? { readOnly: 'sometimes' as const } : {}),
             ...(field.validated ? { validated: true } : {}),
           }));
 
@@ -187,6 +210,23 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
             : {}),
           fieldCount: fields.length,
           ...(labelsNote === undefined ? {} : { labelsNote }),
+          /**
+           * Said once, because the two flags differ in KIND and a reader that conflated them
+           * would trust the weaker one too much.
+           */
+          ...(form.sometimesRequired.size === 0 && form.readOnly.size === 0
+            ? {}
+            : {
+                rulesNote:
+                  "`'sometimes'` on either flag means a rule GOVERNS that field — the form lists " +
+                  'which fields have rules and never the conditions, so neither says what applies ' +
+                  'to the record you are writing. Measured: an incident needs no owner to reach ' +
+                  'Logged and requires Owner AND Team at Active, while a problem lists `Subject`, ' +
+                  '`Description` and `Category` as read-only and accepts all three on a create — ' +
+                  "`Category` is mandatory there. So treat `readOnly: 'sometimes'` as \"may be " +
+                  'computed or locked in some states", never as "this write will be refused", and ' +
+                  'read the value back afterwards rather than assuming yours was stored.',
+              }),
           ...(search === undefined
             ? {}
             : {
