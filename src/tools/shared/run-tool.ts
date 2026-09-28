@@ -7,6 +7,7 @@ import {
   IvantiApiError,
   isIvantiNotFound,
   isIvantiPromptRefusal,
+  pathOf,
 } from '../../ivanti/http/errors.js';
 import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
 import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
@@ -164,7 +165,21 @@ export async function runTool(
     }
 
     if (error instanceof IvantiApiError) {
-      logger.warn('ivanti call failed', { tool, status: error.status });
+      // Unreachable, down, or no longer accepting our credential: nothing the model sends can fix
+      // any of those, so they are the operator's to see at info. 401 belongs here because it means
+      // the key or the session stopped working. No body: Ivanti echoes what was submitted, and the
+      // body is already on the debug `ivanti request failed` line.
+      if (error.status === 0 || error.status >= 500 || error.status === 401) {
+        logger.warn('ivanti unavailable', {
+          tool,
+          status: error.status,
+          method: error.method,
+          path: pathOf(error.url),
+        });
+      } else {
+        // A refusal of what the model asked for, and the model is told why below.
+        logger.debug('ivanti refused the request', { tool, status: error.status });
+      }
 
       // The transition, not the request. Saying "does not exist" here — which the bare ISM_4000
       // match used to do — sends a caller hunting for a field name that was never wrong.
@@ -185,10 +200,8 @@ export async function runTool(
       return errorResult(`Ivanti refused the request (${String(error.status)}).${missing}\n${error.body}`);
     }
 
-    logger.error('tool failed', {
-      tool,
-      error: error instanceof Error ? error.message : 'unknown error',
-    });
+    // Not Ivanti and not a refusal: a bug here. The error is logged whole, stack included.
+    logger.error('tool failed', { tool, error });
     return errorResult(error instanceof Error ? error.message : 'Unknown error');
   }
 }

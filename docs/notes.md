@@ -1210,6 +1210,25 @@ also avoided a second trap — `process.cpuUsage()` legitimately exceeds 100% of
 because V8 uses background threads, so an unnormalised figure read as a bug.)
 *(Solved: removed — nothing under `src/server/` reads process memory or CPU. Verified in the code 2026-09-28.)*
 
+**`JSON.stringify` writes an `Error` as `{}`, and a subclass as every own field — `url` included.**
+`message` and `stack` are not enumerable, so `logger.debug('…', { error })` logged `"error":{}`.
+`IvantiApiError` was the opposite trap: its fields *are* enumerable, so the same call wrote the full
+URL, `$filter` and the person named in it, into whatever level it was logged at. → The logger
+serialises an `Error` itself, and `IvantiApiError.toJSON()` gives the path only. Pass errors as a
+field; never flatten them to `error.message` at error level, where the stack is the point.
+
+**Seven copies of fetch-read-check had drifted apart.**
+Only the OData transport logged; none logged a timeout, because the log line came after the
+`await` that threw; `requestBinary`, the ASMX form and multipart posts, and the impersonated
+session let a dropped connection escape as a raw `TypeError`, which `runTool` reported at error
+level as a bug in this server. → Every Ivanti request goes through `exchange()`. A new surface
+that reaches for `fetch` directly reintroduces all three. *(Solved 2026-09-28.)*
+
+**The SDK's `onerror` fires for client mistakes, not only server faults.**
+The streamable-HTTP transport reports a bad `Accept` header, invalid JSON and an unknown session
+through it. Logged at error, any client could fill the error log at will — so it is logged at warn,
+without a stack.
+
 ## Testing
 
 **Build a `Config` through `configFixture`, never as a literal.**

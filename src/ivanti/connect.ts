@@ -107,6 +107,15 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
 
   const probe = await probeBasePath(baseUrl, apiKey, fetchImpl, timeoutMs);
 
+  // Every attempt, not just the winner: a tenant that answered `/HEAT` only on the third CSDL form
+  // is worth knowing about before its first `$metadata` read misbehaves.
+  logger.debug('ivanti base path probed', {
+    attempted: probe.attempted.map((attempt) => ({
+      path: new URL(attempt.url).pathname,
+      status: attempt.status,
+    })),
+  });
+
   logger.info('ivanti reachable', {
     baseUrl,
     // An empty prefix is a real answer, and one a reader must not mistake for "unknown".

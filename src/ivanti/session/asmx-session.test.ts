@@ -3,10 +3,10 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../logger.js';
-import type { IvantiApiError } from '../http/errors.js';
+import { IvantiApiError } from '../http/errors.js';
 import type { FetchLike } from '../http/transport.js';
 import { createIvantiRoutes } from '../odata/url.js';
-import { createSession } from './asmx-session.js';
+import { createSession, type IvantiSession } from './asmx-session.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -131,6 +131,35 @@ describe('createSession', () => {
       .catch((error: unknown) => {
         expect((error as IvantiApiError).body).not.toContain('super-secret');
       });
+  });
+
+  // The session SID is a live Admin session on the service account — as much a credential as the key.
+  it('never lets the session SID out through an error body', async () => {
+    const { fetchImpl } = tenant(() => reply(500, `session ${SID} faulted`));
+
+    const failure = await session(fetchImpl)
+      .call('Services/Workspace.asmx', 'GetRoleWorkspaces')
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(IvantiApiError);
+    expect((failure as IvantiApiError).body).not.toContain(SID);
+  });
+
+  // The handler conventions had no guard at all: a dropped connection escaped as a raw
+  // `TypeError`, which `runTool` reports as a fault in this server rather than in Ivanti.
+  it.each([
+    ['form handler', (live: IvantiSession) => live.callHandler('GridDataHandler/GridDataHandler.ashx', { a: '1' })],
+    ['multipart upload', (live: IvantiSession) => live.uploadToHandler('AttachmentHandler.ashx', new FormData())],
+  ])('reports a connection failure on the %s as Ivanti not answering', async (_kind, send) => {
+    const { fetchImpl } = tenant(() => reply(200, 'unused'));
+    const failing: FetchLike = (url, init) =>
+      url.includes('.ashx') ? Promise.reject(new TypeError('fetch failed')) : fetchImpl(url, init);
+
+    const failure = await send(session(failing)).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(IvantiApiError);
+    expect(failure).toMatchObject({ status: 0 });
+    expect((failure as IvantiApiError).message).toMatch(/did not complete/);
   });
 
   it('reports a missing CSRF token rather than pretending to have a session', async () => {

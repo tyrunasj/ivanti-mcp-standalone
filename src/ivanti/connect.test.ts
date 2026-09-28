@@ -52,6 +52,22 @@ describe('connectIvanti', () => {
     expect(lines.join('\n')).toContain('"basePath":"(root)"');
   });
 
+  it('logs every base-path attempt at debug, not only the one that answered', async () => {
+    const { logger, lines } = testLogger();
+
+    await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl: tenant(false) });
+
+    const probed = lines
+      .map((line) => JSON.parse(line) as { message: string; attempted?: unknown })
+      .find((entry) => entry.message === 'ivanti base path probed');
+    expect(probed?.attempted).toEqual([
+      { path: '/HEAT/api/odata/incidents/$metadata', status: 404 },
+      { path: '/HEAT/api/odata/$metadata', status: 404 },
+      { path: '/HEAT/api/odata/businessobject/$metadata', status: 404 },
+      { path: '/api/odata/incidents/$metadata', status: 200 },
+    ]);
+  });
+
   it('never logs the API key', async () => {
     const { logger, lines } = testLogger();
 

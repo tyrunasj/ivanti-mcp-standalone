@@ -77,7 +77,8 @@ it needs a create form, which OData cannot see.
 
 - **`src/ivanti/http/transport.ts` is the `rest_api_key` surface** — OData, REST, `$metadata`. The
   ASMX surface has its own credential and lifecycle; keeping them apart stops a caller reaching
-  for the wrong one.
+  for the wrong one. Both send through `exchange()`, which is what they share: the timeout, the
+  error shape, the scrubbing and the request log.
 - **Every collection read goes through `readCollection()`.** "No rows" has three encodings: a
   filter matching nothing answers 200 with an empty body, an empty navigation property answers
   `{"value": "No instances found."}` — a string with `.length === 19` — and only rows arrive as an
@@ -298,6 +299,30 @@ it needs a create form, which OData cannot see.
   (`MCP_SESSION_IDLE_TTL_SECONDS`) — required, because `onsessionclosed` fires only on an explicit
   DELETE, which clients rarely send. Replicas would need sticky routing by `Mcp-Session-Id`.
 
+## Logging
+
+- **Every Ivanti request goes through `exchange()`** (`src/ivanti/http/exchange.ts`) — OData, REST,
+  ASMX, the `.ashx` handlers and CentralConfig alike — and is one debug line: method, path, the
+  decoded query, a write's field names (never its values), status and duration. A failure adds the
+  scrubbed error body; a request Ivanti never answered is `status: 0` with the reason. Every failure
+  it throws is an `IvantiApiError`, so an Ivanti outage is never reported as a bug in this server.
+- **Every line a tool call causes carries `tool`, `sessionId` and `rpcId`** — `registerTools` runs
+  each call inside `withLogContext`, and the async context reaches the Ivanti layer without anything
+  threading it through.
+- **Each level has one job:**
+
+  | Level | Carries |
+  |---|---|
+  | `debug` | every Ivanti request with its query, Ivanti error bodies, refusals, MCP request lines |
+  | `info` | lifecycle, the `tool called` audit line, writes, identity changes |
+  | `warn` | running degraded — a lower tier, an unreachable tenant (status 0, 5xx) or a refused credential (401), a rejected origin or token, an MCP protocol error |
+  | `error` | faults in this server, with the stack — an unexpected exception, an unhandled rejection, a write that did not store, an orphaned attachment |
+
+  An Ivanti 4xx other than 401 is debug: the model already has the explanation, and the mistake
+  was its own. A protocol error is warn rather than error because clients cause most of them.
+- **Errors are passed as fields, not flattened into strings.** The logger writes an `Error` with its
+  name, message and stack, and an `IvantiApiError` by its `toJSON` — path, never URL.
+
 ## Invariants, in full
 
 - **Never write to stdout.** Under stdio it is the JSON-RPC stream; log to stderr via `createLogger`.
@@ -313,11 +338,14 @@ it needs a create form, which OData cannot see.
 - **Annotate every tool explicitly.** Unannotated means destructive and open-world. Reads get
   `readOnlyHint` / `idempotentHint`; additive writes set `destructiveHint: false`; tools returning
   ticket text keep `openWorldHint: true` — it is untrusted content.
-- **Scrub Ivanti error bodies** (`scrubErrorBody`, in the transport — the only layer that knows the
-  key). Ivanti echoes submitted values and the ASMX session sends the key in the body, so the key
-  and named session fields (`SessionId`, `TenantId`, `LoginId`, `ConnectionString`…) are redacted,
-  escaped forms included. Never a generic "key-shaped" pass — it would eat the RecIds the model needs.
-- **Request logs carry the path, never the query** — a `$filter` routinely holds a person's name.
+- **Scrub Ivanti error bodies** (`scrubErrorBody`, in `exchange()` — the one place that knows every
+  credential a request carries: the key, or a person's SID). Ivanti echoes submitted values and the
+  ASMX session sends the key in the body, so the credentials and named session fields (`SessionId`,
+  `TenantId`, `LoginId`, `ConnectionString`…) are redacted, escaped forms included. Never a generic
+  "key-shaped" pass — it would eat the RecIds the model needs.
+- **Only debug carries the query** — a `$filter` routinely holds a person's name, so `debug` is
+  personal data and every level above it logs the path alone. A write's values (ticket text) are
+  logged at no level; its field names are.
 - **Allowlists key on the technical Business Object name**; display names are per tenant.
 - **Nothing may depend on the Business Objects Ivanti ships.** Tenants add, rename and remove
   fields and write their own quick actions, so a fixed name list is a preference with a fallback:

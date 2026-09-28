@@ -32,7 +32,7 @@ server:
   port: 3000
   maxSessions: 100
   sessionIdleTtlSeconds: 1800
-  logLevel: info
+  logLevel: info        # debug logs every Ivanti query, which names people; diagnose, then revert
 
   # Required when mode is enduser. Technical Business Object names; the gate is
   # resolved against the tenant at startup, so a misspelling exits 78.

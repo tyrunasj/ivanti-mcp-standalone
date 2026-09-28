@@ -134,24 +134,14 @@ describe('createTransport', () => {
     expect(seen[0]?.Accept).toBe('application/xml');
   });
 
-  it('logs the path but never the query, which carries what was searched for', async () => {
-    const debugged: { message: string; fields?: Record<string, unknown> }[] = [];
-    const t = createTransport({
-      baseUrl: 'https://t',
-      basePath: '/HEAT',
-      apiKey: 'k',
-      logger: {
-        ...logger(),
-        debug: (message, fields) => debugged.push({ message, fields }),
-      },
-      fetchImpl: () => Promise.resolve(reply(200, '{"value":[]}')),
+  it('scrubs the person\'s SID, not only the key, from what an impersonated call echoes', async () => {
+    const t = transport(() => Promise.resolve(reply(500, 'session SID-OF-PERSON failed'))).asPerson(
+      'SID-OF-PERSON',
+    );
+
+    await t.request('https://t/x').catch((e: IvantiApiError) => {
+      expect(e.body).not.toContain('SID-OF-PERSON');
     });
-
-    await t.request(`${t.routes.entitySet('Incidents')}?$filter=Customer eq 'Jane Doe'`);
-
-    expect(debugged[0]?.fields?.path).toBe('/HEAT/api/odata/businessobject/Incidents');
-    expect(debugged[0]?.fields?.status).toBe(200);
-    expect(JSON.stringify(debugged)).not.toContain('Jane Doe');
   });
 
   it('exposes the route builders under the probed base path', () => {

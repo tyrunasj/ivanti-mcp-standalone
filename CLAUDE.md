@@ -63,8 +63,10 @@ One line each; the reasoning is in [`docs/architecture.md`](docs/architecture.md
   checked against the tenant at startup.
 - **`MCP_PUBLIC_URL` is required and never derived from the request**, and Origin validation
   applies to every HTTP mode.
-- **The API key and session internals are scrubbed from every Ivanti error body**; request logs
-  carry the path, never the query.
+- **The API key and session internals are scrubbed from every Ivanti error body**; only `debug`
+  carries a request's query, and a write's values are logged at no level.
+- **Every Ivanti request goes through `exchange()`** — never a bare `fetch`. It is the one place
+  that times out, scrubs, logs and turns every failure into an `IvantiApiError`.
 - **Allowlists key on the technical Business Object name**, never the display name.
 - **Nothing may depend on the Business Objects Ivanti ships.** A fixed field list is a preference
   with a fallback, never a definition.

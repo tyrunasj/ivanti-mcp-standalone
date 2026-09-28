@@ -112,14 +112,15 @@ describe('authenticate', () => {
     expect((error as IvantiApiError).body).toContain('[REDACTED]');
   });
 
-  // The login is in the query string, and query strings are the one thing this codebase does not
-  // log — for the same reason a $filter is not logged.
-  it('keeps the impersonated login out of the logged URL', async () => {
+  // The login is in the query string. The debug request line carries it — debug is where queries
+  // are logged — but an error reaches warn and error lines too, so it logs its path and no more.
+  it('keeps the impersonated login out of the error as it is logged', async () => {
     const { config } = centralConfig(() => ({ status: 500, body: refusal('boom') }));
 
     const error = await config.authenticate('HSanders').catch((caught: unknown) => caught);
 
-    expect((error as IvantiApiError).url).not.toContain('HSanders');
+    expect(error).toBeInstanceOf(IvantiApiError);
+    expect(JSON.stringify(error)).not.toContain('HSanders');
   });
 
   it('reports an unreachable ConfigDB as such rather than as a refusal', async () => {
@@ -131,7 +132,12 @@ describe('authenticate', () => {
       fetchImpl: () => Promise.reject(new Error('ENOTFOUND')),
     });
 
-    await expect(config.authenticate('HSanders')).rejects.toThrow(/unreachable/i);
+    const failure = await config.authenticate('HSanders').catch((caught: unknown) => caught);
+
+    // Status 0 is "never answered"; a refusal carries the status CentralConfig sent.
+    expect(failure).toBeInstanceOf(IvantiApiError);
+    expect(failure).toMatchObject({ status: 0 });
+    expect((failure as IvantiApiError).message).toMatch(/did not complete: ENOTFOUND/);
   });
 });
 

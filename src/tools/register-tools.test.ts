@@ -5,11 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { configFixture } from '../config/config.fixture.js';
 import { connectionFixture } from '../ivanti/connection.fixture.js';
-import type { Logger } from '../logger.js';
+import { createLogger, type Logger } from '../logger.js';
 import { ANONYMOUS, assertedIdentity, verifiedIdentity, type CallerIdentity } from '../auth/identity.js';
 import { createImpersonationSlot, type ImpersonationSlot } from '../auth/impersonation.js';
 import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
 import { registerTools, selectTools } from './register-tools.js';
+import type { ToolDefinition } from './tool-definition.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -120,6 +121,52 @@ describe('registerTools', () => {
     // An asserted subject is a claim, not a fact, and arguments carry personal data.
     expect(JSON.stringify(lines)).not.toContain('jsmith');
     expect(JSON.stringify(lines)).not.toContain('ticket text');
+  });
+
+  it('stamps every line a call causes with the tool, the session and the request id', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const sink = (line: string): void => {
+      lines.push(JSON.parse(line) as Record<string, unknown>);
+    };
+    // A second logger, deep in the handler, stands in for the transport's `ivanti request` line:
+    // the context belongs to the call, not to whichever logger writes.
+    const deep = createLogger('debug', sink);
+    const probe: ToolDefinition = {
+      name: 'probe',
+      config: { title: 'Probe', description: 'Logs from inside.', inputSchema: {}, annotations: {} },
+      handler: () => {
+        deep.debug('ivanti request');
+        return { content: [] };
+      },
+    };
+    const registerTool = vi.fn();
+    const transport: { sessionId?: string } = {};
+
+    registerTools(
+      { registerTool } as unknown as McpServer,
+      [probe],
+      {
+        identity: ANONYMOUS,
+        get sessionId(): string | undefined {
+          return transport.sessionId;
+        },
+      },
+      createLogger('debug', sink),
+    );
+    // Over HTTP the id exists only once `initialize` completes, which is after registration.
+    transport.sessionId = 's1';
+    const callback = registerTool.mock.calls[0]?.[2] as (
+      args: Record<string, unknown>,
+      extra: { requestId: number },
+    ) => Promise<unknown>;
+    await callback({}, { requestId: 7 });
+
+    expect(lines.find((line) => line.message === 'ivanti request')).toMatchObject({
+      tool: 'probe',
+      sessionId: 's1',
+      rpcId: 7,
+    });
+    expect(lines.find((line) => line.message === 'tool called')).toMatchObject({ sessionId: 's1' });
   });
 });
 

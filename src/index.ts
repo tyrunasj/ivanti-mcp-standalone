@@ -28,6 +28,18 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env);
   const logger = createLogger(config.LOG_LEVEL);
 
+  // The same crash Node would have, but as a JSON line with its stack rather than raw text
+  // interleaved with the log. Exit 1 either way: after an uncaught error the process state is
+  // unknown, and carrying on is how a half-broken server keeps answering.
+  process.on('unhandledRejection', (error: unknown) => {
+    logger.error('unhandled rejection', { error });
+    process.exit(1);
+  });
+  process.on('uncaughtException', (error: Error) => {
+    logger.error('uncaught exception', { error });
+    process.exit(1);
+  });
+
   // Probed before either transport starts. Which base path a tenant uses is not configuration,
   // it is a fact about the tenant — and a tenant that cannot be reached at all is a startup
   // failure rather than something to discover inside the first tool call.
@@ -141,9 +153,7 @@ async function main(): Promise<void> {
     void http.close().then(
       () => process.exit(0),
       (error: unknown) => {
-        logger.error('shutdown failed', {
-          reason: error instanceof Error ? error.message : 'unknown',
-        });
+        logger.error('shutdown failed', { error });
         process.exit(0);
       },
     );
