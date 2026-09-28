@@ -136,6 +136,13 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
         instructions === undefined ? {} : { instructions },
       );
 
+      // Unset, the SDK drops these on the floor. Warn rather than error, and no stack: the HTTP
+      // transport reports client mistakes here too — a wrong Accept header, invalid JSON, an
+      // expired session — and at error level any client could fill the log with them.
+      server.server.onerror = (error: Error): void => {
+        deps.logger.warn('mcp protocol error', { reason: error.message });
+      };
+
       // Per connection, like the pin — and released here rather than anywhere else, so the thing
       // that creates an Ivanti session is the thing that gives it back.
       const impersonation = opener === undefined ? undefined : createImpersonationSlot(opener);

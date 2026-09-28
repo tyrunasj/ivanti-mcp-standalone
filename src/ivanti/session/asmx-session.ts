@@ -3,6 +3,7 @@
 
 import type { Logger } from '../../logger.js';
 import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
+import { exchange, readText, type ExchangeContext } from '../http/exchange.js';
 import type { FetchLike } from '../http/transport.js';
 import type { IvantiRoutes } from '../odata/url.js';
 
@@ -101,53 +102,40 @@ export function createSession(options: SessionOptions): IvantiSession {
   let session: Handshake | undefined;
   let pending: Promise<Handshake> | undefined;
 
-  const postJson = async <T>(
-    url: string,
-    body: Record<string, unknown>,
-    headers: Record<string, string> = {},
-  ): Promise<T> => {
-    let response: Awaited<ReturnType<FetchLike>>;
-    try {
-      response = await fetchImpl(url, {
+  // The SID is as much a credential as the key — it is a live session on the service account —
+  // and Ivanti echoes submitted values into failures.
+  const secretsFor = (sid?: string): string[] => (sid === undefined ? [apiKey] : [apiKey, sid]);
+  const contextFor = (sid?: string): ExchangeContext => ({
+    fetchImpl,
+    logger,
+    timeoutMs,
+    secrets: secretsFor(sid),
+  });
+
+  const postJson = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {
+    const { body: text } = await exchange(
+      url,
+      {
         method: 'POST',
         headers: {
           // No `Authorization` header: the SID cookie and CSRF token are the credential here,
           // and sending the API key as well confuses some deployments.
           'Content-Type': 'application/json; charset=UTF-8',
           Accept: 'application/json',
-          ...headers,
+          ...(sid === undefined ? {} : { Cookie: `SID=${sid}` }),
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (cause) {
-      throw new IvantiApiError(
-        {
-          status: 0,
-          method: 'POST',
-          url,
-          body: scrubErrorBody(cause instanceof Error ? cause.message : String(cause), apiKey),
-        },
-        `Ivanti session call did not complete: ${cause instanceof Error ? cause.message : 'unknown'}`,
-      );
-    }
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new IvantiApiError({
-        status: response.status,
-        method: 'POST',
-        url,
-        body: scrubErrorBody(text, apiKey),
-      });
-    }
+      },
+      contextFor(sid),
+      readText,
+    );
 
     let parsed: { d?: T };
     try {
       parsed = JSON.parse(text) as { d?: T };
     } catch {
       throw new IvantiApiError(
-        { status: 200, method: 'POST', url, body: scrubErrorBody(text, apiKey) },
+        { status: 200, method: 'POST', url, body: scrubErrorBody(text, ...secretsFor(sid)) },
         'Ivanti session call answered 200 with a body that is not JSON',
       );
     }
@@ -155,7 +143,7 @@ export function createSession(options: SessionOptions): IvantiSession {
     // ASMX wraps every answer in `{ "d": … }`.
     if (parsed.d === undefined) {
       throw new IvantiApiError(
-        { status: 200, method: 'POST', url, body: scrubErrorBody(text, apiKey) },
+        { status: 200, method: 'POST', url, body: scrubErrorBody(text, ...secretsFor(sid)) },
         'Ivanti session call answered without the expected `d` envelope',
       );
     }
@@ -174,7 +162,7 @@ export function createSession(options: SessionOptions): IvantiSession {
     const status = await postJson<SessionStatus>(
       routes.service('Services/Session.asmx/InitializeSession'),
       { _csrfToken: null },
-      { Cookie: `SID=${sid}` },
+      sid,
     );
 
     const csrf = status.SessionCsrfToken;
@@ -196,7 +184,7 @@ export function createSession(options: SessionOptions): IvantiSession {
       const user = await postJson<UserData>(
         routes.service('Services/Session.asmx/GetUserData'),
         { _csrfToken: csrf, tzoffset: 0 },
-        { Cookie: `SID=${sid}` },
+        sid,
       );
       if (user.UserRole !== undefined && user.UserRole !== '') identity.role = user.UserRole;
       if (user.DisplayName !== undefined && user.DisplayName !== '') {
@@ -241,62 +229,50 @@ export function createSession(options: SessionOptions): IvantiSession {
       // `.asmx` wants the token in the BODY. The `.ashx` handlers want it as a lowercase header
       // instead, which is why they do not share this path.
       { _csrfToken: csrf, ...args },
-      { Cookie: `SID=${sid}` },
+      sid,
     );
   };
 
   const postForm = async (url: string, form: Record<string, string>): Promise<string> => {
     const { sid, csrf } = await ensure();
 
-    const response = await fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Cookie: `SID=${sid}`,
-        // Lowercase, and a header: the `.asmx` services want `_csrfToken` in the body instead.
-        _csrftoken: csrf,
-      },
-      body: new URLSearchParams(form).toString(),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new IvantiApiError({
-        status: response.status,
+    const { body } = await exchange(
+      url,
+      {
         method: 'POST',
-        url,
-        body: scrubErrorBody(text, apiKey),
-      });
-    }
-    return text;
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Cookie: `SID=${sid}`,
+          // Lowercase, and a header: the `.asmx` services want `_csrfToken` in the body instead.
+          _csrftoken: csrf,
+        },
+        body: new URLSearchParams(form).toString(),
+      },
+      contextFor(sid),
+      readText,
+    );
+    return body;
   };
 
   const postMultipart = async (url: string, form: FormData): Promise<string> => {
     const { sid, csrf } = await ensure();
 
-    const response = await fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        Cookie: `SID=${sid}`,
-        // Mixed-case here. The same token is `_csrftoken` on a form-urlencoded handler and
-        // `_csrfToken` in an `.asmx` body — three spellings, one session.
-        _csrfToken: csrf,
-      },
-      body: form,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new IvantiApiError({
-        status: response.status,
+    const { body } = await exchange(
+      url,
+      {
         method: 'POST',
-        url,
-        body: scrubErrorBody(text, apiKey),
-      });
-    }
-    return text;
+        headers: {
+          Cookie: `SID=${sid}`,
+          // Mixed-case here. The same token is `_csrftoken` on a form-urlencoded handler and
+          // `_csrfToken` in an `.asmx` body — three spellings, one session.
+          _csrfToken: csrf,
+        },
+        body: form,
+      },
+      contextFor(sid),
+      readText,
+    );
+    return body;
   };
 
   return {

@@ -3,6 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../logger.js';
+import { IvantiApiError } from '../http/errors.js';
 import { createIvantiRoutes } from '../odata/url.js';
 import type { CentralConfig } from './central-config.js';
 import { openImpersonatedSession } from './impersonated-session.js';
@@ -170,6 +171,48 @@ describe('openImpersonatedSession', () => {
 
     await expect(promise).rejects.toThrow(/no CSRF token/i);
     expect(release).toHaveBeenCalledWith(SID);
+  });
+
+  // Both used to escape raw — a `TypeError` from fetch, a `SyntaxError` from the parse — and
+  // `runTool` reports anything that is not an `IvantiApiError` as a fault in this server.
+  it('reports a connection failure as Ivanti not answering, and releases', async () => {
+    const release = vi.fn(() => Promise.resolve());
+    const promise = openImpersonatedSession({
+      centralConfig: centralConfig({ release }),
+      routes,
+      tenantHost: TENANT,
+      login: 'HSanders',
+      mode: 'full',
+      enduserRole: 'SelfServiceMobile',
+      logger: logger(),
+      fetchImpl: () => Promise.reject(new Error('ECONNRESET')),
+    });
+
+    const failure = await promise.catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(IvantiApiError);
+    expect(failure).toMatchObject({ status: 0 });
+    expect((failure as IvantiApiError).message).toMatch(/did not complete/);
+    expect(release).toHaveBeenCalledWith(SID);
+  });
+
+  it('reports a 200 that is not JSON as something Ivanti said', async () => {
+    const promise = openImpersonatedSession({
+      centralConfig: centralConfig(),
+      routes,
+      tenantHost: TENANT,
+      login: 'HSanders',
+      mode: 'full',
+      enduserRole: 'SelfServiceMobile',
+      logger: logger(),
+      fetchImpl: () => Promise.resolve(new Response(`<html>${SID}</html>`, { status: 200 })),
+    });
+
+    const failure = await promise.catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(IvantiApiError);
+    expect((failure as IvantiApiError).message).toMatch(/not JSON/);
+    expect((failure as IvantiApiError).body).not.toContain(SID);
   });
 
   it('refuses a pinned role the person does not hold', async () => {

@@ -487,5 +487,8 @@ and RFC 9728 metadata must still match exactly.
 | Impersonation is on, but every `act_as` fails | The startup probe validates the key, **not** the tenant: `GetTenantTimeout` answers 200 with a default for a tenant it has never heard of. Check `IVANTI_BASE_URL`'s hostname is the tenant CentralConfig knows. |
 | A form, pick-list or quick-action call answers **551** while impersonating | The session was never activated: `Session.asmx/SelectRole` must be called after `InitializeSession` — even naming the role it already reported — or every `Workspace.asmx` and service-catalog method refuses. The server always calls it, so a 551 here means that changed. |
 
-At `LOG_LEVEL=debug` every request logs its method, tool, session and authenticated subject, which
-answers most of the above directly. Arguments are never logged.
+At `LOG_LEVEL=debug` every MCP request logs its method, tool, session and authenticated subject,
+and every Ivanti request logs its path, query, status and duration — with Ivanti's own error body
+when it fails, stamped with the `tool`, `sessionId` and `rpcId` that caused it. That answers most of
+the above directly. **Debug carries personal data** (a `$filter` names people), so turn it on to
+diagnose rather than leaving it on. Tool arguments and the values of a write are never logged.

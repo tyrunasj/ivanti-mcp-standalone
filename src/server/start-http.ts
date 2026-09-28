@@ -193,9 +193,7 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): HttpS
           sendJson(response, 404, { error: 'not_found' });
       }
     })().catch((error: unknown) => {
-      logger.error('request handler failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      logger.error('request handler failed', { error });
       if (!response.headersSent) sendJson(response, 500, { error: 'internal_error' });
     });
   });

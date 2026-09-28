@@ -2,7 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Logger } from '../../logger.js';
-import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
+import { exchange, readText } from '../http/exchange.js';
 import type { FetchLike } from '../http/transport.js';
 
 /**
@@ -133,32 +133,16 @@ export function createCentralConfig(options: CentralConfigOptions): CentralConfi
   };
 
   const get = async (url: string): Promise<string> => {
-    let response: Awaited<ReturnType<FetchLike>>;
-    try {
-      response = await fetchImpl(url, {
-        method: 'GET',
-        // The key is a header here. It is not `Authorization`, and it is not the tenant key.
-        headers: { ApiKey: apiKey, Accept: 'application/xml' },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error: unknown) {
-      throw new IvantiApiError(
-        { status: 0, method: 'GET', url: redactQuery(url), body: '' },
-        `CentralConfig is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
-      );
-    }
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new IvantiApiError({
-        status: response.status,
-        method: 'GET',
-        url: redactQuery(url),
-        // The reply carries the tenant's database credentials even when it fails.
-        body: scrubErrorBody(text, apiKey),
-      });
-    }
-    return text;
+    const { body } = await exchange(
+      url,
+      // The key is a header here. It is not `Authorization`, and it is not the tenant key.
+      { method: 'GET', headers: { ApiKey: apiKey, Accept: 'application/xml' } },
+      // The reply carries the tenant's database credentials even when it fails; the scrub
+      // `exchange` applies to a failure body covers `ConnectionString` as an XML element.
+      { fetchImpl, logger, timeoutMs, secrets: [apiKey] },
+      readText,
+    );
+    return body;
   };
 
   return {
@@ -204,13 +188,4 @@ export function createCentralConfig(options: CentralConfigOptions): CentralConfi
       }
     },
   };
-}
-
-/**
- * The login is in the query string, and a query string is the one part of a URL this codebase
- * logs. `$filter` routinely carries a person's name; so does this.
- */
-function redactQuery(url: string): string {
-  const parsed = new URL(url);
-  return `${parsed.origin}${parsed.pathname}`;
 }

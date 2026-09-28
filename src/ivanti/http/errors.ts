@@ -58,6 +58,33 @@ export class IvantiApiError extends Error {
     this.url = init.url;
     this.body = truncate(init.body ?? '');
   }
+
+  /**
+   * The shape it takes in a log line — the path, never the URL.
+   *
+   * Without this, `JSON.stringify` wrote every own field, `url` among them, so an error passed to
+   * the logger carried its whole `$filter` — a person's name, typically — into an `info` or `warn`
+   * line. The query belongs in the debug request line and nowhere else.
+   */
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      message: this.message,
+      status: this.status,
+      method: this.method,
+      path: pathOf(this.url),
+      body: this.body,
+    };
+  }
+}
+
+/** The path without the query string, for logs. Falls back to nothing rather than throwing. */
+export function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return '';
+  }
 }
 
 export function truncate(body: string, maxBytes: number = ERROR_BODY_MAX_BYTES): string {
@@ -66,7 +93,7 @@ export function truncate(body: string, maxBytes: number = ERROR_BODY_MAX_BYTES):
 }
 
 /**
- * Redacts the API key from an error body, then caps it.
+ * Redacts every credential the call carried — the API key, a session SID — then caps the body.
  *
  * Ivanti echoes submitted values back in failures, and the ASMX session hands the key over as a
  * **body parameter** rather than a header — so a fault on that call is the realistic way the
@@ -112,8 +139,11 @@ const SENSITIVE_FIELDS =
 const SENSITIVE_ELEMENTS =
   /<((?:DB)?ConnectionString|SessionId|SessionKey|PrimaryEncryptionKey|SecondaryKeyParams|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)>[^<]*<\/\1>/gi;
 
-export function scrubErrorBody(body: string, apiKey: string): string {
-  const withoutKey = apiKey === '' ? body : body.split(apiKey).join('[REDACTED-API-KEY]');
+export function scrubErrorBody(body: string, ...secrets: string[]): string {
+  const withoutKey = secrets.reduce(
+    (text, secret) => (secret === '' ? text : text.split(secret).join('[REDACTED-API-KEY]')),
+    body,
+  );
   const withoutInternals = withoutKey.replace(SENSITIVE_FIELDS, (match, field: string) =>
     match.startsWith('\\') ? `\\"${field}\\":\\"[REDACTED]\\"` : `"${field}":"[REDACTED]"`,
   );

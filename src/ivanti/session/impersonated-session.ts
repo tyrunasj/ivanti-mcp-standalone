@@ -4,6 +4,7 @@
 import type { McpMode } from '../../config/env-schema.js';
 import type { Logger } from '../../logger.js';
 import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
+import { exchange, readText, type ExchangeContext } from '../http/exchange.js';
 import type { FetchLike } from '../http/transport.js';
 import type { IvantiRoutes } from '../odata/url.js';
 import type { IvantiSession, SessionIdentity } from './asmx-session.js';
@@ -103,11 +104,13 @@ export async function openImpersonatedSession(
   // their login, and each attempt mints another session that survives until the tenant timeout
   // — measured at 18,000 s here. One wrapper covers every exit rather than three of them.
   try {
+    // The SID is a live credential and Ivanti echoes submitted values into failures.
+    const context: ExchangeContext = { fetchImpl, logger, timeoutMs, secrets: [opened.sid] };
 
     const post = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {
-      let response: Awaited<ReturnType<FetchLike>>;
-      try {
-        response = await fetchImpl(url, {
+      const { body: text } = await exchange(
+        url,
+        {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json; charset=UTF-8',
@@ -115,27 +118,22 @@ export async function openImpersonatedSession(
             ...(sid === undefined ? {} : { Cookie: `SID=${sid}` }),
           },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-      } catch (error: unknown) {
+        },
+        context,
+        readText,
+      );
+
+      let parsed: unknown;
+      try {
+        parsed = text === '' ? {} : JSON.parse(text);
+      } catch {
+        // Unguarded, a login page answering 200 escaped as a raw `SyntaxError` — which `runTool`
+        // reports as a fault in this server rather than as something Ivanti said.
         throw new IvantiApiError(
-          { status: 0, method: 'POST', url, body: '' },
-          `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
+          { status: 200, method: 'POST', url, body: scrubErrorBody(text, opened.sid) },
+          'Ivanti answered 200 with a body that is not JSON',
         );
       }
-
-      const text = await response.text();
-      if (!response.ok) {
-        // The SID is a live credential and Ivanti echoes submitted values into failures.
-        throw new IvantiApiError({
-          status: response.status,
-          method: 'POST',
-          url,
-          body: scrubErrorBody(text, opened.sid),
-        });
-      }
-
-      const parsed: unknown = text === '' ? {} : JSON.parse(text);
       return (parsed as { d?: T }).d ?? (parsed as T);
     };
 
@@ -165,10 +163,9 @@ export async function openImpersonatedSession(
 
     // The form-urlencoded handlers: `handlers/<path>`, the token as a LOWERCASE header.
     const callHandler = async (handlerPath: string, form: Record<string, string>): Promise<string> => {
-      const url = routes.service(`handlers/${handlerPath}`);
-      let response: Awaited<ReturnType<FetchLike>>;
-      try {
-        response = await fetchImpl(url, {
+      const { body } = await exchange(
+        routes.service(`handlers/${handlerPath}`),
+        {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -176,55 +173,28 @@ export async function openImpersonatedSession(
             _csrftoken: csrf,
           },
           body: new URLSearchParams(form).toString(),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-      } catch (error: unknown) {
-        throw new IvantiApiError(
-          { status: 0, method: 'POST', url, body: '' },
-          `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
-      }
-      const text = await response.text();
-      if (!response.ok) {
-        throw new IvantiApiError({
-          status: response.status,
-          method: 'POST',
-          url,
-          body: scrubErrorBody(text, opened.sid),
-        });
-      }
-      return text;
+        },
+        context,
+        readText,
+      );
+      return body;
     };
 
     // The multipart upload: the token as a MIXED-case header, and no Content-Type — only fetch
     // knows the boundary it generated, and naming the type without it makes Ivanti read the body
     // as empty. Three spellings of one token, one session.
     const uploadToHandler = async (handlerPath: string, form: FormData): Promise<string> => {
-      const url = routes.service(handlerPath);
-      let response: Awaited<ReturnType<FetchLike>>;
-      try {
-        response = await fetchImpl(url, {
+      const { body } = await exchange(
+        routes.service(handlerPath),
+        {
           method: 'POST',
           headers: { Cookie: `SID=${opened.sid}`, _csrfToken: csrf },
           body: form,
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-      } catch (error: unknown) {
-        throw new IvantiApiError(
-          { status: 0, method: 'POST', url, body: '' },
-          `Ivanti is unreachable: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
-      }
-      const text = await response.text();
-      if (!response.ok) {
-        throw new IvantiApiError({
-          status: response.status,
-          method: 'POST',
-          url,
-          body: scrubErrorBody(text, opened.sid),
-        });
-      }
-      return text;
+        },
+        context,
+        readText,
+      );
+      return body;
     };
 
     // `tzoffset` is required: without it this answers 500, which reads as a broken session.
