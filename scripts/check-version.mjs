@@ -11,6 +11,10 @@
  *                          deployment falls back to appVersion, so drift here silently deploys
  *                          the wrong image.
  *
+ *   docs/handbook.html      `const VERSION` — the configurator stamps it into every `docker run`,
+ *                          compose file and Helm command it writes. It sat at 0.1.1 through four
+ *                          releases, because nothing guarded a static page.
+ *
  * Let any of them drift and you publish `ivanti-mcp:1.2.3` whose /health reports something else,
  * or a chart that installs a different image than it claims. Nobody notices until an incident.
  *
@@ -24,9 +28,12 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 const PKG = new URL('../package.json', import.meta.url);
 const CHART = new URL('../charts/ivanti-mcp/Chart.yaml', import.meta.url);
+const HANDBOOK = new URL('../docs/handbook.html', import.meta.url);
+const HANDBOOK_VERSION = /^const VERSION = "([^"]+)";$/m;
 
 const pkgVersion = JSON.parse(readFileSync(PKG, 'utf8')).version;
 const chart = readFileSync(CHART, 'utf8');
+const handbook = readFileSync(HANDBOOK, 'utf8');
 
 const read = (key) => {
   const m = chart.match(new RegExp(`^${key}:\\s*"?([^"\\s]+)"?\\s*$`, 'm'));
@@ -44,7 +51,12 @@ if (arg === '--sync') {
     .replace(/^version:\s*.*$/m, `version: ${pkgVersion}`)
     .replace(/^appVersion:\s*.*$/m, `appVersion: "${pkgVersion}"`);
   writeFileSync(CHART, next);
-  console.log(`Chart.yaml synced to ${pkgVersion}`);
+  if (!HANDBOOK_VERSION.test(handbook)) {
+    console.error('docs/handbook.html has no `const VERSION = "…";` line.');
+    process.exit(2);
+  }
+  writeFileSync(HANDBOOK, handbook.replace(HANDBOOK_VERSION, `const VERSION = "${pkgVersion}";`));
+  console.log(`Chart.yaml and docs/handbook.html synced to ${pkgVersion}`);
   process.exit(0);
 }
 
@@ -55,6 +67,7 @@ if (arg === '') {
 
 const chartVersion = read('version');
 const chartApp = read('appVersion');
+const handbookVersion = handbook.match(HANDBOOK_VERSION)?.[1] ?? '(missing)';
 // `--check` has no tag to compare against, so package.json is the reference.
 const wanted = arg === '--check' ? pkgVersion : arg.replace(/^v/, '');
 
@@ -62,6 +75,7 @@ const mismatched = [
   ['package.json', pkgVersion],
   ['Chart.yaml version', chartVersion],
   ['Chart.yaml appVersion', chartApp],
+  ['docs/handbook.html', handbookVersion],
 ].filter(([, value]) => value !== wanted);
 
 if (mismatched.length > 0) {
@@ -76,4 +90,4 @@ if (mismatched.length > 0) {
   process.exit(1);
 }
 
-console.log(`version ok: ${wanted} (package.json, Chart.yaml version, Chart.yaml appVersion)`);
+console.log(`version ok: ${wanted} (package.json, Chart.yaml version and appVersion, handbook)`);

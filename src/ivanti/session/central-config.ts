@@ -15,10 +15,10 @@ import type { FetchLike } from '../http/transport.js';
  * `asmx-session.ts` from `transport.ts`: three credentials that must never be reached for by
  * mistake.
  *
- * **What the session it returns can do is narrow, and the boundary is not negotiable.** It drives
- * OData and `Session.asmx`. Every `Workspace.asmx` method and the admin console answer **551** to
- * it, whatever role it holds — so forms, pick lists, quick actions and the catalog keep running
- * as the service account. See `docs/impersonation-plan.md` §1.
+ * **The session it returns reaches every surface once `SelectRole` has activated it** — OData,
+ * `Session.asmx`, `Workspace.asmx` and the service catalog. Before activation `Workspace.asmx`
+ * answers **551**, which was once mistaken for a boundary. Only tenant facts and the admin console
+ * stay on the service account. See `docs/impersonation-plan.md` §1.
  */
 
 /** The one shape of reply that matters; everything else in it is deliberately dropped. */

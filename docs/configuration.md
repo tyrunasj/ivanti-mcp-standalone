@@ -3,17 +3,19 @@
 `.env.example` is the reference — every setting, with its default. This is the guide: how to
 set the server up against a real identity provider, and what goes wrong.
 
-## Three decisions, in order
+## Four decisions, in order
 
 | Decision | Settings | Question it answers |
 |---|---|---|
 | **Transport** | `STDIO_TRANSPORT_ON`, `HTTP_TRANSPORT_ON` | How is the server reached? |
 | **Access** | `AUTH_MODE` and its credentials | Who may connect? |
-| **Capability** | `MCP_MODE`, `ENDUSER_BUSINESS_OBJECTS` | What may they do? |
+| **Audience** | `MCP_MODE`, `ENDUSER_BUSINESS_OBJECTS`, `ENDUSER_QUICK_ACTIONS` | What may they do? |
+| **Ivanti identity** *(optional)* | `IVANTI_CONFIG_URL` + `IVANTI_CENTRAL_CONFIG_API_KEY` | Does Ivanti see the service account, or the person? |
 
 They are independent. `AUTH_MODE` is a **door**, not an identity: it decides whether a client may
-connect at all. Who an operation is *for* is the `Customer` field on the Ivanti record, which is a
-separate concern entirely.
+connect. Who an operation is *for* is decided per conversation by `act_as` — and with the ConfigDB
+pair set, Ivanti signs in as that person and applies their own access
+([`impersonation-plan.md`](./impersonation-plan.md)).
 
 The server **fails closed**. An incomplete configuration exits `78` (`EX_CONFIG`) and prints every
 problem at once — not just the first.
@@ -46,48 +48,22 @@ common reason OAuth "doesn't work" here.
 
 ## Redirect URIs — whose are they?
 
-Two different URLs get confused here, and only one of them is ours.
-
 | URL | Belongs to | Production value |
 |---|---|---|
-| `MCP_PUBLIC_URL` | **this server** | always an FQDN: `https://mcp.example.com/mcp` |
-| the redirect URI | **the client** | depends on what kind of client it is |
+| `MCP_PUBLIC_URL` | **this server** | always an FQDN behind TLS: `https://mcp.example.com/mcp` |
+| the redirect URI | **the client** | loopback for a native client; the client's own HTTPS URL for a web one |
 
-The redirect URI is where the identity provider sends the user *back to* after login — so it is a
-property of the client application, never of this server. We neither host it nor see it.
+The redirect URI is where the IdP sends the user back after login — a property of the client,
+which this server neither hosts nor sees.
 
-### A loopback redirect is not "dev mode"
-
-For a **native client** — a CLI or desktop app such as Claude Code — `http://localhost:<port>/callback`
-is the correct production value. The app opens a browser, listens on a loopback port, and receives
-the authorization code back on it. There is no server to redirect to; the client *is* the endpoint.
-
-This is the pattern RFC 8252 (*OAuth 2.0 for Native Apps*) prescribes, and the MCP spec blesses it
-explicitly:
-
-> All redirect URIs **MUST** be either `localhost` or use HTTPS.
-
-So a tenant full of `http://localhost:…` redirects for CLI clients is not a lax configuration. It
-is the only thing a native client can do, and every provider special-cases loopback for exactly
-this reason — which is why `http://` is permitted there and nowhere else.
-
-### When the redirect *is* an FQDN
-
-A **web-hosted client** redirects to its own domain, e.g. `https://claude.ai/api/mcp/auth_callback`
-or your own portal. Then:
-
-- register that URL instead of a loopback one;
-- it **must** be HTTPS — no provider will accept plain `http` on a non-loopback host;
-- there is no `--callback-port`, because the client is not listening locally.
-
-### What this changes in practice
-
-Nothing about `MCP_PUBLIC_URL`: that is *our* address and is an FQDN behind TLS in any real
-deployment. The loopback URIs in the sections below are the client's, and they stay loopback for
-CLI clients no matter how production the environment is.
-
-The genuinely dev-only settings are different ones — Zitadel's *Dev Mode* toggle and similar exist
-to allow plain `http` on a **non**-loopback host, which is what you should not ship.
+- **A loopback redirect is production, not dev mode.** A CLI or desktop client (Claude Code) opens
+  a browser and listens on `http://localhost:<port>/callback`; the client *is* the endpoint. RFC 8252
+  prescribes it and the MCP spec allows it: *"All redirect URIs MUST be either `localhost` or use
+  HTTPS."* Every provider special-cases loopback, which is why plain `http` is allowed there only.
+- **A web-hosted client** (e.g. `https://claude.ai/api/mcp/auth_callback`) registers its own HTTPS
+  URL, and there is no `--callback-port`.
+- **What is genuinely dev-only** is a toggle like Zitadel's *Dev Mode*, which allows plain `http`
+  on a *non*-loopback host. Do not ship that.
 
 ---
 
@@ -228,11 +204,12 @@ values can be accepted at once.
 **Entra supports no Dynamic Client Registration**, so the client must be pre-registered and pinned:
 
 ```bash
-claude mcp add --transport http ivanti http://127.0.0.1:3000/mcp \
+claude mcp add --transport http ivanti https://mcp.example.com/mcp \
   --client-id <app-guid> --callback-port <port>
 ```
 
-The port must match the redirect URI exactly.
+The public URL, never a local one — see the prerequisite above. The port must match the redirect
+URI you registered, unless you registered it without one.
 
 ### Two Entra quirks worth knowing
 

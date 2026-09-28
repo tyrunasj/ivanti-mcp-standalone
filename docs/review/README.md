@@ -28,8 +28,8 @@ reads as though it covered everything.
 
 ## Keeping one honest
 
-- Re-run after any significant change to the tool surface. The manifest-driving exercise CLAUDE.md
-  describes is the complement to this: it finds what is wrong with the *descriptions*, which is not
+- Re-run after any significant change to the tool surface. The manifest-driving exercise
+  `docs/architecture.md` describes is the complement to this: it finds what is wrong with the *descriptions*, which is not
   visible from inside the code.
 - A finding that contradicts `docs/initial-design.md` §10 or `docs/notes.md` has to engage with the
   stated reason. Several obvious-looking defects here are decisions, and are listed as refuted.

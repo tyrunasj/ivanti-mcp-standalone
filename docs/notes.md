@@ -17,33 +17,17 @@ The server reads its own name and version from the manifest at startup, so the i
 test and fails only in the container, at boot. → Verify by running the built image, not just
 `pnpm build`.
 
-**pnpm's `node_modules` cannot be copied into an image as-is.**
-It is a symlink farm pointing into the store. `COPY node_modules` produces dangling links and an
-image that fails on the first `import`. Produce a self-contained tree with `pnpm deploy --prod`
-(or `--node-linker=hoisted`) and copy that instead. The image itself does not build — CI runs
-`pnpm build` and the Dockerfile only copies `dist/`.
+**Distroless has no shell, so `*_FILE` secrets must be read by the application.**
+There is no entrypoint wrapper to export them into the environment with `sh -c`;
+`read-secret-file.ts` reads them in-process, before the schema parses anything.
 
-**Host-built artifacts assume the target platform.**
-Production deps are pure JS today, so a macOS-built tree runs on linux/amd64 by luck. The first
-native dependency breaks that silently — build on linux in CI.
-
-**Distroless has no shell.**
-- No entrypoint wrapper, so `*_FILE` secrets must be read *by the application*, never by a
-  `sh -c` that exports env vars.
-- `HEALTHCHECK` needs an executable — there is no `curl`. Give the binary a `--health`
-  subcommand, or use a k8s `httpGet` probe and skip Docker healthchecks.
-
-**Distroless `static` ships no CA bundle, and `scratch` ships none at all.**
+**`scratch` ships no CA bundle; every distroless image does.**
 Needed for TLS to Ivanti *and* for fetching the IdP's JWKS. A missing trust store surfaces as a
 **token-validation failure**, not as an obvious TLS error — which sends you debugging OAuth when
-the problem is the base image.
-
-**`:nonroot` runs as uid 65532.**
-Mounted Docker/K8s secret files must be readable by it. Root-owned secrets are the default.
-
-**No tzdata**, if Ivanti dates are ever formatted in a local zone.
-
----
+the problem is the base image. Distroless images, `static` included, carry `ca-certificates` and
+`tzdata` (upstream README, checked 2026-09-28), and `nodejs22-debian12` inherits both. This bites
+only if the base ever became `scratch`. *(Corrected 2026-09-28: this entry once said `static` had
+no CA bundle, and a sibling said distroless had no tzdata. Both were wrong.)*
 
 **pnpm's `node_modules` cannot be copied between image stages.**
 The default layout is symlinks into a content-addressed store, and a `COPY --from=deps` moves the
@@ -75,6 +59,7 @@ That is the idiom for clearing a value inherited from `--env-file`, so an empty 
 "absent" when configuration loads. Before that, `-e AUTH_MODE=` failed with
 `Invalid option: expected one of "none"|"bearer"|"oauth"`, which reads like a typo in the schema
 rather than a deliberate override.
+*(Solved: `withoutEmpty` in `load-config.ts` treats an empty value as unset. Verified in the code 2026-09-28.)*
 
 ## Toolchain
 
@@ -161,6 +146,7 @@ The `GET /mcp` that opens the event stream stays open for the life of the connec
 its duration the same way as an RPC call made a perfectly healthy 131-second stream look like a
 pathological request. Streams log `mcp stream opened` / `mcp stream closed` with `attachedMs`;
 RPC calls log `mcp request` with `ms`.
+*(Solved: `mcp-handler.ts` logs a stream apart from a request. Verified in the code 2026-09-28.)*
 
 **Clients disconnect without sending DELETE — routinely, not exceptionally.**
 Observed live: clearing auth in Claude Code dropped the connection and opened a new session
@@ -169,59 +155,28 @@ until the idle sweep. This is the *normal* case, which makes `MCP_SESSION_IDLE_T
 load-bearing rather than defensive — without it every re-authentication leaks a session
 permanently, and `MCP_MAX_SESSIONS` would eventually be reached by ordinary use.
 
-**An argument name the schema does not have is dropped in silence, and `orderBy` is the one that
-costs an answer.** zod parses tool arguments non-strictly, so an unknown key is stripped before the
-handler runs — no error, no warning, nothing in the response to say it happened. For most
-parameters that degrades to a wider answer. For `orderBy` it produces a **confidently wrong** one:
-the OData literal is `$orderby`, all lowercase, so `orderby` is the natural spelling to reach for,
-and passing it returns rows in Ivanti's own RecId order while the caller believes they are sorted.
-Measured 2026-09-17 on `list_records`: `orderby: 'CreatedDateTime desc'` and
-`orderby: 'CreatedDateTime'` returned the **same five rows in the same order**, dates running
-2026-09, 2025-10, 2025-12, 2025-07 — and `orderby: 'NoSuchFieldAtAll desc'` was accepted too.
-`assertOrderBy` never ran, because it guards a parameter that never arrived; the description's
-promise that "the field name is checked before the request" is true only of the spelling that
-reaches the handler.
+**An argument name the schema does not have was dropped in silence — and for `orderBy` that meant
+a confident wrong answer.** Zod strips unknown keys and the SDK hands the handler the parsed value.
+`orderby` (the OData spelling) returned rows in Ivanti's RecId order, and `orderby: 'NoSuchField'`
+was accepted too: `assertOrderBy` guarded a parameter that never arrived. *(Measured 2026-09-17.)*
 
-The damage is the shape this repo already refuses elsewhere: "the latest ten" answered with ten
-arbitrary rows is `$filter`'s silently-dropped functions again, one layer higher.
+Fixed by closing the shapes, not by accepting the alias: `strictInput` in `defineTool` builds
+`z.strictObject(shape, { error })` — `.strict()` ignores its parameters — so the SDK refuses before
+the handler and names the near miss. `suggestNames` is asked second, because it skips a
+case-insensitive match. A zero-argument tool stays open: clients send a dummy property to one.
 
-**Fixed the same day by closing the shapes, not by accepting the alias.** `strictInput` in
-`defineTool` builds `z.strictObject`, so the SDK refuses before the handler runs and every tool is
-covered without anyone remembering to cover it. Three things were measured rather than assumed:
-
-- **The SDK accepts a `ZodObject` where it accepts a raw shape** (`normalizeObjectSchema`), and
-  `tools/list` then carries `"additionalProperties": false` — 40 of 41 tools, 78,723 bytes of
-  manifest. The model is told the shape is closed, rather than only discovering it on a refusal.
-- **Zod's own message is `Unrecognized key: "orderby"` and cannot be improved by `.strict()`**,
-  whose parameters are ignored — `z.strictObject(shape, { error })` is the form that takes a
-  customiser, and it receives `issue.keys`. The message names the near miss, and `suggestNames`
-  had to be asked SECOND: it skips a candidate matching case-insensitively, on the reasoning that
-  "an exact match was never the problem" — true of an entity name, false of an argument, where
-  the case IS the problem.
-- **A zero-argument tool is left open on purpose.** Its shape is `{}`, which the SDK does not
-  treat as a schema at all, and clients send a dummy property rather than an empty object for a
-  tool that takes nothing — this session's own client sent `{ random_string: 'probe' }` to
-  `get_version`. Closing that would refuse a correct call.
-
-**Closing the shapes blinded an existing guard, which is the part worth remembering.**
-`description-budget.test.ts` read parameter descriptions with `Object.entries(tool.config.inputSchema)`.
-That works on a raw shape and returns zod's internals on a `ZodObject`, so the argument budget
-measured **zero parameters and passed** — green, and guarding nothing. `declaredArguments` now
-reads the shape back out of either form. A test that enumerates a data structure is a test that
+**Closing the shapes blinded an existing guard.** `description-budget.test.ts` enumerated
+`inputSchema` with `Object.entries`, which on a `ZodObject` yields zod's internals — it measured zero
+parameters and passed. `declaredArguments` reads either form. A test that enumerates a structure
 fails silently when the structure changes shape.
+*(Solved: `strictInput` and `declaredArguments`. Verified in the code 2026-09-28.)*
 
-**The narration rule covers Ivanti's names and forgets the server's own.** "Answer in the
-tenant's words, not the system's" names RecIds, field keys and object names — so a model obeys it
-perfectly and still opens the conversation with *"I need to call `act_as` before anything
-answers"*. The instructions themselves invite it: they say to *"ask them for their name, email or
-login and call `act_as` with it"*, and a model repeating that sentence back to a person hands them
-the plumbing instead of a question. `act_as`, `get_version`, `ivanti://reference/…` are the same
-kind of string as `ProfileLink_RecID` — they address this server, they do not describe it. The
-person should hear *"Who am I helping? Your name, email or Ivanti login."* and nothing about a
-tool. Observed 2026-09-17, driving the server: the very first turn leaked the tool name twice.
-The fix belongs in the narration paragraph, which costs a clause rather than a rule — the
-widest deployment (`full`/`odata`, no impersonation) stands at 1,964 of 2,000, so it is paid
-for out of an existing paragraph.
+**The narration rule listed Ivanti's names and forgot the server's own.** A model obeyed "answer in
+the tenant's words" and still opened with *"I need to call `act_as`"* — the instructions themselves
+said "call `act_as` with it". A tool name addresses this server exactly as `ProfileLink_RecID`
+addresses Ivanti. Fixed with one clause — *"Never name a tool to a person; ask in plain words"* —
+for a net −1 character. *(Observed 2026-09-17.)*
+*(Solved 2026-09-17. Verified in the code 2026-09-28.)*
 
 **Elicitation exists in this SDK and is unused — an open investigation, not a trap.**
 Protocol `2025-11-25` (what SDK 1.30 implements) gives the server `server.elicitInput(...)`, which
@@ -257,6 +212,7 @@ An early version folded `stdio` into `AUTH_MODE`, which made `stdio` and `none` 
 "no authentication" and left no way to say "HTTP" without also picking a door. Both directions now
 fail closed: HTTP on with no `AUTH_MODE` refuses to start, and an `AUTH_MODE` set while HTTP is
 off is an error rather than a silently ignored setting that looks protective.
+*(Solved: separate settings, and both mismatches refuse to start in `validate-config.ts`. Verified in the code 2026-09-28.)*
 
 **Transports are two booleans, not one list.**
 `STDIO_TRANSPORT_ON` / `HTTP_TRANSPORT_ON`, both may be on. A list (`MCP_TRANSPORT=stdio,http`)
@@ -333,12 +289,14 @@ truncated mid-sentence and the *remedy* — "Set the application to issue JWT ac
 reached the client. A diagnosis whose fix is cut off is worse than no diagnosis. `TokenVerification`
 therefore carries a short `description` for the challenge and an optional longer `detail` for the
 log.
+*(Solved: `TokenVerification` carries `description` for the challenge and `detail` for the log. Verified in the code 2026-09-28.)*
 
 **`WWW-Authenticate` values must be printable ASCII.**
 RFC 6750 restricts them to %x20-21 / %x23-5B / %x5D-7E, and Node throws
 `Invalid character in header content` on anything outside Latin-1 — turning a clean 401 into a
 500. An em dash in an error message was enough. `buildWwwAuthenticate` sanitises and truncates,
 because the description is prose and prose acquires punctuation.
+*(Solved: `buildWwwAuthenticate` replaces anything outside the RFC 6750 range. Verified in the code 2026-09-28.)*
 
 **Never mount the SDK's `mcpAuthRouter` or `proxyProvider`.**
 They are the *authorization-server* half — `authorize`, `token`, `register`, `revoke`. Mounting
@@ -372,10 +330,11 @@ cannot be used to *drop* privilege either, and a server cannot test its own degr
 asking for a lesser role. Read the effective role back from `InitializeSession` (it reports
 `ActiveRole`) and refine it with `Session.asmx/GetUserData`; never assume what was asked for.
 
-**Anything Ivanti resolves "for the current user" answers for the service account.**
-A saved search called "My …" returns the API key's service account's items, never the caller's.
-Filtering by `Customer` is the only thing that reflects the person actually asking — which is why
-the effective `DisplayName` belongs in the server instructions.
+**Without impersonation, anything Ivanti resolves "for the current user" answers for the service
+account.** A saved search called "My …" returns the API key's service account's items, never the
+caller's, and filtering by `Customer` is the only thing that reflects the person actually asking —
+which is why the effective `DisplayName` belongs in the server instructions. With the ConfigDB pair
+configured, `act_as` opens Ivanti's own session for the person, and "my" then means them.
 
 **The `/HEAT` prefix is usually present but not always.**
 `…/HEAT/api/odata/…` on some tenants, `…/api/odata/…` on others. Probe both once at startup and
@@ -470,11 +429,9 @@ is not a field at all but a link, written as `ProfileLink_RecID` plus `ProfileLi
 translation lives on the form — `TableMeta.Fields[].DisplayName` and `LinkIdMap` — and without it
 a caller writes a field that does not exist. Measured live 2026-09-11.
 
-**Required-field rules are conditional, and fire on a status change.**
-An incident accepts `Status: 'Logged'` with nothing else, and refuses `Status: 'Active'` until
-`Category` and `Owner` are set — in the same call. Nothing asks for them beforehand, and
-`BusObjectRequiredRules` on the form lists thirteen fields without saying when each applies. So
-the useful thing to report is Ivanti's own message, translated.
+**Required-field rules are conditional, and fire on a status change.** An incident accepts `Logged`
+with nothing and refuses `Active` until Category, Owner and Team are set — in the same call, with
+nothing asking beforehand. See "The form carries required and read-only rules" below.
 
 **The CSDL `validated` flag and the form disagree — in both directions.**
 Task's `$metadata` reports **no** validated fields while its form declares **twenty**; a role's
@@ -574,6 +531,7 @@ change in place, `act_as` followed by `download_attachment` returned the file on
 row read, which would have meant a person could see an attachment row and not its bytes. It is not.
 The remaining honest limit is that both were measured as the same Admin account: a role that can
 read the row but not the file would still be invisible here.
+*(Solved: `requestBinary` goes through the same credential branch as every other call. The role limit in the last paragraph is still open. Verified in the code 2026-09-28.)*
 
 **A field on a validated list can still be *computed*, and the write is overridden without a word.**
 `Incident.Priority` is on the picklist — `get_pick_list_values` returns its five values, and a write
@@ -685,7 +643,7 @@ Measured live:
 | Anything with rows | `{"value": [ … ]}` |
 
 The sentinel is the nastier one: `value.length` is 19 and `value[0]` is `"N"`, so a caller that
-trusts it reports 19 related records. `readCollection()` in `src/ivanti/odata-response.ts` absorbs
+trusts it reports 19 related records. `readCollection()` in `src/ivanti/odata/response.ts` absorbs
 both, and **refuses any other string** rather than reporting prose as an empty result — "Access
 denied" must not arrive as "no rows".
 
@@ -779,10 +737,12 @@ neither computer whose `ChassisType` is literally "Laptop". It covers a ticket's
 description and notes — not structured fields, and on some objects almost nothing. This was the
 single most dangerous sentence in the tool manifest, because it told a model an empty result
 "genuinely means no match". *(Found 2026-09-12 by six agents driving the tools blind.)*
+*(Solved as far as the wording goes: the sentence is gone from the manifest, and the server instructions call a keyword miss a weaker claim than a filter miss. What Ivanti indexes has not changed, so the trap itself still applies. Verified in the code 2026-09-28.)*
 
 **A grouped count can omit most of the table while every bucket says `exact: true`.** The buckets
 come from a create form's validation list; records holding a value that list no longer offers fall
 into no bucket. Measured: a change's statuses summed to **12 of 51**, an incident's categories to
+*(Solved: `group_count` reports `total` and `unaccounted`. Verified in the code 2026-09-28.)*
 **81 of 547**. The per-bucket flag guards the wrong thing — the counts were right, the set of
 buckets was short. `group_count` now reports `total` and `unaccounted`. *(Measured 2026-09-12.)*
 
@@ -796,15 +756,14 @@ missing record answers it with `"Invalid key"`, and a **prompt-gated status tran
 the same code with `DataLayer.PromptException`. Matching the bare code made every gated transition
 report "the record or field does not exist", which sent two independent testers hunting a field
 name that was never wrong. *(Found 2026-09-12.)*
+*(Solved: a `PromptException` is told apart from a missing record. Verified in the code 2026-09-28.)*
 
-**An unhandled Ivanti exception volunteers session internals.** A 500 from `PreDeleteObject` came
-back carrying `SessionId`, `TenantId`, `LoginId`, `Hostname` and `ServiceName`. `scrubErrorBody`
-redacted the API key because that was the only thing anyone had thought to look for; these now go
-too. *(Found 2026-09-12.)*
-
-**Ivanti refuses an upload by file EXTENSION, per tenant, and answers 200 while doing it.** The
-same bytes upload as `.txt` and are refused as `.log`, with `IsUploaded: false` and
-`"Invalid attachment type"` inside a success status. *(Measured 2026-09-12.)*
+**An unhandled Ivanti exception volunteers session internals — sometimes escaped inside a JSON
+string.** A 500 from `PreDeleteObject` carried `SessionId`, `TenantId`, `LoginId`, `Hostname` and
+`ServiceName`, and `scrubErrorBody` redacted only the API key. An ASMX 500 nests them in
+`LogEntryId` as `\"SessionId\":\"…\"`, and a regex matching only the plain form redacted one field
+of six and read as working. *(Found 2026-09-12.)*
+*(Solved: `errors.ts` redacts the session fields, plain and escaped. Verified in the code 2026-09-28.)*
 
 **A service-request date is stored at the offset in force ON THAT DATE, not today's.**
 `2026-11-01` submitted in September stores as `2026-10-31T23:00:00Z` — local midnight at the
@@ -826,20 +785,13 @@ Code harness: two tools cut at ~2040 and ~2044, pointing at a 2 KiB cap that the
 mention. `src/tools/description-budget.test.ts` fails the build at 2000 rather than letting a
 warning vanish into a conversation.
 
-**Closed is final, and Ivanti means it everywhere except updates.** A closed record is read-only:
-a DELETE answers 400 and a reopen action answers `saved: true, status: 'error'` while changing
-nothing — both expected, and the second is another outing for the untrustworthy `saved` flag. A
-resolved record is not read-only and reopens normally. The **update** path is the one place Ivanti
-does not hold the line: a PATCH to a closed record is accepted and stored, which is the gap this
-server closes. A test record closed in passing therefore cannot be tidied away — it stays until
-the tenant is reset. *(Measured 2026-09-12.)*
-
-**Ivanti marks a closed record read-only and then writes to it anyway.** A closed incident carries
-`ReadOnly: true` — measured across statuses, true for `Closed` and false for `Resolved`, `Active`
-and `Logged`, which is exactly the lifecycle: a resolved ticket can still be reopened, a closed one
-is final. A PATCH against one answered **200 and stored the change**. `IsInFinalState` looks like
-the same signal and is not: it reads false even on closed records. So the flag is enforced in this
-server or nowhere. *(Measured 2026-09-12.)*
+**A closed record is read-only everywhere except the update path.** A closed incident carries
+`ReadOnly: true` (false for `Resolved`, `Active`, `Logged` — a resolved ticket can still reopen).
+A DELETE answers 400 and a reopen answers `saved: true, status: 'error'` while changing nothing —
+but a **PATCH answers 200 and stores the change**. So the flag is enforced here or nowhere
+(`assertRecordWritable`), and a test record closed in passing cannot be tidied away.
+`IsInFinalState` looks like the signal and is not: it is `false` on every record, closed ones
+included. *(Measured 2026-09-12.)*
 
 **A file downloads from the same endpoint that deletes it.** `GET /api/rest/Attachment?ID=<recid>`
 streams the bytes with a real `content-type` and `content-disposition`; it is the same path as the
@@ -860,6 +812,7 @@ The same hole exposed staff-internal journal notes on the caller's own ticket, w
 filters by `PublishToWeb` and a raw traversal did not.
 *(Found 2026-09-12 while wiring notes; a gate that is enforced in one direction only is not a
 gate.)*
+*(Solved: `get_related_records` checks the relationship's target against the gate. Verified in the code 2026-09-28.)*
 
 **A group Business Object's extension name can end in `s`, and the name resolver singularised it
 away.** `journal__notes` — the extension a person writes a note to — became `journal__note`, so
@@ -867,6 +820,7 @@ away.** `journal__notes` — the extension a person writes a note to — became 
 had just been given. The entity set is the CSDL name plus a literal `s` (`journal__notess`), and
 the guess that builds it would not add a second `s` either, so the right graph was never fetched.
 Both directions now try the name as given before the guess. *(Found 2026-09-12.)*
+*(Solved: `catalog.ts` tries the name as given before the singularised guess. Verified in the code 2026-09-28.)*
 
 **`Journal` is a group object; a note is its `journal__notes` extension, and the two behave
 differently.** Creating on the group needs `JournalType` by hand and puts the text in `Subject`;
@@ -976,6 +930,7 @@ Ivanti keeps a per-tenant allowlist and decides from the *filename*. The same by
 reports 300 as `ok: false`, the transport threw before anything read the body — so the whole
 "explain the refusal" path was unreachable and the caller saw a bare `Ivanti POST 300`.
 *(Measured 2026-09-12.)*
+*(Solved: `attachments/upload.ts` unpacks the 300 and reports Ivanti's reason. Verified in the code 2026-09-28.)*
 
 **`CreatedBy` can be overridden on an attachment; `ParentLink_Category` must be the AdminUI id.**
 A PATCH linking a new attachment fails with *"Role Admin does not have rights to update following
@@ -983,18 +938,6 @@ fields"* when `ParentLink_Category` is `Incident`, and succeeds with `Incident#`
 spelling, `CreatedBy` set in the same PATCH is accepted **and sticks** — so an uploaded file can be
 attributed to the person it came from rather than to the server's service account. `LastModBy`
 still does not stick, the same split as on record creation. *(Measured 2026-09-12.)*
-
-**`IsInFinalState` is `false` on closed records.**
-It reads like the field for "can this still be edited" and is not: measured across this tenant,
-every record carries `false` regardless of status, including `Closed`. `Status` and `ReadOnly`
-are the fields that answer. *(Measured 2026-09-12.)*
-
-**An unhandled ASMX exception volunteers session internals, escaped inside a JSON string.**
-A 500 body carries `LogEntryId` whose value is itself JSON-encoded, so `SessionId`, `TenantId`,
-`LoginId`, `ClientIpAddress`, `Hostname` and `ServiceName` arrive as `\"SessionId\":\"…\"`
-rather than `"SessionId":"…"`. A scrub regex matching only the unescaped form redacted exactly one
-of the six — the one field that happens to sit outside the nested string — and read as working.
-*(Measured 2026-09-12.)*
 
 **No fixed field list identifies a record across tenants.**
 A tenant defines its own Business Objects and renames fields on the ones Ivanti ships, so
@@ -1017,6 +960,7 @@ back to the row. *(Measured 2026-09-12.)*
 so the throw escaped before the promise existed and any `.catch()` on the call never ran. The real
 transport is async and always rejects. One whole error path (`uploadAttachment` unpacking Ivanti's
 300) passed its tests while being unreachable in production.
+*(Solved: `connectionFixture` rejects rather than throwing. Verified in the code 2026-09-28.)*
 
 ### Impersonation via CentralConfig
 
@@ -1038,6 +982,7 @@ rather than only the form-and-workflow half. **What is not yet established is wh
 *scopes* to that user** — an analyst's session returned the same 551 incidents the admin key
 sees, which is consistent with either "he may read them all" or "OData ignores role scoping".
 Do not describe the OData half as access-limited until that is measured. *(Measured 2026-09-14.)*
+*(Solved: answered below by "OData scopes to the session's role" — it does, and a session with no role reads nothing.)*
 
 **`AuthenticateAPI` requires `Disabled = 0`; `Status` is a different field and lies about it.**
 All six users read `Status = Active` throughout, while the call answered `AccessDenied` for the
@@ -1049,7 +994,8 @@ user by that name" — a wording that sends you looking for a typo in the login.
 `InitializeSession` returned `ActiveRole` **empty** for a user holding three roles, and
 `AdminUI/services/AppDesign.asmx` answered `ValidateSessionException` (HTTP 551). That is a
 missing *selection*, not missing rights: `FRSHEATIntegration.asmx/GetRolesForUser`
-(`sessionKey` + `tenantId`) lists them and `SetRoleForUserSession` (+ `roleName`) picks one.
+(`sessionKey` + `tenantId`) lists them and `Session.asmx/SelectRole` (`sRole`) picks one — not
+`SetRoleForUserSession`, see below.
 `sessionKey` is the full `#`-delimited SID. A user with no admin role is refused the same way,
 so the two cases are indistinguishable from the response alone — read the role list first.
 *(Measured 2026-09-14.)*
@@ -1058,30 +1004,6 @@ so the two cases are indistinguishable from the response alone — read the role
 `AuthenticateAPI` returns `ConnectionString` and `ProviderName` beside the session fields. Any
 code that logs this response, or echoes it into an error, leaks the database credential. It must
 be destructured at the transport boundary and never stored whole. *(Measured 2026-09-14.)*
-
-**A role's height is its *object* workspace count, and the total count ranks wrongly.**
-Ivanti publishes no role ordering anywhere reachable — `frs_def_role` has `ParentRole` but it is
-null on all 51 roles here, there is no permissions object in the 1324-object catalog, and
-`employee.ROLE_TO_LINK` is null. What does rank them is `GetRoleWorkspaces`, and it takes the role
-as an argument (`sRole`), so one session can measure a role without switching into it — **but only
-an admin one** — or so it appeared: a `ServiceDeskAnalyst` session answered **551** for every role
-including its own, later traced to the session never having been activated with `SelectRole`
-(see below), not to admin rights. The ranking was dropped for other reasons before that was known.
-Count only the `ObjectWorkspace` rows: measured here, `ServiceOwner` has 12 workspaces to
-`ChangeManager`'s 11 but 2 object workspaces to its 7, and `SelfServiceIT` ties
-`ServiceDeskAnalyst` at 7 total while holding 1 against 3. The ladder measured by object
-workspaces: SelfService 0, SelfServiceMobile/SelfServiceIT/HR/FM/SecOps 1, ServiceOwner 2,
-ServiceDeskAnalyst 3, ServiceDeskManager 5, ChangeManager 7, Admin 24.
-
-**The two metrics disagree at the bottom, so neither is "the" ranking.** `SelfServiceMobile` has
-the fewest workspaces of any role (5) and yet carries 1 object workspace, while `SelfService` has
-6 and carries 0. Object count is the better proxy higher up the ladder and the total is the better
-one at the floor, which is why the least-privileged role is **named in configuration** rather than
-derived — a self-service role does *not* reliably carry zero object workspaces.
-
-A role can also simply fail: `Guests` and `CallLogSelfService` both answer **500**. An unrankable
-role must be skipped rather than treated as zero, which would otherwise make it the preferred
-choice wherever the lowest is wanted. *(Measured 2026-09-14.)*
 
 **Ivanti labels its own self-service roles — do not infer it from workspace counts or names.**
 `GetUserData` returns `userRoleList` (lower-case `u`, unlike its siblings), and each entry carries
@@ -1104,8 +1026,8 @@ answers for a session with no role at all. The two are complementary, not altern
 It takes `sRole` — the same spelling `GetRoleWorkspaces` uses — and re-points the established
 session by rewriting Ivanti's `UserSettings` cookie, with no re-authentication and no credentials.
 `Account/SelectRole` is the sign-in-time MVC form and needs an anti-forgery token only available
-while signed out, so it is not the one to call. *(From `ivanti-mobile`, verified live there;
-not re-measured here.)*
+while signed out, so it is not the one to call. *(From `ivanti-mobile`, and measured here
+too — see the activation entry below.)*
 
 **A CentralConfig session must be ACTIVATED with `SelectRole`, or the whole form surface answers 551.**
 `InitializeSession` reports a role; that is not the same as a role being *selected*. Until
@@ -1121,6 +1043,7 @@ other than the service account: the request and its file both came back `Created
 This server once documented those 551s as an Ivanti boundary and built a surface split on it. The
 cause was its own optimisation: `SelectRole` was skipped whenever the chosen role already matched
 the active one. **Never skip it.** *(Measured 2026-09-14.)*
+*(Solved: `impersonated-session.ts` always selects the role, never skipping it. Verified in the code 2026-09-28.)*
 
 **OData scopes to the session's role, and a session with no role reads nothing.**
 Counts through the same OData path, varying only the session: service account (Admin) and an
@@ -1139,6 +1062,15 @@ fills all three from the session, so impersonation makes attribution real rather
 the `CreatedBy` override `enduser` writes carry becomes redundant. `Owner` following the session
 was not anticipated — on a non-impersonated write it would be the service account.
 *(Measured 2026-09-14.)*
+
+Measured again 2026-09-17, which settled when and why. `OwnerTeam` follows too — the person's
+own team (`IT` for Harold Sanders), not the queue that should handle the record. `Owner` is
+stamped only when the record *advances*: a create that lets Ivanti move it to `Active` gets the
+session user, because `Active` requires an owner, while one carrying the tenant's initial status
+(`Logged` here) stores `Owner` null. The same rule makes it one-way — clearing the owner at
+`Active` is refused. So in `enduser` mode every self-raised ticket comes back owned by the person
+who raised it, and reaches no queue. `create_record` names every field stamped this way
+(`session-stamp.ts`); it reports the assignment and does not correct it.
 
 **`LastModBy` is overwritten by whichever workflow runs, so it records nothing durable about who
 acted.** One incident read back moments later said `LastModBy='InternalServices'` rather than the
@@ -1174,15 +1106,13 @@ on every boot is not worth catching a typo. Note the field is `DBConnectionStrin
 `ConnectionString` on `AuthenticateAPI`: a redaction pattern written for one misses the other,
 which is how the first version of the scrubber let it through. *(Measured 2026-09-14.)*
 
-**The manifest budget was down to 9 characters of 38,000, and is now 98.**
-`full` now carries 41 tools and 37,991 characters of description with impersonation on — the
-widest manifest a caller can be sent, which is what `description-budget.test.ts` measures since
-descriptions vary with `canImpersonate`. `switch_role` cost 277 and the conditional `act_as` line
-89. The next paragraph added anywhere fails the build, which is the intended design but is no
-longer theoretical: the "manifest budget relief → resources" item already on the roadmap is now
-blocking rather than optional. Note which number may move — `DESCRIPTION_BUDGET` (2,000) tracks
-real client truncation and raising it buys nothing, while `MANIFEST_BUDGET` is a self-imposed
-cost ceiling and raising *that* is a decision to argue on cost. *(Measured 2026-09-14.)*
+**The two budgets are different kinds of number, and only one of them may move.**
+`DESCRIPTION_BUDGET` (2,000 per tool) tracks a real client truncation — text past it never reaches
+the model — so raising it buys nothing. `MANIFEST_BUDGET` (38,000 across the manifest) is a
+self-imposed cost ceiling, and raising *that* is a decision to argue on cost. The manifest sits
+within a few dozen characters of it and has done for weeks, so read the current figures from the
+assertion message in `description-budget.test.ts` rather than from any document, this one
+included — every figure written down here has gone stale. *(Revised 2026-09-28.)*
 
 **`GetUserData` can refuse for a person permanently, not just while their session has no role.**
 The obvious repair for a flagless role list is to select any role and ask again — the session then
@@ -1211,6 +1141,7 @@ still refuse. Checking *before* opening matters on its own — otherwise an inje
 would mint an Ivanti session for a person the conversation is about to refuse. Anything
 irreversible wants the same shape: ask, do the work that can fail, then commit.
 *(Measured 2026-09-14.)*
+*(Solved: `SessionPin.check()` — ask, open the session, then commit. Verified in the code 2026-09-28.)*
 
 **`AuthenticateWithAPIKeyAndUser` does NOT impersonate — it returns the API key's own session and
 echoes your `loginId` back at you.** Its signature (`key`, `userIpAddress`, `userAgent`, `tenant`,
@@ -1232,69 +1163,36 @@ accept an activated one; the service is not special. Kept because an earlier ent
 one service's 551 into "the ASMX boundary" — the wrong lesson from a true measurement.
 *(Measured 2026-09-14.)*
 
-**The form already carries the required and read-only rules, and nothing reads them.**
-`FindFormViewData` — the call `form-context.ts` makes for validated fields — returns far more than
-the four keys the interface declares. Measured on Incident, 2026-09-17:
+**`link_records` reports a link it did not make; `unlink_records` refuses the mirror case.**
+Re-linking an already-linked incident answered `{"linked": …}`, identical to a real link; the
+relationship read back 4 rows, not 5, so the defect is only the reply. The pair is asymmetric:
+`unlink_records` checks membership first, because Ivanti accepts an unlink of nothing and on a
+Contains relationship severs a third record. Fix: reuse that membership read to answer
+`alreadyLinked: true` — never refuse, since re-running a batch after a partial failure depends on
+it. *(Measured 2026-09-28. Not yet fixed.)*
 
-| key | what it holds here |
-|---|---|
-| `BusObjectRequiredRules` | 13 field names: `Category`, `CauseCode`, `Resolution`, `Service`, `Owner`, `ResolvedBy`, `AlternateContactLink`, `OwnerTeam`, `Status`, `Subject`, `Symptom`, `ProfileLink_RecID`, `ProfileLink` |
-| `BusObjectReadOnlyRules` | 20, including `Priority`, `CauseCode`, `Resolution`, `CreatedBy`, `LastModBy`, `ActualCategory` — **also conditional**, see below |
-| `FieldsNotEditable` | `{}` on this tenant |
-| also present | `RuleMeta`, `LinkValidationFields`, `FieldValidationTableRights`, `FormAllowInsert/Update/View`, `FormAllowEditInFinalState`, `FormCellExpressions` |
+**Open question: relationships are where "several at once" is the normal request.** Linking four
+incidents to a problem cost four calls, unlinking three cost three, and seeing the result two more.
+To settle before building: `targetId` → `targetIds` (no new tool, and the manifest has almost no
+room); how a partial failure names what succeeded (`submit_service_request`'s comparison is the
+precedent); and whether unlink gets it too — riskier, because its per-target check is the whole
+safety argument.
 
-It is a **list of the fields governed by required rules, not the rules themselves** — the
-conditions are not in the payload. So it answers "which fields can become required" and not "is
-this one required right now", and a tool must say which of those two it is answering. That still
-beats the status quo, which is finding out from a refusal: `explainRequiredFields` translates
-Ivanti's message *after* the write, and **a refusal names only what Ivanti checked before
-stopping** — measured, a create carrying only `Subject` was refused with three fields named while
-a nearly-complete one was refused with a single `Category`. So being told about one missing field
-is no evidence the rest are satisfied, and "fix what it named, retry" can loop.
+**The form carries required and read-only rules — both conditional.** `FindFormViewData`, already
+fetched for validated fields, returns `BusObjectRequiredRules` (13 fields on an incident) and
+`BusObjectReadOnlyRules` (20, including `Priority`), plus `RuleMeta`, `FormAllowInsert/Update` and
+more. Each is a list of the fields a rule **governs**, never the condition — so it answers "which
+can become required" and not "is this one required now". Measured: an incident reaches `Logged`
+with no owner, `Active` needs Owner *and* Team, and the owner cannot be cleared at `Active`. A
+refusal names only what Ivanti checked before stopping (one field on one create, three on another),
+so being told of one is no evidence the rest are satisfied. *(Measured 2026-09-17.)*
 
-The conditionality is real and was measured, not inferred: an incident at `Logged` needs no owner,
-the same incident at `Active` requires `Owner` **and** `OwnerTeam`, and clearing the owner while
-the record sits at `Active` is refused.
-
-**`BusObjectReadOnlyRules` is conditional too, and reading it as absolute broke a working write.**
-It looks exact — a list of fields, no expressions — so a guard was built that refused any write
-naming one, on the reasoning that Ivanti accepts such a write, answers 200 and stores its own
-value. Measured the same day: `problem`'s list names `Subject`, `Description` and `Category`, and
-a create carrying all three **succeeds** (problem 10230). `Category` is `nullable: false` on that
-object, so the guard refused the one field the schema calls mandatory, and the refusal was
-indistinguishable from a real one because it was phrased with the same confidence. The guard was
-removed and the flag kept as `readOnly: 'sometimes'`.
-
-The lesson is narrower than "don't trust the form": **both keys have the same shape and the same
-meaning — the fields a rule governs — and a flat list of names is not evidence that the rule is
-unconditional.** The required one announced its conditionality (`Owner` is obviously not always
-required); the read-only one did not, and that is exactly why it was believed.
-
-**Ivanti stamps `Owner` from the signed-in session, so an impersonated create assigns the ticket
-to the person who raised it.** Nothing sends `Owner` — the create carried Subject, Symptom, the
-customer pair, Service, Category and Source, and Ivanti filled the rest. Measured 2026-09-17 with
-two creates acting for the same person, one with the ConfigDB pair and one without:
-
-| | impersonation ON (as Harold Sanders) | impersonation OFF |
-|---|---|---|
-| `Owner` | `HSanders` | `tyrunasj` (the service account) |
-| `OwnerTeam` | `IT` | `Service Desk` |
-| `CreatedBy` / `LastModBy` | `HSanders` | `tyrunasj` |
-
-`OwnerTeam` follows the session user's own team, so the record lands in whatever queue that person
-belongs to rather than the one that should handle it. The authorship story is the good half — this
-is exactly the `CreatedBy` behaviour impersonation exists for. The ownership half is a defect, and
-it is worst precisely where impersonation matters most: in `enduser` mode every self-raised ticket
-comes back **owned by the requester**, which means it reaches no queue and no analyst ever sees it.
-It is invisible from inside the code, because nothing in this repo mentions `Owner` on a create.
-
-**A delete under an impersonated non-admin session answers `400 ISM_4000 Invalid Request
-Payload`.** Harold Sanders could not delete the incident his own session had just created; the
-identical delete as `tyrunasj` (Admin) succeeded. The payload was the same in both, so this is a
-permissions answer wearing a malformed-request costume — the same dialect problem as get-by-key
-answering `400` for a record that does not exist. `delete_record` reported the failure rather than
-claiming success, which is what stopped a test record being silently left behind — but a caller
-reading the error would go looking for a bug in their request.
+**Reading the read-only list as absolute broke a working write.** A guard refused any write naming
+one of its fields — and `problem`'s list names `Subject`, `Description` and `Category`, all of which
+a create accepts (problem 10230); `Category` is mandatory there. The required list announced its
+conditionality; the read-only one did not, which is why it was believed. *(Measured 2026-09-28.)*
+*(Solved: both lists are read and reported as `'sometimes'`, never refused on, and a required-field
+refusal carries the governed list. Verified in the code 2026-09-28.)*
 
 ## Observability
 
@@ -1310,8 +1208,10 @@ guided attack: watch `sessions` against the cap, watch `rssMb` and CPU to see wh
 landing. Process metrics belong to the container runtime, which is already authenticated. (It
 also avoided a second trap — `process.cpuUsage()` legitimately exceeds 100% of wall-clock time
 because V8 uses background threads, so an unnormalised figure read as a bug.)
+*(Solved: removed — nothing under `src/server/` reads process memory or CPU. Verified in the code 2026-09-28.)*
 
 ## Testing
 
 **Build a `Config` through `configFixture`, never as a literal.**
 Four test files each hand-built one, and adding five `OAUTH_*` keys broke all four at once.
+*(Solved: no test builds a `Config` literal any more, and `formFixture` applies the same lesson to `ResolvedForm` since 2026-09-17. Verified in the code 2026-09-28.)*

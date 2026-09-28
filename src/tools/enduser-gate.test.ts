@@ -258,7 +258,7 @@ describe('enduser mode gates every object-taking tool', () => {
    *
    * They used to sit in the list above, which asserted they should not exist in `enduser` mode at
    * all — and a real deployment that sets `ENDUSER_QUICK_ACTIONS` registers them, which is the
-   * shape CLAUDE.md documents as the supported way to let end users close their own tickets. The
+   * shape docs/architecture.md documents as the supported way to let end users close their own tickets. The
    * assertion was not merely incomplete, it was false.
    */
   it('registers the quick-action tools exactly when ENDUSER_QUICK_ACTIONS names something', () => {

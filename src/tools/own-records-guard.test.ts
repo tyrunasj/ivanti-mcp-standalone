@@ -98,7 +98,7 @@ const GATED = configFixture({
   // `run_quick_action` entirely (register-tools.ts:129) — so the "classifies every registered
   // tool" assertion below iterated a set that could not contain them, and this guard's own
   // promise was false for exactly the three tools that run a tenant's close/cancel procedures
-  // against a caller's record. The name is the tenant's own text, as CLAUDE.md documents.
+  // against a caller's record. The name is the tenant's own text, as docs/architecture.md documents.
   ENDUSER_QUICK_ACTIONS: ['Close From Self Service'],
 });
 

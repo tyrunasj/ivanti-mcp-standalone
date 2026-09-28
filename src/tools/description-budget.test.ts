@@ -222,11 +222,20 @@ describe('tool description budget', () => {
     // long way in a diff is the point.
     expect(totals.every((row) => row.total > 0)).toBe(true);
 
-    // The numbers themselves, in the failure message of an assertion that cannot fail, so they
-    // are readable with `pnpm vitest --reporter=verbose` and quotable without guessing. CLAUDE.md
-    // restated them by hand and got them backwards.
-    expect(
-      totals.length,
+    // Printed, not asserted. They used to sit in the failure message of an assertion that could
+    // not fail — which vitest never shows, so the figures every document was told to read from
+    // here were visible to nobody, and the docs restated them by hand and got them wrong.
+    // `pnpm budget` prints them — vitest 5 hides a passing test's console output otherwise.
+    const instructions = DEPLOYMENTS.map(([label, mode, tier, identity, canImpersonate]) => {
+      const { connection } = connectionFixture({
+        entities: { incident: {}, change: {}, servicereq: {} },
+        capability: { tier, ...(identity === undefined ? {} : { identity }), canImpersonate },
+      });
+      const text = buildInstructions({ capability: connection.capability, mode, resourceUris: REFERENCE_URIS }) ?? '';
+      return { label, chars: text.length };
+    }).sort((a, b) => b.chars - a.chars);
+
+    console.info(
       `manifest spend (budget ${String(MANIFEST_BUDGET)}):\n` +
         totals
           .map(
@@ -234,8 +243,10 @@ describe('tool description budget', () => {
               `  ${row.mode}: ${String(row.total)} across ${String(row.tools)} tools; ` +
               `longest ${String(row.largest)} at ${String(row.chars)}`,
           )
-          .join('\n'),
-    ).toBe(MODES.length);
+          .join('\n') +
+        `\ninstructions (budget ${String(INSTRUCTIONS_BUDGET)}):\n` +
+        instructions.map((row) => `  ${row.label}: ${String(row.chars)}`).join('\n'),
+    );
 
   });
 });

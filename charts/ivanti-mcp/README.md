@@ -12,6 +12,8 @@ helm install ivanti-mcp oci://ghcr.io/tyrunasj/charts/ivanti-mcp \
   --set secrets.existingSecret=ivanti-mcp-secrets
 ```
 
+The package is private for now, so this needs a GHCR credential until it is made public.
+
 The chart forces HTTP (stdio is meaningless in a pod) and refuses to render on a
 configuration the server would reject at boot — including `replicaCount > 1` without
 session affinity, because HTTP sessions are held in memory and a request routed to
@@ -29,11 +31,13 @@ Full notes, including the secret-ownership and DNS traps, are in
 | `server.mode` | `full` | `full` or `enduser`. Never mix audiences in one release. |
 | `server.authMode` | `bearer` | `none`, `bearer`, `oauth`. |
 | `server.enduser.businessObjects` | `[]` | Required for `enduser`. A gate, not a hint. |
+| `server.enduser.quickActions` | `[]` | The tenant's own quick-action names an end user may run, on their own open records. Empty means none. |
 | `ivanti.baseUrl` | — | **Required.** Tenant origin; the `/HEAT` prefix is probed. |
+| `ivanti.maxTier` | — | `odata`, `session` or `admin` — caps the server below what the key can do. |
 | `secrets.existingSecret` | — | Keys `ivanti-api-key`, `bearer-token`, and `ivanti-central-config-api-key` when `ivanti.configUrl` is set. Mounted `0400`. |
 | `ivanti.configUrl` | — | The ConfigDB tenant. With its key in the secret, `act_as` signs in to Ivanti AS the person and every surface follows them. |
 | `ivanti.impersonationRole` | — | `full` only. Pins the role an impersonated session opens under; refused when the person does not hold it. |
-| `server.enduser.role` | `SelfServiceMobile` | The self-service role an impersonated `enduser` session opens under. |
+| `server.enduser.role` | — | The self-service role an impersonated `enduser` session opens under; empty means the server default, `SelfServiceMobile`. |
 | `replicaCount` | `1` | Above 1 needs `sessionAffinity.enabled=true`. |
 | `hostAliases` | `[]` | For tenants behind split-horizon DNS. |
 | `image.digest` | — | Pin this in production instead of a tag. |
