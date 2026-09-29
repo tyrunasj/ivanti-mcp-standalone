@@ -4,14 +4,18 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /**
- * Results are JSON text.
+ * Results are JSON text — compact.
  *
  * Not `structuredContent`: that requires an `outputSchema`, and Ivanti records have no fixed
  * shape — the fields are whatever the tenant configured. A JSON document in a text block is what
  * every client can read today.
+ *
+ * Compact, because the reader is a model, not a person, and a result is re-sent with every
+ * request after it. Indentation was about a third of every result's characters (an incident's
+ * metadata: 20,258 pretty, 13,861 compact) and told the model nothing the braces did not.
  */
 export function jsonResult(value: unknown): CallToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify(value) }] };
 }
 
 export function textResult(text: string): CallToolResult {

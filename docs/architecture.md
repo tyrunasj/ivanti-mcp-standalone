@@ -180,8 +180,8 @@ it needs a create form, which OData cannot see.
   "Customer" on an incident and "Contact Link" on a service request.
 - **The form's required and read-only rules are conditional.** `BusObjectRequiredRules` and
   `BusObjectReadOnlyRules` list the fields a rule *governs*, never the condition, so
-  `get_object_metadata` reports both as `'sometimes'`; the schema's own `nullable: false` stays
-  `required: true`. Never refuse on them: a guard built on the read-only list refused a correct
+  `get_object_metadata` flags both with a `?` (`required?`, `readOnly?`); the schema's own
+  `nullable: false` stays a plain `required`. Never refuse on them: a guard built on the read-only list refused a correct
   create (a problem's `Category`, which is mandatory). An incident reaches `Logged` with nothing and
   `Active` only with Category, Owner and Team — and a refusal names only what Ivanti checked before
   stopping, so it carries the rest of the governed list.
@@ -281,9 +281,16 @@ it needs a create form, which OData cannot see.
   to tell two apart), and never a tool name. It is said once because the manifest has no room to
   say it 41 times.
 - **`get_object_metadata` makes the rule followable.** It returns each field's `label` (when it
-  differs from the name) and searches on it, so "Customer" finds `ProfileLink`, plus the
-  `'sometimes'` rule flags. Resolved on the caller's connection — a form belongs to the role — and it
-  never throws: the fields are the answer.
+  differs from the name) and searches on it, so "Customer" finds `ProfileLink`, plus the rule
+  flags. Resolved on the caller's connection — a form belongs to the role — and it never throws:
+  the fields are the answer.
+- **Its fields are table rows, `name|type|label|flags`**, with a one-line legend beside them, and
+  each link — `X`, `X_RecID`, `X_Category`, recognised by shape — folded into one `link` row that
+  keeps the label and flags of all three and answers a search for any of them. It was the dearest
+  result the server returned, and a result rides along on every later request; the same keys on
+  every field, and every link three times over, were most of it (`field-table.ts`).
+- **Every JSON result is compact** (`jsonResult`). Indentation was a third of every result's
+  characters, and the reader is a model.
 
 ## Server lifecycle
 

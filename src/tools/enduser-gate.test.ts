@@ -116,9 +116,9 @@ describe('enduser mode gates every object-taking tool', () => {
     const result = await tool('list_records').handler({ object: 'Incidents' }, context);
 
     expect(result.isError).toBeUndefined();
-    expect(text(result)).toContain('"returned": 1');
+    expect(text(result)).toContain('"returned":1');
     // The answer says whose records these are, rather than implying they are everyone's.
-    expect(text(result)).toContain('"scopedTo": "Jon Smith"');
+    expect(text(result)).toContain('"scopedTo":"Jon Smith"');
   });
 
   /**

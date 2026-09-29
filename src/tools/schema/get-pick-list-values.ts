@@ -21,7 +21,7 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
     description:
       'The values a validated field will actually accept — the Status list, the Priority list, ' +
       'the categories this tenant uses.\n\n' +
-      'get_object_metadata marks a field `validated: true`, which means its value comes from a ' +
+      'get_object_metadata flags a field `validated` when its value comes from a ' +
       'list rather than free text; this is how to see that list. Ivanti does not expose it over ' +
       'OData at all, so guessing a value is how filters return nothing and writes get rejected.\n\n' +
       'Some lists CASCADE: the categories depend on the service, the sub-status on the status. ' +

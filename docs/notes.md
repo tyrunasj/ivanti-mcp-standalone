@@ -123,6 +123,15 @@ about as large as the descriptions: `submit_service_request`'s schema outweighed
 A tool trimmed to pass the cap can still be one of the dearest. → Judge a change with
 `pnpm manifest:size --compare`, not with the budget alone. *(Found 2026-09-28.)*
 
+**A result costs more than its size: it is re-sent with every later request.** Measured with
+`pnpm usage:report`: one `get_object_metadata` call on `incident` returned 20,258 characters and
+stayed in the conversation for every request after it; `employee` returned 37,656. A third of every
+result was JSON indentation, and most of the rest of that one was shape — the same keys on each of
+162 fields, and every link listed as `X`, `X_RecID` and `X_Category`. → Results are compact JSON,
+and the metadata's fields are `name|type|label|flags` rows with links folded: 20,258 → 7,883.
+Judge a result by what the model re-reads, not by whether it is complete. *(Measured live
+2026-09-29.)*
+
 **Tool annotations default to *destructive* and *open-world*.**
 An unannotated tool reads as dangerous — safe, but useless. Every tool needs explicit values, and
 **additive writes must set `destructiveHint: false` explicitly** because the default is `true`.
