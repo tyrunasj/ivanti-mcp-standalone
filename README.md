@@ -113,6 +113,8 @@ paths, since Ivanti ignores the handshake's `role` argument.
 toolchain constraints are in [`docs/development.md`](docs/development.md); building the image is in
 [`docs/deployment.md`](docs/deployment.md#how-the-image-is-built). The source layout and its rules
 are in [`CLAUDE.md`](CLAUDE.md), and the reasoning in [`docs/architecture.md`](docs/architecture.md).
+What the server's text costs a conversation — `pnpm manifest:size`, `pnpm usage:report`, and the
+loop for tuning a description — is [`docs/usage.md`](docs/usage.md).
 
 ## Documentation
 
@@ -124,6 +126,7 @@ are in [`CLAUDE.md`](CLAUDE.md), and the reasoning in [`docs/architecture.md`](d
 | [`docs/deployment.md`](docs/deployment.md) | the three shapes, the chart's guards, the image build, releasing |
 | [`docs/architecture.md`](docs/architecture.md) | how the server works and why |
 | [`docs/development.md`](docs/development.md) | commands, checks, testing against the live tenant |
+| [`docs/usage.md`](docs/usage.md) | what the tool descriptions and results cost a conversation, the failed turns they cause, and how to tune them |
 | [`docs/initial-design.md`](docs/initial-design.md) | decisions — and, in §10, what was rejected and why. Read before proposing architectural changes |
 | [`docs/impersonation-plan.md`](docs/impersonation-plan.md) | signing in as the person, through CentralConfig |
 | [`docs/notes.md`](docs/notes.md) | traps: things that pass locally and fail elsewhere |

@@ -183,6 +183,12 @@ the release ran a subset that skipped `check:examples` and `check:licenses` — 
 files the tarball ships. It is a composite action, not a reusable workflow, because the release
 needs the `dist/` the checks leave behind. Every check runs even after one fails.
 
+**One step is CI's alone: the manifest size.** On a pull request, `ci.yml` measures the manifest
+of the base branch and of the PR (`pnpm manifest:size`) and writes the difference to the run's
+summary, with a one-line annotation. It informs and never blocks — `continue-on-error` — and it is
+not in the shared list because a release has no base to compare with. See
+[`usage.md`](./usage.md).
+
 **`main` is protected, admins included.** A PR is required; `Checks` and `Image` must be green; the
 branch must be up to date; force-pushes and deletions are refused; there is no bypass.
 

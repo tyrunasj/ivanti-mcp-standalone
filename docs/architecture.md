@@ -87,6 +87,11 @@ it needs a create form, which OData cannot see.
   turns a wrong name into an error with suggestions, where Ivanti answers an empty result. An
   unknown entity set makes Ivanti *fabricate* a field-less entity type, so a schema with no fields
   is a typo.
+- **A refusal is where a name is taught.** `suggestNames` ranks a name that contains the guess,
+  then one the guess contains (at least half of it), then a typo — one slip under five letters,
+  two above — so `Incidnet` reaches `incident` and `Stauts` reaches `Status`. The short `object`
+  description (`OBJECT_ARGUMENT`) leans on this: it says which spellings work, and the refusal
+  says the rest at the moment it is needed.
 - **Rows default to a compact field set, and it is a preference.** A default page of whole records
   measured 187,278 characters. Tenants rename fields, so `compactFieldsFor` falls back to the row's
   own leading fields and says so; CSDL cannot help (it marks almost nothing required) and grid

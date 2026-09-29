@@ -206,6 +206,9 @@ Change one thing per version. Two changes under one fingerprint cannot be told a
 
 - **Clients differ.** Different clients run different models, and models make different mistakes.
   Compare versions within one client, never across.
+- **A result's format can change between versions.** 0.2.5 made every result compact JSON and
+  turned `get_object_metadata`'s fields into rows, so `resultChars` fell for the same answer.
+  Compare result sizes within a `manifest`, and use the waste and failed shares across them.
 - **A small sample lies.** A handful of conversations says little about a refusal rate; the version
   table prints the conversation count for that reason.
 - **`rowsRead` is a sum.** A call that looked someone up before running its query counts both —

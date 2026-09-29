@@ -35,6 +35,16 @@ The plan ended at 34 tools in `full` and 25 in `enduser`.
   `initialize` (2026-09-17).
 - **Near-misses refused instead of answered** — closed tool arguments, field names checked before a
   write, the form's rule lists read and reported (2026-09-17 → 28).
+- **Logging rebuilt** (#36) — every Ivanti request through one `exchange()`, logged at `debug` with
+  its query and error body; each level with one job; every line a tool call causes stamped with
+  the tool, session and request id (2026-09-28).
+- **What the text costs, measured** (#37) — a `tool finished` usage line per call,
+  `pnpm usage:report` (waste, recovery after refusals, version against version) and
+  `pnpm manifest:size`, which CI runs against the base branch on every pull request. In
+  characters, because the server is vendor-agnostic ([`usage.md`](./usage.md)).
+- **First tuning from it** — the `object` argument said once instead of fourteen times, and typo
+  suggestions that find the name meant (#38, 0.2.4); compact JSON results and
+  `get_object_metadata` as table rows, 58–61% smaller (#39, 0.2.5) (2026-09-29).
 
 ## What remains
 
@@ -48,6 +58,17 @@ The plan ended at 34 tools in `full` and 25 in `enduser`.
   then `enduser` over HTTP without `oauth` warns that each person needs their own session.
 - **Open items found while testing** — `link_records` reporting a no-op as a link, batch
   relationship calls, elicitation — are tracked in [`notes.md`](./notes.md).
+- **Tuning that waits on data** ([`usage.md`](./usage.md)) — whether to steer
+  `get_object_metadata` towards `search` (a miss costs a whole extra request), whether the "look
+  the object up first" instruction pays for the calls it causes, and `act_as`'s ~2,000-character
+  reply, which lists every role twice. Decide each from a baseline of `usage:report`, one change
+  at a time.
+- **`$schema` in every tool's argument schema** — about 2,000 characters of the manifest, added by
+  the SDK, and the MCP specification uses it to name the schema dialect. Check what clients do
+  without it before removing it.
+- **A benchmark across model vendors** — fixed tasks, graded answers, each vendor's own token
+  counts — for what the server cannot see: turns without a tool call, and whether the answer was
+  right. Not designed; seed its tasks from the patterns `usage:report` finds most often.
 
 ## Still-standing risks
 

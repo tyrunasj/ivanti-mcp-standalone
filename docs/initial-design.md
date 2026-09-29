@@ -265,6 +265,26 @@ auth mode. Token propagation to Ivanti is settled by §11.
    server, Auth0 the `audience` parameter, Zitadel the app's token type set to JWT; Entra should pin
    `requestedAccessTokenVersion: 2`; Keycloak defaults to JWT.
 
+## 9d. Logging and measurement (decided 2026-09-28 → 29)
+
+- **Structured JSON to stderr, each level with one job**: `debug` every MCP and Ivanti request,
+  `info` lifecycle and the per-call audit and usage lines, `warn` running degraded, `error` faults
+  in this server with the stack. The table is in [`architecture.md`](./architecture.md#logging).
+- **`debug` carries the Ivanti query.** This reverses "request logs carry the path, never the
+  query": the query is what diagnoses a failed call, and `debug` is the level for diagnosis. It is
+  documented as personal data instead (`.env.example`, the chart, `configuration.md`). A write's
+  values are logged at no level — its field names are.
+- **Every Ivanti request goes through `exchange()`**, one function that times out, scrubs, logs
+  and turns every failure into an `IvantiApiError` — seven hand-written copies had drifted apart.
+- **Cost is measured in characters, not tokens.** The server is vendor-agnostic and every model
+  family tokenizes differently; characters are what the server controls, need no credential and
+  are deterministic, which is what lets CI compare a pull request with its base. The `Counter`
+  interface leaves room for one vendor's tokenizer where a deployment serves one family.
+- **What the model re-reads is kept small.** A result rides along on every later request, so
+  results are compact JSON, and `get_object_metadata` returns its fields as rows with links folded.
+  The indirect cost — failed turns a description causes — is measured by the usage lines and judged
+  version against version; see [`usage.md`](./usage.md).
+
 ## 10. Rejected alternatives
 
 | Rejected | Why |
@@ -286,6 +306,12 @@ auth mode. Token propagation to Ivanti is settled by §11.
 | `SetRoleForUserSession` to select a role | `Session.asmx/SelectRole` re-points the session without re-authenticating |
 | `FindActiveTenantRecord` as the startup probe | The only probe that catches a wrong tenant — but it returns the database connection string and encryption key |
 | A `list_roles` tool | Roles ride in the `act_as` and `switch_role` replies for free, and a list-or-mutate tool cannot be annotated honestly |
+| Exact token counts from one vendor's API (`count_tokens`) | The server serves any model: a count exact for one family is wrong for the next, and it needs a credential and the network. Characters, with a pluggable `Counter` (§9d) |
+| A separate `LOG_IVANTI_QUERIES` switch on top of `debug` | The query is what diagnoses, and a second switch is one more thing to forget mid-incident. `debug` is documented as personal data instead |
+| Logging a write's values, even at `debug` | They are ticket text; the field names answer "what was sent" |
+| A logging library (`pino`) | What was missing — timestamps, error serialisation, request context — was about thirty lines on a logger of eighty |
+| Failing a pull request on manifest growth | A warning that prevents failed turns can be worth its characters; the usage report judges it, so CI's size check informs. The per-description caps still fail |
+| Pretty-printed JSON results | A third of every result was indentation, re-sent with every later request, and the reader is a model |
 
 ### Introspection — deferred
 
