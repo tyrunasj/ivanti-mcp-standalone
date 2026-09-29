@@ -2,8 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
-import { COMPACT_ROW_FIELDS } from '../../ivanti/odata/compact-fields.js';
-import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
+import { projectRows } from '../../ivanti/odata/projection.js';
 import { MAX_TOP } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
@@ -13,6 +12,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { answersForSignedInAccount } from './list-saved-searches.js';
+import { rowFields } from './row-fields.js';
 import { transportFor } from '../shared/transport-for.js';
 
 export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
@@ -72,8 +72,9 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
         const rows = readRows<OdataRecord>(payload, url);
         const total = payload?.['@odata.count'];
 
-        const requested = parseFieldList(args.fields);
-        const fields = args.fields?.trim() === '*' ? undefined : (requested ?? COMPACT_ROW_FIELDS);
+        // Decided against this search's own rows: the fixed preference list alone left a
+        // tenant's own object with rows that were a RecId and two timestamps.
+        const shown = rowFields(rows, args.fields, entity);
 
         return jsonResult({
           object: entity.name,
@@ -95,7 +96,8 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
                       'so these ARE their records.',
               }
             : {}),
-          rows: projectRows(rows, fields),
+          ...(shown.note === undefined ? {} : { fields: shown.note }),
+          rows: projectRows(rows, shown.fields),
         });
       }),
   });

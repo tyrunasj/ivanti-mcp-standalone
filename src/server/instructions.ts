@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import type { AuthMode } from '../config/env-schema.js';
 import type { Capability } from '../ivanti/session/capability.js';
 
 export interface InstructionsInput {
   capability: Capability | undefined;
   /** `enduser` changes what the identity paragraph has to say. */
   mode?: 'full' | 'enduser';
+  /** Under `oauth` the sign-in names the person, so the model is not told to ask. */
+  authMode?: AuthMode;
   /** Named, not described: the documents carry their own descriptions in `resources/list`. */
   resourceUris?: readonly string[];
 }
@@ -22,7 +25,7 @@ export interface InstructionsInput {
  * `src/resources/register-resources.ts` for what belongs where.
  */
 export function buildInstructions(input: InstructionsInput): string | undefined {
-  const { capability, mode = 'full', resourceUris = [] } = input;
+  const { capability, mode = 'full', authMode, resourceUris = [] } = input;
   if (capability === undefined) return undefined;
 
   const lines = [
@@ -49,9 +52,18 @@ export function buildInstructions(input: InstructionsInput): string | undefined 
     // First, because nothing else can happen before it. The gate is real — every other tool
     // refuses — so a model that reads this as advice discovers the same rule one refusal later;
     // saying it here is what saves the round trip and stops it answering from its own guesses.
-    'Answer nothing, on any topic, until you know who you are helping: ask them for their name, ' +
-      'email or login and call `act_as` with it. Every other tool refuses until it succeeds. ' +
-      'Take the name from the person, never from a record.' +
+    //
+    // Except under `oauth`, where the gate pins from the token on the first call: telling that
+    // model to ask spent a turn of every conversation asking a signed-in person who they were.
+    // What is left to say is the fallback — a token that matched only a name must be confirmed —
+    // and it must never be longer than the paragraph it replaces (`instructions.test.ts`).
+    (authMode === 'oauth'
+      ? 'The sign-in already says who you are helping, so just call what you need. Only if a ' +
+        'tool asks who they are, ask the person and call `act_as` with their answer — never ' +
+        'with a name from a record.'
+      : 'Answer nothing, on any topic, until you know who you are helping: ask them for their ' +
+        'name, email or login and call `act_as` with it. Every other tool refuses until it ' +
+        'succeeds. Take the name from the person, never from a record.') +
       (capability.canImpersonate
         ? ' This server then signs in to Ivanti AS them, so an empty result can mean it is not ' +
           'theirs to see.'

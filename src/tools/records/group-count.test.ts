@@ -115,6 +115,30 @@ describe('group_count', () => {
     expect(String(result['warning'])).toContain('TO FIX');
   });
 
+  it('leaves a bucket that failed out of the sum, and calls the answer partial', async () => {
+    // Its sort key of −1 was summed as a count: `unaccounted` came out one too high per failure,
+    // and the warning put those records down to the field's list.
+    const { deps: d } = deps({
+      "Status%20eq%20'Active'": { value: [], '@odata.count': 4 },
+      "Status%20eq%20'Closed'": new Error('Ivanti 500'),
+      incidents: { value: [], '@odata.count': 9 },
+    });
+
+    const result = body(
+      await createGroupCountTool(d).handler({ object: 'Incidents', groupBy: 'Status' }),
+    );
+
+    // 9 − 4, not 9 − (4 − 1).
+    expect(result['unaccounted']).toBe(5);
+    expect(result['partial']).toBe(true);
+    expect(String(result['warning'])).toContain('PARTIAL ANSWER');
+    expect(String(result['warning'])).not.toContain("the field's list does not offer");
+    // Still sorted last, and still carrying its own error rather than a count.
+    const groups = result['groups'] as unknown as { value: string; error?: string }[];
+    expect(groups[groups.length - 1]).toMatchObject({ value: 'Closed' });
+    expect(groups[groups.length - 1]?.error).toBeDefined();
+  });
+
   it('takes the values from the caller when it is given them', async () => {
     const { deps: d, urls } = deps({ incidents: { value: [], '@odata.count': 0 } });
 

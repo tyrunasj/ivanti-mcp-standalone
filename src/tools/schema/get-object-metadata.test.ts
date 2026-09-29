@@ -168,6 +168,17 @@ describe('get_object_metadata', () => {
     expect(labelled).not.toHaveProperty('labelsNote');
   });
 
+  it('judges the labels on the whole object, not on what the search kept', async () => {
+    // `Subject` is labelled; a search matching only `Priority` said "no field on this object
+    // carries a label", about an object whose form labels its fields.
+    const body = payload(
+      await labelledTool({ Subject: 'Summary' }).handler({ object: 'incident', search: 'priority' }),
+    );
+
+    expect(body).toMatchObject({ fieldCount: 1 });
+    expect(body).not.toHaveProperty('labelsNote');
+  });
+
   it('still answers when the form lookup fails, because the fields are the answer', async () => {
     const body = payload(
       await labelledTool({}, () => Promise.reject(new Error('ASMX said no'))).handler({ object: 'incident' }),

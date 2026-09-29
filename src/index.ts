@@ -5,15 +5,19 @@ import { ANONYMOUS } from './auth/identity.js';
 import { createOAuthSetup } from './auth/oauth/create-verifier.js';
 import type { TokenVerifier } from './auth/oauth/verify-token.js';
 import { ConfigError, loadConfig } from './config/load-config.js';
-import { isImpersonationConfigured, isIvantiConfigured } from './config/validate-config.js';
+import {
+  isImpersonationConfigured,
+  isIvantiConfigured,
+  requiredImpersonationProblems,
+} from './config/validate-config.js';
 import { connectIvanti } from './ivanti/connect.js';
 import { validateBusinessObjectAllowlist } from './ivanti/validate-allowlist.js';
 
 import { createLogger } from './logger.js';
 import { createServerFactory, SERVER_NAME, SERVER_VERSION } from './server/create-server.js';
 import { readSdkVersion } from './version.js';
-import { startHttp } from './server/start-http.js';
-import { startStdio } from './server/start-stdio.js';
+import { ListenError, startHttp, type HttpServer } from './server/start-http.js';
+import { startStdio, type StdioServer } from './server/start-stdio.js';
 
 /**
  * How long a graceful shutdown gets before the process exits regardless.
@@ -48,6 +52,8 @@ async function main(): Promise<void> {
         baseUrl: config.IVANTI_BASE_URL,
         apiKey: config.IVANTI_API_KEY,
         logger,
+        timeoutMs: config.IVANTI_TIMEOUT_MS,
+        writeTimeoutMs: config.IVANTI_WRITE_TIMEOUT_MS,
         ...(config.IVANTI_MAX_TIER === undefined ? {} : { maxTier: config.IVANTI_MAX_TIER }),
         // Both or neither: validateConfig has already refused the half-configured case.
         ...(isImpersonationConfigured(config)
@@ -68,6 +74,13 @@ async function main(): Promise<void> {
     if (problems.length > 0) throw new ConfigError(problems);
   }
 
+  // The probe above degrades an unreachable ConfigDB to a warning. A deployment that set
+  // IVANTI_IMPERSONATION_REQUIRED has said that running as the service account is not acceptable.
+  if (ivanti !== undefined) {
+    const problems = requiredImpersonationProblems(config, ivanti.capability);
+    if (problems.length > 0) throw new ConfigError(problems);
+  }
+
   if (ivanti === undefined) {
     logger.warn('ivanti is not configured; serving transport-level tools only', {
       missing: 'IVANTI_BASE_URL and IVANTI_API_KEY (or IVANTI_API_KEY_FILE)',
@@ -81,10 +94,11 @@ async function main(): Promise<void> {
     ...(ivanti === undefined ? {} : { ivanti }),
   });
 
+  let stdio: StdioServer | undefined;
   if (config.STDIO_TRANSPORT_ON) {
     // Process trust: whoever can run this binary is the caller, and nothing vouches for who
     // they are. One process is one conversation, so there is no session id either.
-    await startStdio(factory.create({ identity: ANONYMOUS }));
+    stdio = await startStdio(factory.create({ identity: ANONYMOUS }));
     logger.info('listening on stdio', {
       mcpMode: config.MCP_MODE,
       ivanti: ivanti !== undefined,
@@ -93,57 +107,58 @@ async function main(): Promise<void> {
     });
   }
 
-  if (!config.HTTP_TRANSPORT_ON) return;
+  let http: HttpServer | undefined;
+  if (config.HTTP_TRANSPORT_ON) {
+    // `enduser` scopes records to one person per MCP session, and a session is whatever the
+    // client opened — so a gateway that multiplexes many people onto one connection would show
+    // the second person the first person's records. Under `oauth` this cannot happen: every
+    // request carries a token and a session belongs to the subject that opened it (`sameSubject`,
+    // 403 otherwise). Under `none` and `bearer` there is no per-request principal at all, so the
+    // server cannot tell two people apart and the deployment has to.
+    if (config.MCP_MODE === 'enduser' && config.AUTH_MODE !== 'oauth') {
+      logger.warn(
+        'enduser over HTTP without oauth: every person must get their own MCP session — this ' +
+          'server cannot tell two callers apart on one',
+        { authMode: config.AUTH_MODE },
+      );
+    }
 
-  if (config.AUTH_MODE === 'none') {
-    logger.warn('AUTH_MODE=none: no authentication, the network is the only boundary', {
-      bind: config.MCP_BIND,
-      port: config.MCP_PORT,
-      trustedOrigins: config.TRUSTED_ORIGINS,
+    let verifier: TokenVerifier | undefined;
+    if (config.AUTH_MODE === 'oauth') {
+      const setup = await createOAuthSetup(config, undefined, logger);
+      verifier = setup.verifier;
+      logger.info('oauth resource server ready', {
+        issuer: setup.issuer,
+        audiences: setup.audiences,
+        jwksUri: setup.jwksUri,
+      });
+    }
+
+    // Resolves once the port is bound, and logs `listening on http` then — never before.
+    http = await startHttp(config, logger, {
+      verifier,
+      createMcpServer: factory.create,
+      serverName: SERVER_NAME,
+      serverVersion: SERVER_VERSION,
+      sdkVersion: readSdkVersion(),
+      listeningFields: {
+        ivanti: ivanti !== undefined,
+        ...factory.manifest,
+        tools: factory.toolNames,
+      },
     });
   }
 
-  // `enduser` scopes records to one person per MCP session, and a session is whatever the client
-  // opened — so a gateway that multiplexes many people onto one connection would show the second
-  // person the first person's records. Under `oauth` this cannot happen: every request carries a
-  // token and a session belongs to the subject that opened it (`sameSubject`, 403 otherwise).
-  // Under `none` and `bearer` there is no per-request principal at all, so the server cannot tell
-  // two people apart and the deployment has to.
-  if (config.MCP_MODE === 'enduser' && config.AUTH_MODE !== 'oauth') {
-    logger.warn(
-      'enduser over HTTP without oauth: every person must get their own MCP session — this ' +
-        'server cannot tell two callers apart on one',
-      { authMode: config.AUTH_MODE },
-    );
-  }
-
-  let verifier: TokenVerifier | undefined;
-  if (config.AUTH_MODE === 'oauth') {
-    const setup = await createOAuthSetup(config);
-    verifier = setup.verifier;
-    logger.info('oauth resource server ready', {
-      issuer: setup.issuer,
-      audiences: setup.audiences,
-      jwksUri: setup.jwksUri,
-    });
-  }
-
-  const http = startHttp(config, logger, {
-    verifier,
-    createMcpServer: factory.create,
-    serverName: SERVER_NAME,
-    serverVersion: SERVER_VERSION,
-    sdkVersion: readSdkVersion(),
-  });
-
-  // Containers are killed, not asked politely: close every live session — which is what hands
-  // each person's Ivanti session back — and only then stop listening. Bounded, because a shutdown
-  // that hangs is indistinguishable from one that crashed and ends in SIGKILL either way.
+  // Containers are killed, not asked politely, and a stdio client is stopped the same way: close
+  // every live conversation — which is what hands each person's Ivanti session back — and only
+  // then exit. Bounded, because a shutdown that hangs is indistinguishable from one that crashed
+  // and ends in SIGKILL either way. Installed for stdio too: without it SIGTERM killed a stdio-only
+  // process outright, with the impersonated session still open on the tenant.
   let stopping = false;
-  const shutdown = (signal: string): void => {
+  const shutdown = (reason: string): void => {
     if (stopping) return;
     stopping = true;
-    logger.info('shutting down', { signal });
+    logger.info('shutting down', { reason });
 
     const deadline = setTimeout(() => {
       logger.warn('shutdown timed out; exiting anyway', { afterMs: SHUTDOWN_GRACE_MS });
@@ -151,7 +166,7 @@ async function main(): Promise<void> {
     }, SHUTDOWN_GRACE_MS);
     deadline.unref();
 
-    void http.close().then(
+    void Promise.all([stdio?.close(), http?.close()]).then(
       () => process.exit(0),
       (error: unknown) => {
         logger.error('shutdown failed', { error });
@@ -159,19 +174,25 @@ async function main(): Promise<void> {
       },
     );
   };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-
-  logger.info('listening on http', {
-    bind: config.MCP_BIND,
-    port: config.MCP_PORT,
-    authMode: config.AUTH_MODE,
-    mcpMode: config.MCP_MODE,
-    ivanti: ivanti !== undefined,
-    maxSessions: config.MCP_MAX_SESSIONS,
-    ...factory.manifest,
-    tools: factory.toolNames,
+  process.on('SIGTERM', () => {
+    shutdown('SIGTERM');
   });
+  process.on('SIGINT', () => {
+    shutdown('SIGINT');
+  });
+
+  // The stdio client going away is the end of this process's work — unless HTTP is serving
+  // others, where a container's empty stdin ends at once and means nothing. The conversation is
+  // closed either way; `ended` settles only after its Ivanti session has been handed back.
+  if (stdio !== undefined) {
+    void stdio.ended.then(() => {
+      if (config.HTTP_TRANSPORT_ON) {
+        logger.debug('stdio input ended; still serving http');
+        return;
+      }
+      shutdown('stdin ended');
+    });
+  }
 }
 
 main().catch((error: unknown) => {
@@ -179,6 +200,8 @@ main().catch((error: unknown) => {
     process.stderr.write(`${error.message}\n`);
     process.exit(78); // EX_CONFIG
   }
+  // Already logged by `startHttp`, with what to change; a stack would only bury it.
+  if (error instanceof ListenError) process.exit(1);
   process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
   process.exit(1);
 });

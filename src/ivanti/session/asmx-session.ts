@@ -218,24 +218,45 @@ export function createSession(options: SessionOptions): IvantiSession {
     }
   };
 
-  const callOnce = async <T>(
+  /**
+   * Sends on the session, and once more on a new one when Ivanti answers 401.
+   *
+   * An expired session is indistinguishable from a bad one until it is retried. What is discarded
+   * is **the session this request carried**, and only while it is still the current one: calls
+   * run concurrently, and a 401 arriving late from a request sent on an old session once threw
+   * away the fresh session another call had just made — costing a second handshake, and failing
+   * the calls that were already using it.
+   */
+  const withSession = async <T>(send: (handshake: Handshake) => Promise<T>): Promise<T> => {
+    const used = await ensure();
+    try {
+      return await send(used);
+    } catch (error: unknown) {
+      if (!(error instanceof IvantiApiError) || error.status !== 401) throw error;
+      if (session === used) session = undefined;
+      return send(await ensure());
+    }
+  };
+
+  const callOnce = <T>(
+    { sid, csrf }: Handshake,
     servicePath: string,
     method: string,
     args: Record<string, unknown>,
-  ): Promise<T> => {
-    const { sid, csrf } = await ensure();
-    return postJson<T>(
+  ): Promise<T> =>
+    postJson<T>(
       routes.service(`${servicePath}/${method}`),
       // `.asmx` wants the token in the BODY. The `.ashx` handlers want it as a lowercase header
       // instead, which is why they do not share this path.
       { _csrfToken: csrf, ...args },
       sid,
     );
-  };
 
-  const postForm = async (url: string, form: Record<string, string>): Promise<string> => {
-    const { sid, csrf } = await ensure();
-
+  const postForm = async (
+    { sid, csrf }: Handshake,
+    url: string,
+    form: Record<string, string>,
+  ): Promise<string> => {
     const { body } = await exchange(
       url,
       {
@@ -254,9 +275,11 @@ export function createSession(options: SessionOptions): IvantiSession {
     return body;
   };
 
-  const postMultipart = async (url: string, form: FormData): Promise<string> => {
-    const { sid, csrf } = await ensure();
-
+  const postMultipart = async (
+    { sid, csrf }: Handshake,
+    url: string,
+    form: FormData,
+  ): Promise<string> => {
     const { body } = await exchange(
       url,
       {
@@ -276,47 +299,18 @@ export function createSession(options: SessionOptions): IvantiSession {
   };
 
   return {
-    async uploadToHandler(handlerPath: string, form: FormData): Promise<string> {
+    uploadToHandler(handlerPath: string, form: FormData): Promise<string> {
       const url = routes.service(handlerPath);
-      try {
-        return await postMultipart(url, form);
-      } catch (error: unknown) {
-        if (error instanceof IvantiApiError && error.status === 401) {
-          session = undefined;
-          return postMultipart(url, form);
-        }
-        throw error;
-      }
+      return withSession((handshake) => postMultipart(handshake, url, form));
     },
 
-    async callHandler(handlerPath: string, form: Record<string, string>): Promise<string> {
+    callHandler(handlerPath: string, form: Record<string, string>): Promise<string> {
       const url = routes.service(`handlers/${handlerPath}`);
-      try {
-        return await postForm(url, form);
-      } catch (error: unknown) {
-        if (error instanceof IvantiApiError && error.status === 401) {
-          session = undefined;
-          return postForm(url, form);
-        }
-        throw error;
-      }
+      return withSession((handshake) => postForm(handshake, url, form));
     },
 
-    async call<T>(
-      servicePath: string,
-      method: string,
-      args: Record<string, unknown> = {},
-    ): Promise<T> {
-      try {
-        return await callOnce<T>(servicePath, method, args);
-      } catch (error: unknown) {
-        // An expired session is indistinguishable from a bad one until it is retried.
-        if (error instanceof IvantiApiError && error.status === 401) {
-          session = undefined;
-          return callOnce<T>(servicePath, method, args);
-        }
-        throw error;
-      }
+    call<T>(servicePath: string, method: string, args: Record<string, unknown> = {}): Promise<T> {
+      return withSession((handshake) => callOnce<T>(handshake, servicePath, method, args));
     },
 
     identity: async () => (await ensure()).identity,

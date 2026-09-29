@@ -53,9 +53,27 @@ export function assertedIdentity(subject: string): CallerIdentity {
  */
 const DIRECTORY_CLAIMS = ['email', 'preferred_username', 'upn'] as const;
 
+/**
+ * Whether the issuer says it checked the address. Some send the boolean, some the string.
+ *
+ * An `email` the provider did not verify is whatever the user typed into their profile. On an IdP
+ * that lets them edit it, one employee could enter a colleague's address, and the lookup would
+ * pin them AS that colleague — with `verified` provenance, and under impersonation with Ivanti's
+ * own session as them.
+ */
+function emailVerified(identity: VerifiedIdentity): boolean {
+  const flag = identity.claims['email_verified'];
+  return flag === true || flag === 'true';
+}
+
 function readDirectoryKey(identity: VerifiedIdentity, configured?: string): string | undefined {
+  // A configured claim is taken as configured: naming one is the operator saying it is theirs to
+  // trust, and only they know whether their IdP lets a user edit it.
   const names = configured === undefined ? DIRECTORY_CLAIMS : [configured];
   for (const name of names) {
+    // Skipped rather than refused, so a token that also carries `preferred_username` or `upn`
+    // still names its person by one of those.
+    if (configured === undefined && name === 'email' && !emailVerified(identity)) continue;
     const value = identity.claims[name];
     if (typeof value === 'string' && value.trim() !== '') return value.trim();
   }

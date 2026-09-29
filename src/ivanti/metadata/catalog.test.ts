@@ -126,7 +126,32 @@ describe('createMetadataCatalog', () => {
     expect(calls.filter((url) => url.includes('nonexistents'))).toHaveLength(1);
   });
 
-  it('never caches a non-CSDL 200 as metadata', async () => {
+  /**
+   * The SAME url, which is the one that matters.
+   *
+   * This test used to prove only that a different graph still resolved while the seed served a
+   * login page — which it did, while the seed itself stayed poisoned: any non-CSDL 200 was cached
+   * as "Ivanti's own answer", so a WAF or maintenance page on the seed `$metadata` URL made
+   * Incidents unknown until a restart. The seed is byte-identical to the startup probe's URL, so it
+   * is the likeliest one to be answered by whatever sits in front of the tenant.
+   */
+  it.each([
+    ['a login page', '<html><body>Sign in</body></html>'],
+    ['a WAF block page', '<html><head><title>Request Rejected</title></head></html>'],
+    ['a maintenance notice', 'Service temporarily down for maintenance'],
+  ])('asks the same URL again after %s, rather than caching it as the schema', async (_label, page) => {
+    const documents: Record<string, string | Error> = { '/incidents/$metadata': page };
+    const { transport, calls } = fakeTransport(documents);
+    const metadata = createMetadataCatalog({ transport, seedUrl: SEED_URL, logger: logger() });
+
+    await expect(metadata.entity('Incident#')).rejects.toThrow(UnknownEntityError);
+    documents['/incidents/$metadata'] = csdl(entity('incident', NAV));
+
+    await expect(metadata.entity('Incident#')).resolves.toMatchObject({ name: 'incident' });
+    expect(calls.filter((url) => url === SEED_URL).length).toBeGreaterThan(1);
+  });
+
+  it('never takes a non-CSDL 200 as the schema meanwhile', async () => {
     const { catalog: metadata } = catalog({
       '/incidents/$metadata': '<html><body>Sign in</body></html>',
       '/tasks/$metadata': csdl(entity('task', NAV)),

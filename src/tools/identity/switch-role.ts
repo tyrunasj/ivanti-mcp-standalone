@@ -2,6 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
+import { RoleNotAppliedError } from '../../ivanti/session/roles.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
@@ -73,7 +74,26 @@ export function switchRoleTool(deps: IvantiToolDeps): ToolDefinition {
         }
 
         const before = session.role;
-        const now = await session.switchTo(held.name);
+        let now: string;
+        try {
+          now = await session.switchTo(held.name);
+        } catch (error: unknown) {
+          if (!(error instanceof RoleNotAppliedError)) throw error;
+          // Ivanti answered without a role, so what this session now reads is anyone's guess —
+          // quite possibly nothing at all. Set aside rather than kept: the next call opens a fresh
+          // one, which is known to hold a role.
+          context.impersonation?.discard(session);
+          deps.logger.warn('ivanti confirmed no role after a switch; the session was set aside', {
+            login: session.loginId,
+            from: before,
+            to: held.name,
+          });
+          return errorResult(
+            `${error.message} This session has been set aside, and the next call opens a new one ` +
+              `as ${session.loginId} under the role this deployment starts people in — not ` +
+              `${held.name}. Try switch_role again after that if it is still needed.`,
+          );
+        }
 
         deps.logger.info('ivanti role switched', { login: session.loginId, from: before, to: now });
 

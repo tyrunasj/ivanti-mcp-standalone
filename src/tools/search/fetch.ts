@@ -4,7 +4,6 @@
 import { z } from 'zod';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { ObjectNotAllowedError } from '../shared/object-gate.js';
 import {
   assertOwnRecord,
   hideMissingRecord,
@@ -52,12 +51,13 @@ export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        // An id is a name for an object, so it passes the same gate as one typed by hand.
-        if (!deps.gate.allows(decoded.entitySet)) {
-          throw new ObjectNotAllowedError(decoded.entitySet, deps.gate.allowed);
-        }
+        // An id is a name for an object, so it passes the same gate as one typed by hand — and
+        // it is RESOLVED before any URL is built from it. The object half is the caller's text,
+        // and the route interpolates an entity set raw: `../../rest/X:1` passed an open gate and
+        // sent an authenticated GET to `/api/rest/X('1')`. The catalog's name is the one used.
+        const resolved = await resolveObject(deps, decoded.entitySet);
 
-        const url = transport.routes.record(decoded.entitySet, decoded.recId);
+        const url = transport.routes.record(resolved.entitySet, decoded.recId);
         const record = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => hideMissingRecord(deps, error));
@@ -65,13 +65,13 @@ export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
         if (record === undefined) {
           return errorResult(
             missingRecordMessage(deps) ??
-              `No ${decoded.entitySet} record with RecId ${decoded.recId}.`,
+              `No ${resolved.entitySet} record with RecId ${decoded.recId}.`,
           );
         }
 
         // The id names the object, so ownership is checked against that object's own person
         // link rather than assumed from where the id came from.
-        await assertOwnRecord(deps, context, await resolveObject(deps, decoded.entitySet), record);
+        await assertOwnRecord(deps, context, resolved, record);
 
         return jsonResult({
           // Same rule as search: an answer narrowed to one person says so.
@@ -80,7 +80,7 @@ export function createFetchTool(deps: IvantiToolDeps): ToolDefinition {
             : {}),
           id: args.id,
           title: recordTitle(record),
-          metadata: { object: decoded.entitySet, recId: decoded.recId },
+          metadata: { object: resolved.entitySet, recId: decoded.recId },
           record,
         });
       }),

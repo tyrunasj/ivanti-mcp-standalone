@@ -8,11 +8,23 @@ import { OPEN_GATE } from '../shared/object-gate.js';
 import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import type { Logger } from '../../logger.js';
 import { createListAssignedWorkTool } from './list-assigned-work.js';
+import { createSessionPin } from '../../auth/identity-pin.js';
+import { ANONYMOUS } from '../../auth/identity.js';
+import type { CallContext } from '../tool-definition.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
 const EMPLOYEE = {
-  value: [{ LoginID: 'JSmith', DisplayName: 'Jon Smith', PrimaryEmail: 'jon@example.com' }],
+  value: [
+    {
+      RecId: 'e1',
+      LoginID: 'JSmith',
+      FirstName: 'Jon',
+      LastName: 'Smith',
+      DisplayName: 'Jon Smith',
+      PrimaryEmail: 'jon@example.com',
+    },
+  ],
 };
 
 const body = (result: CallToolResult): Record<string, never> => {
@@ -21,7 +33,8 @@ const body = (result: CallToolResult): Record<string, never> => {
 };
 
 const tool = (responses: Record<string, unknown>) => {
-  const { connection, urls } = connectionFixture({ responses });
+  // `employee` registered, so the shared person directory has an object to look people up in.
+  const { connection, urls } = connectionFixture({ entities: { employee: {} }, responses });
   return { urls, tool: createListAssignedWorkTool({ connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS }) };
 };
 
@@ -34,14 +47,14 @@ describe('list_assigned_work', () => {
 
     const result = body(await work.handler({ person: 'jon@example.com' }));
 
-    expect(result.person).toMatchObject({ loginId: 'JSmith', matchedOn: 'loginId' });
+    expect(result.person).toMatchObject({ loginId: 'JSmith', matchedOn: 'PrimaryEmail' });
     expect(result.groups).toHaveLength(5);
     expect(urls.filter((url) => url.includes('incidents'))).toHaveLength(1);
   });
 
   it('escapes the login so an apostrophe cannot break the filter', async () => {
     const { tool: work, urls } = tool({
-      employees: { value: [{ LoginID: "O'Brien" }] },
+      employees: { value: [{ RecId: 'e2', LoginID: "O'Brien" }] },
     });
 
     await work.handler({ person: "O'Brien" });
@@ -90,6 +103,46 @@ describe('list_assigned_work', () => {
     const result = body(await work.handler({ person: 'ghost' }));
 
     expect(result.person).toBeNull();
-    expect(String(result.message)).toContain('No employee matches');
+    expect(String(result.message)).toContain('No single employee matches');
+  });
+
+  /**
+   * Two people answer to the name, and the old ladder asked for two rows and took the first —
+   * so the answer was one of their queues, presented as the one asked about.
+   */
+  it('refuses a name two people share rather than picking one of them', async () => {
+    const { tool: work, urls } = tool({
+      employees: {
+        value: [
+          { RecId: 'e1', LoginID: 'JSmith', FirstName: 'Jane', LastName: 'Smith', DisplayName: 'Jane Smith' },
+          { RecId: 'e2', LoginID: 'JSmith2', FirstName: 'Jane', LastName: 'Smith', DisplayName: 'Jane A Smith' },
+        ],
+      },
+    });
+
+    const result = body(await work.handler({ person: 'Jane Smith' }));
+
+    expect(result.person).toBeNull();
+    expect(String(result.message)).toContain('more than one person');
+    // And no queue was read for either of them.
+    expect(urls.some((url) => url.includes('Owner%20eq'))).toBe(false);
+  });
+
+  it('uses the pinned person without looking them up again', async () => {
+    const { tool: work, urls } = tool({});
+    const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+    context.pin?.pin({
+      recId: 'e1',
+      category: 'employee',
+      displayName: 'Jon Smith',
+      loginId: 'JSmith',
+      matchedOn: 'LoginID',
+      provenance: 'asserted',
+    });
+
+    const result = body(await work.handler({}, context));
+
+    expect(result.person).toMatchObject({ loginId: 'JSmith', matchedOn: 'the pinned identity' });
+    expect(urls.some((url) => url.includes('employees'))).toBe(false);
   });
 });

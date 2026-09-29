@@ -44,6 +44,12 @@ export interface ImpersonatedSession extends IvantiSession {
   readonly roles: readonly IvantiRole[];
   /** Something the caller should be told — a fallback role, a portal-only account. */
   readonly note?: string;
+  /**
+   * When CentralConfig says the session stops being valid (`SessionKeyExpire`), as it said it —
+   * no time zone. The slot re-opens a session past it rather than handing back one Ivanti will
+   * refuse.
+   */
+  readonly expiresAt?: string;
   /** Re-points the session at another of their roles, returning what Ivanti actually applied. */
   switchTo: (role: string) => Promise<string>;
   /** Best-effort; a session nobody releases expires on its own. */
@@ -70,6 +76,18 @@ interface SessionStatus {
 }
 
 export const DEFAULT_IMPERSONATION_TIMEOUT_MS = 15_000;
+
+/** What to say when Ivanti applied a role other than the one asked for; nothing when it did not. */
+function appliedInstead(requested: string, applied: string): string | undefined {
+  return requested.toLowerCase() === applied.toLowerCase()
+    ? undefined
+    : `Ivanti applied ${applied} rather than ${requested}.`;
+}
+
+function withNote(note: string | undefined, more: string | undefined): string | undefined {
+  if (more === undefined) return note;
+  return note === undefined ? more : `${note} ${more}`;
+}
 
 /**
  * Opens the session and establishes a role, or throws with a reason worth reading.
@@ -241,7 +259,9 @@ export async function openImpersonatedSession(
     // Mutable behind a getter: `switchTo` changes what Ivanti will answer, and a session object
     // still reporting the old role would have `switch_role` confirm a change that did not happen.
     let currentRole = await selectRole({ call }, choice.role);
-    let note = choice.note;
+    // Read back and compared, as `switch_role` does: a requested role is a request, and a session
+    // reporting the role it asked for rather than the one it got describes access it does not have.
+    let note = withNote(choice.note, appliedInstead(choice.role, currentRole));
 
     // The first choice was made blind when the roles arrived without flags — `GetRolesForUser` is
     // the only source that answers a role-less session, and it carries none. Blind means the
@@ -289,7 +309,9 @@ export async function openImpersonatedSession(
           });
           currentRole = await selectRole({ call }, confirmed.role);
         }
-        note = confirmed.note ?? note;
+        // Judged on the second choice alone: the first was made blind, and what it asked for no
+        // longer describes the session.
+        note = withNote(confirmed.note ?? choice.note, appliedInstead(confirmed.role, currentRole));
       } else if (chosenByConfiguration) {
         // The flags never arrived, but the role was not guessed: a configured name matched one
         // this person holds, which is a decision. Saying it "was taken from the order Ivanti
@@ -339,6 +361,7 @@ export async function openImpersonatedSession(
       },
       roles,
       ...(note === undefined ? {} : { note }),
+      ...(opened.expiresAt === undefined ? {} : { expiresAt: opened.expiresAt }),
       call,
       callHandler,
       uploadToHandler,

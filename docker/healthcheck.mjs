@@ -8,8 +8,15 @@
  * A stdio-only deployment serves no HTTP at all. Reporting such a container
  * unhealthy for running exactly as configured would be worse than not checking,
  * so that case passes.
+ *
+ * "On" must mean exactly what it means to the server, which reads the flag with
+ * zod's `z.stringbool()`: true|1|yes|on|y|enabled, case-insensitive, untrimmed.
+ * This used to accept only the first four, so `HTTP_TRANSPORT_ON=y` started an
+ * HTTP server that this check never polled — and reported healthy forever.
+ * Anything the server does not accept stops it at boot (exit 78), so the only
+ * question left here is truthy or not.
  */
-const httpOn = /^(1|true|yes|on)$/i.test(process.env.HTTP_TRANSPORT_ON ?? '');
+const httpOn = /^(true|1|yes|on|y|enabled)$/i.test(process.env.HTTP_TRANSPORT_ON ?? '');
 if (!httpOn) process.exit(0);
 
 const port = process.env.MCP_PORT ?? '3000';

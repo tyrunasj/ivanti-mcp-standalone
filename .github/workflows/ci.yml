@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: read
 
+# Third-party actions are pinned by commit SHA with the version beside it; a tag
+# is a pointer its owner can move. Dependabot proposes the next SHA.
+
 jobs:
   verify:
     name: Checks
@@ -21,10 +24,12 @@ jobs:
     # the six hours GitHub allows by default.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      # Credentials stay: the manifest-size step below fetches the base branch.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The whole check list, shared with release.yml so the release gate cannot
-      # drift into being a weaker subset of this one. See the action's header.
+      # drift into being a weaker subset of this one — the chart's lint and guard
+      # renders included. See the action's header.
       - uses: ./.github/actions/checks
 
       # The tarball is a release artefact, but building it here means a change that
@@ -72,10 +77,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # CI BUILDS BUT NEVER PUBLISHES. Publishing is release.yml, which runs on a
       # button and takes its version from package.json — no tag, and nothing here,
@@ -90,7 +97,7 @@ jobs:
       # Because nothing is pushed, this job needs no registry credentials at all —
       # which also means a fork's pull request builds exactly what main does.
       # The build context is the REPOSITORY ROOT.
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: docker/Dockerfile

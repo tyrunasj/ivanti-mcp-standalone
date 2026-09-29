@@ -3,8 +3,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../logger.js';
-import { IvantiApiError, isIvantiNotFound } from './errors.js';
-import { createTransport, type FetchLike } from './transport.js';
+import { IvantiApiError, isIvantiNotFound, ResponseTooLargeError } from './errors.js';
+import { createTransport, DEFAULT_MAX_BINARY_BYTES, type FetchLike } from './transport.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -251,5 +251,134 @@ describe('which credential each method sends', () => {
     for (const { headers } of seen) {
       expect(headers['Authorization'] !== undefined && headers['Cookie'] !== undefined).toBe(false);
     }
+  });
+});
+
+/**
+ * A create runs the tenant's workflow before it answers, and on workflow-heavy objects that took
+ * longer than the one 10 s timeout every request shared. The write was cut off — and very likely
+ * applied — and the model, told it had failed, filed it again.
+ */
+describe('how long a write may take', () => {
+  /** Answers after `ms`, unless the request's own signal gives up first. */
+  const slow =
+    (ms: number): FetchLike =>
+    (_url, init) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          resolve(reply(201, '{"RecId":"A"}'));
+        }, ms);
+        init.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(init.signal?.reason as Error);
+        });
+      });
+
+  const quick = (fetchImpl: FetchLike) =>
+    createTransport({
+      baseUrl: 'https://t',
+      basePath: '/HEAT',
+      apiKey: 'k',
+      logger: logger(),
+      fetchImpl,
+      timeoutMs: 10,
+    });
+
+  it('waits longer for a write than for a read, even when only the read timeout is set', async () => {
+    const t = quick(slow(60));
+
+    await expect(t.request('https://t/x', { method: 'POST', body: {} })).resolves.toEqual({
+      RecId: 'A',
+    });
+    await expect(t.request('https://t/x')).rejects.toMatchObject({ status: 0 });
+  });
+
+  it('keeps both timeouts on an impersonated transport', async () => {
+    const t = quick(slow(60)).asPerson('tenant#SID#1');
+
+    await expect(t.request('https://t/x', { method: 'PATCH', body: {} })).resolves.toBeDefined();
+    await expect(t.request('https://t/x')).rejects.toMatchObject({ status: 0 });
+  });
+});
+
+/**
+ * `requestBinary` read the whole body with `arrayBuffer()` before anything looked at its size, so an
+ * attachment of any size was held in memory — and again as base64 — to be refused afterwards.
+ */
+describe('requestBinary never reads past its cap', () => {
+  const URL_ = 'https://t/HEAT/api/rest/Attachment?ID=a1';
+
+  /** A body served in 10-byte chunks, recording how many were pulled and whether it was let go. */
+  function streamed(chunks: number, contentLength?: number) {
+    const state = { pulled: 0, cancelled: false, arrayBufferRead: false };
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (state.pulled === chunks) {
+          controller.close();
+          return;
+        }
+        state.pulled += 1;
+        controller.enqueue(new Uint8Array(10).fill(7));
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    });
+    const fetchImpl: FetchLike = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(''),
+        arrayBuffer: () => {
+          state.arrayBufferRead = true;
+          return Promise.resolve(new ArrayBuffer(chunks * 10));
+        },
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === 'content-length'
+              ? (contentLength === undefined ? null : String(contentLength))
+              : 'application/pdf',
+        },
+        body,
+      });
+    return { state, t: transport(fetchImpl) };
+  }
+
+  it('refuses a declared length over the cap without reading the body', async () => {
+    const { state, t } = streamed(1000, 10_000);
+
+    await expect(t.requestBinary(URL_, { maxBytes: 100 })).rejects.toBeInstanceOf(
+      ResponseTooLargeError,
+    );
+    expect(state.pulled).toBeLessThanOrEqual(1);
+    expect(state.arrayBufferRead).toBe(false);
+    expect(state.cancelled).toBe(true);
+  });
+
+  it('stops an undeclared body at the cap, not at its end', async () => {
+    const { state, t } = streamed(1000);
+
+    const failure = await t.requestBinary(URL_, { maxBytes: 100 }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ResponseTooLargeError);
+    expect((failure as ResponseTooLargeError).message).toMatch(/not downloaded/);
+    // Eleven chunks is the first that passes 100 bytes; a whole read would have been a thousand.
+    expect(state.pulled).toBeLessThan(20);
+    expect(state.cancelled).toBe(true);
+  });
+
+  it('returns a body within the cap whole', async () => {
+    const { t } = streamed(3, 30);
+
+    const { bytes, contentType } = await t.requestBinary(URL_, { maxBytes: 100 });
+
+    expect(bytes.byteLength).toBe(30);
+    expect(contentType).toBe('application/pdf');
+  });
+
+  it('has a cap even when the caller names none', async () => {
+    const { t } = streamed(1, DEFAULT_MAX_BINARY_BYTES + 1);
+
+    await expect(t.requestBinary(URL_)).rejects.toBeInstanceOf(ResponseTooLargeError);
   });
 });

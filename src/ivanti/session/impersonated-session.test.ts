@@ -7,6 +7,7 @@ import { IvantiApiError } from '../http/errors.js';
 import { createIvantiRoutes } from '../odata/url.js';
 import type { CentralConfig } from './central-config.js';
 import { openImpersonatedSession } from './impersonated-session.js';
+import { RoleNotAppliedError } from './roles.js';
 
 const TENANT = 'tenant.example.com';
 const SID = `${TENANT}#SESSION123#1`;
@@ -261,6 +262,54 @@ describe('openImpersonatedSession', () => {
     await (await promise).release();
 
     expect(release).toHaveBeenCalledWith(SID);
+  });
+
+  // Silence was once read as "the role asked for": the session then reported a role Ivanti never
+  // confirmed, and one with no role reads zero of everything.
+  it('refuses, and releases, when SelectRole confirms no role', async () => {
+    const release = vi.fn(() => Promise.resolve());
+    const { promise } = open(
+      { InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: { ActiveRole: '' } },
+      { centralConfig: centralConfig({ release }) },
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(RoleNotAppliedError);
+    expect(release).toHaveBeenCalledWith(SID);
+  });
+
+  // switch_role said so; opening did not, and act_as then reported the applied role as chosen.
+  it('says so when Ivanti opens it under a different role than the one selected', async () => {
+    const { promise } = open({
+      InitializeSession: INITIALIZED,
+      GetUserData: USER_DATA,
+      SelectRole: { ActiveRole: 'SelfServiceMobile' },
+    });
+
+    const session = await promise;
+
+    expect(session.role).toBe('SelfServiceMobile');
+    expect(session.note).toContain('Ivanti applied SelfServiceMobile rather than ServiceDeskAnalyst');
+  });
+
+  it('says nothing when Ivanti applies the role it was asked for', async () => {
+    const { promise } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED });
+
+    expect((await promise).note).toBeUndefined();
+  });
+
+  // The slot re-opens a session past it rather than handing back one Ivanti will refuse.
+  it('carries the expiry CentralConfig gave it', async () => {
+    const { promise } = open(
+      { InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED },
+      {
+        centralConfig: centralConfig({
+          authenticate: () =>
+            Promise.resolve({ sid: SID, loginId: 'HSanders', expiresAt: '2026-09-15T00:00:00' }),
+        }),
+      },
+    );
+
+    expect((await promise).expiresAt).toBe('2026-09-15T00:00:00');
   });
 });
 

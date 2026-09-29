@@ -2,27 +2,33 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
-import { executeAction, listQuickActions } from '../../ivanti/quick-actions/execute.js';
+import {
+  executeAction,
+  listQuickActions,
+  type ActionResult,
+} from '../../ivanti/quick-actions/execute.js';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { comparable } from '../../ivanti/write/compare-stored.js';
 import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { connectionFor } from '../shared/connection-for.js';
+import { voteOwnership } from './vote-owner.js';
 
 /**
- * Whether one of the pinned person's identifiers is what this row records as its owner.
+ * Which decision a stored vote status reads as.
  *
- * Case-folded, and runs of whitespace collapse: Ivanti assembles a display name from its parts and
- * leaves the gap where a middle name is not set, so it stores `Becky   Smith` with three spaces.
- * An absent identifier never matches — `undefined` and `''` are not an owner.
+ * The vocabulary is the tenant's own (see `ivanti://reference/workflow`), so this matches a stem
+ * rather than a word, and a status it cannot place is reported as it reads rather than guessed.
+ * The refusing stems are tried first: "Not Approved" contains "approv".
  */
-function sameIdentifier(mine: string | undefined, onRow: string): boolean {
-  if (mine === undefined || mine === '' || onRow === '') return false;
-  const fold = (value: string): string => value.trim().replaceAll(/\s+/gu, ' ').toLowerCase();
-  return fold(mine) === fold(onRow);
+function decisionOf(status: string): 'approve' | 'deny' | undefined {
+  if (/den(y|ied)|reject|declin|disapprov|not approv|unapprov/i.test(status)) return 'deny';
+  if (/approv/i.test(status)) return 'approve';
+  return undefined;
 }
 
 /**
@@ -33,7 +39,8 @@ function sameIdentifier(mine: string | undefined, onRow: string): boolean {
  * record the wrong person's decision, and on an admin key the override actions bypass the real
  * approver entirely. **"Approve Vote"** on the *vote row* acts on a row that already belongs to a
  * named approver, so the decision counts as theirs. This tool uses the second, and refuses any row
- * whose `Owner` is not the person the conversation is acting for. That check is what makes it safe.
+ * that is not the person the conversation is acting for — by `Owner_Valid` where the row has one,
+ * never by a name two people can share (`vote-owner.ts`). That check is what makes it safe.
  *
  * Without impersonation `VotedBy` records the service account, which is accurate rather than a flaw: the
  * approver decided, this server performed it — the same shape as a delegated approval.
@@ -108,30 +115,23 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
           return errorResult(`No approval with id ${args.approvalId}. Check list_approvals.`);
         }
 
-        // The check the whole design rests on: this row is theirs, so the vote is theirs.
-        //
-        // `Owner` holds a different identifier depending on the row — a LOGIN on some, a DISPLAY
-        // NAME on others, and an EMAIL on others still (measured live: `tyrunasj@synergy.eu` on a
-        // request this server had just filed). `list_approvals` composes its filter over all of
-        // them, so matching the login alone here refused rows the listing had called theirs one
-        // call earlier, naming the same person on both sides of "not". `Owner_Valid` is the
-        // employee RecId and never varies, which makes it the one to trust; the spellings of
-        // `Owner` stay as a fallback for a row that carries no `Owner_Valid`.
+        // The check the whole design rests on: this row is theirs, so the vote is theirs. The rule
+        // is `voteOwnership`'s, shared with `list_approvals` so the listing never offers a row
+        // this refuses — and `Owner_Valid`, where the row has one, decides alone.
         //
         // Still fail-closed: nothing but the pinned person's own identifiers can match.
         const owner = typeof vote['Owner'] === 'string' ? vote['Owner'] : '';
-        const ownerValid = typeof vote['Owner_Valid'] === 'string' ? vote['Owner_Valid'] : '';
-        const theirs =
-          sameIdentifier(person.recId, ownerValid) ||
-          sameIdentifier(person.loginId, owner) ||
-          sameIdentifier(person.primaryEmail, owner) ||
-          sameIdentifier(person.displayName, owner);
+        const ownership = voteOwnership(person, vote);
 
-        if (!theirs) {
+        if (ownership !== 'theirs') {
           const held = [person.loginId, person.primaryEmail].filter((id) => id !== undefined);
+          const who = `${person.displayName}${held.length === 0 ? '' : ` (${held.join(', ')})`}`;
           return errorResult(
-            `That approval is ${owner === '' ? 'not owned by anyone this server can read' : `waiting on ${owner}`}, ` +
-              `which is not ${person.displayName}${held.length === 0 ? '' : ` (${held.join(', ')})`}. ` +
+            (ownership === 'namesake'
+              ? `That approval is waiting on ${owner} — but on a different employee record from ` +
+                `${who}'s: someone who shares that name. `
+              : `That approval is ${owner === '' ? 'not owned by anyone this server can read' : `waiting on ${owner}`}, ` +
+                `which is not ${who}. `) +
               "A vote can only be cast on one's own approval — otherwise it would be recorded as " +
               "that person's decision without them making it.",
           );
@@ -158,57 +158,126 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        if (args.reason !== undefined && args.reason !== '') {
+        const row = transport.routes.record(VOTES, args.approvalId);
+        const readVote = async (): Promise<OdataRecord | undefined> =>
+          readRows<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
+
+        const priorReason = vote['Reason'] ?? null;
+        const writingReason = args.reason !== undefined && args.reason !== '';
+        if (writingReason) {
           // Recorded before the vote: the action closes the row, and a reason written after it
           // would be an edit to a decided approval.
-          await transport.request(transport.routes.record(VOTES, args.approvalId), {
-            method: 'PATCH',
-            body: { Reason: args.reason },
-          });
+          await transport.request(row, { method: 'PATCH', body: { Reason: args.reason } });
         }
+
+        /**
+         * Takes the reason off again when the vote did not happen.
+         *
+         * Written first for the reason above, it outlived every failed vote: the row stayed
+         * Pending with their words on it, readable by anyone as the grounds for a decision nobody
+         * made. Put back to what the row held, and read back rather than trusted — this whole tool
+         * exists because a 200 is not evidence. Undefined when nothing is left behind; otherwise
+         * the sentence that says what was.
+         */
+        const takeBackReason = async (): Promise<string | undefined> => {
+          if (!writingReason) return undefined;
+          const now = await transport
+            .request(row, { method: 'PATCH', body: { Reason: priorReason } })
+            .then(readVote)
+            .catch(() => undefined);
+          if (now !== undefined && comparable(now['Reason']) === comparable(priorReason)) return undefined;
+          return (
+            `The reason they gave was written to the row before the vote and could NOT be taken ` +
+            `off again, so it is still there — "${args.reason ?? ''}" — on an approval that is ` +
+            'undecided. Tell them, so nobody reads it as the grounds for a decision.'
+          );
+        };
 
         // The form path with no form name: this object has no form for any role here, and the
         // grid path would run the action while claiming to probe. Measured: the form path runs
         // it correctly with an empty name, so nothing needs the grid path.
-        const result = await executeAction({
-          session,
-          objectId: VOTE_OBJECT,
-          recordId: args.approvalId,
-          actionId: action.actionId,
-          formName: '',
-          shouldSave: true,
-        });
+        let result: ActionResult;
+        try {
+          result = await executeAction({
+            session,
+            objectId: VOTE_OBJECT,
+            recordId: args.approvalId,
+            actionId: action.actionId,
+            formName: '',
+            shouldSave: true,
+          });
+        } catch (error: unknown) {
+          const left = await takeBackReason();
+          // Nothing left behind: the row is as it was, and `runTool` explains the failure better.
+          if (left === undefined) throw error;
+          deps.logger.warn('approval vote failed; its reason is left on the row', {});
+          return errorResult(
+            `The ${args.decision} could not be cast (${error instanceof Error ? error.message : 'unknown error'}), ` +
+              `so nothing was decided. ${left}`,
+          );
+        }
 
         // Ivanti's `saved` flag is not evidence — a rejected action can report true over a record
         // that did not change. Read both rows instead.
-        const after = readRows<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
-        const recorded = after?.['Status'];
-
-        const approvalRecId = vote['ParentLink_RecID'];
-        const approval =
-          typeof approvalRecId === 'string'
-            ? await transport
-                .request<OdataRecord>(transport.routes.record('frs_approvals', approvalRecId))
-                .catch(() => undefined)
-            : undefined;
+        let after: OdataRecord | undefined;
+        try {
+          after = await readVote();
+        } catch {
+          // The action ran and may well have registered. Reporting a failure here invites a second
+          // vote; reporting success would be a claim nothing supports.
+          return errorResult(
+            `The ${args.decision} was sent, but the vote could not be read back, so whether it ` +
+              'registered is unknown. Do NOT cast it again: list_approvals with includeDecided ' +
+              'shows whether it did.',
+          );
+        }
+        const recorded = typeof after?.['Status'] === 'string' ? after['Status'] : undefined;
 
         if (recorded === 'Pending' || recorded === undefined) {
+          const left = await takeBackReason();
           return errorResult(
             `Ivanti reported the ${args.decision} as ${String(result.status ?? 'done')} but the ` +
               'approval is still pending, so the vote did not register. Nothing was decided — ' +
-              'ask them to do it in Ivanti rather than trying again.',
+              `ask them to do it in Ivanti rather than trying again.${left === undefined ? '' : ` ${left}`}`,
+          );
+        }
+
+        // Moved is not the same as moved the RIGHT way: "no longer Pending" was all this checked.
+        const readAs = decisionOf(recorded);
+        if (readAs !== undefined && readAs !== args.decision) {
+          deps.logger.error('approval vote recorded the opposite decision', { decision: args.decision });
+          return errorResult(
+            `They decided to ${args.decision}, but the vote row now reads '${recorded}' — the ` +
+              'OPPOSITE. It is no longer pending, so it cannot be voted again here. Tell them ' +
+              'exactly that, and have it corrected in Ivanti.',
           );
         }
 
         deps.logger.info('approval vote cast', { decision: args.decision });
 
+        const approvalRecId = vote['ParentLink_RecID'];
+        const approval =
+          typeof approvalRecId === 'string' && approvalRecId !== ''
+            ? await transport
+                .request<OdataRecord>(transport.routes.record('frs_approvals', approvalRecId))
+                .catch(() => undefined)
+            : undefined;
         const approvalStatus = approval?.['Status'];
+
         return jsonResult({
           decision: recorded,
           votedFor: person.displayName,
           ...(args.reason === undefined ? {} : { reason: args.reason }),
           recordedBy: 'this server, on their behalf — their decision, its hands',
           approval: approvalStatus ?? null,
+          ...(readAs === undefined
+            ? {
+                decisionNote:
+                  `The vote row now reads '${recorded}', which this server cannot place as an ` +
+                  'approval or a denial on this tenant. Tell them it reads that — not that it was ' +
+                  'approved or denied.',
+              }
+            : {}),
           ...(approvalStatus === 'Pending'
             ? {
                 note:
@@ -216,7 +285,17 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
                   'be waiting on other approvers, or on a workflow that runs separately. Do not ' +
                   'tell them the request is approved; tell them their vote is in.',
               }
-            : {}),
+            : approvalStatus === undefined || approvalStatus === null
+              ? {
+                  // A null here used to mean anything: no parent, a failed read, an empty body.
+                  note:
+                    (typeof approvalRecId === 'string' && approvalRecId !== ''
+                      ? 'The approval this vote belongs to could not be read back'
+                      : 'This vote row names no approval it belongs to') +
+                    ', so whether the request itself has moved is unknown. Tell them their vote ' +
+                    'is in — not that the request is approved.',
+                }
+              : {}),
         });
       }),
   });

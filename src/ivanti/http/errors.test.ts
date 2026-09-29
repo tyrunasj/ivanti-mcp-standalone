@@ -140,5 +140,70 @@ describe('scrubErrorBody', () => {
     // The 32-char hex RecIds a caller needs from an error body are not key-shaped noise.
     expect(scrubbed).toContain('8E71E727DD5045C7');
   });
+
+  /**
+   * The class, not the two spellings it was first shown.
+   *
+   * The escaped form was fixed by matching `\"` as well as `"` — and a quote reaches this function
+   * however many layers it passed through. Ivanti's OData 500 is HTML-entity encoded
+   * (`{&quot;error&quot;…}`), a logging context nested one level deeper doubles the escaping, and
+   * .NET writes `"` as a unicode escape. Each of these went through whole.
+   */
+  describe('whatever the quotes were encoded as on the way', () => {
+    // Built by encoding the same object, so the fixture cannot drift from what an encoder writes.
+    const inner = { SessionId: 'abc-123', LoginId: 'CORP\\jsmith', Hostname: 'IVNT-APP-01' };
+    const once = JSON.stringify({ Message: 'boom', LogEntryId: JSON.stringify(inner) });
+    const twice = JSON.stringify({ Outer: once });
+    const entity = (text: string): string => text.replaceAll('"', '&quot;');
+
+    it.each([
+      ['HTML entities', entity(JSON.stringify(inner))],
+      ['entities around an escaped context', entity(once)],
+      ['a doubly nested context', twice],
+      ['a decimal entity', JSON.stringify(inner).replaceAll('"', '&#34;')],
+      ['an entity that was itself escaped', JSON.stringify(inner).replaceAll('"', '&amp;quot;')],
+      ['unicode escapes', JSON.stringify(inner).replaceAll('"', '\\u0022')],
+    ])('redacts the session fields when they arrive as %s', (_form, body) => {
+      const scrubbed = scrubErrorBody(`Unhandled system exception: ${body}`, 'key');
+
+      for (const leaked of ['abc-123', 'jsmith', 'IVNT-APP-01']) {
+        expect(scrubbed).not.toContain(leaked);
+      }
+      // The body keeps its own encoding, so it still reads as what Ivanti sent.
+      expect(scrubbed).toContain('[REDACTED]');
+    });
+
+    it('stops at the end of an entity-encoded value', () => {
+      const body =
+        '{&quot;SessionId&quot;:&quot;abc&quot;,&quot;RecId&quot;:&quot;8E71E727DD5045C7&quot;}';
+
+      expect(scrubErrorBody(body, 'key')).toBe(
+        '{&quot;SessionId&quot;:&quot;[REDACTED]&quot;,&quot;RecId&quot;:&quot;8E71E727DD5045C7&quot;}',
+      );
+    });
+
+    it('does not end a plain value at a quote it escapes', () => {
+      const scrubbed = scrubErrorBody('{"LoginId":"a\\"secret-tail","RecId":"R1"}', 'key');
+
+      expect(scrubbed).not.toContain('secret-tail');
+      expect(scrubbed).toContain('"RecId":"R1"');
+    });
+
+    it.each([
+      ['entity-encoded', '&lt;ConnectionString&gt;Password=hunter2&lt;/ConnectionString&gt;'],
+      ['unicode-escaped', '\\u003cConnectionString\\u003ePassword=hunter2\\u003c/ConnectionString\\u003e'],
+      ['plain, with an escaped bracket inside', '<ConnectionString>Password=a&lt;b hunter2</ConnectionString>'],
+    ])('redacts an XML element quoted %s', (_form, body) => {
+      expect(scrubErrorBody(`<html><body>${body}</body></html>`, 'key')).not.toContain('hunter2');
+    });
+
+    it('redacts a credential echoed back percent-encoded', () => {
+      const sid = 't#LIVE-SID#1';
+
+      expect(scrubErrorBody('RemoveSession?sessionId=t%23LIVE-SID%231 failed', sid)).not.toContain(
+        'LIVE-SID',
+      );
+    });
+  });
 });
 

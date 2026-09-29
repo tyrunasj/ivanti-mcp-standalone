@@ -11,6 +11,9 @@ import { createCountRecordsTool } from './count-records.js';
 import { createGetRecordTool } from './get-record.js';
 import { createGetRelatedRecordsTool } from './get-related-records.js';
 import { createListRecordsTool } from './list-records.js';
+import { createSessionPin } from '../../auth/identity-pin.js';
+import { ANONYMOUS } from '../../auth/identity.js';
+import type { CallContext } from '../tool-definition.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -292,5 +295,204 @@ describe('get_related_records', () => {
     expect(result.isError).toBe(true);
     expect(text(result)).toContain('IncidentContainsTask');
     expect(urls).toHaveLength(0);
+  });
+});
+
+describe('get_related_records caps what it reads', () => {
+  it('reads one row past the cap and says the answer is not all of them', async () => {
+    // There was no `$top` at all, and no `skip` to page with: a relationship with a thousand rows
+    // came back whole, and a bare cap would have cut it silently.
+    const many = Array.from({ length: 60 }, (_, i) => ({ RecId: `t${String(i)}`, Subject: 'x' }));
+    const { deps, urls } = fixture({ IncidentContainsTask: { value: many } });
+
+    const result = body(
+      await createGetRelatedRecordsTool(deps).handler({
+        object: 'Incidents',
+        recordId: 'abc',
+        relationship: 'IncidentContainsTask',
+      }),
+    );
+
+    expect(decodeURIComponent(urls[0] ?? '')).toContain('$top=51');
+    expect(result).toMatchObject({ returned: 50, hasMore: true });
+    expect(String(result['truncated'])).toContain('NOT ALL OF THEM');
+  });
+
+  it('says there is no more when there is not', async () => {
+    const { deps } = fixture({ IncidentContainsTask: { value: [{ RecId: 't1' }] } });
+
+    const result = body(
+      await createGetRelatedRecordsTool(deps).handler({
+        object: 'Incidents',
+        recordId: 'abc',
+        relationship: 'IncidentContainsTask',
+      }),
+    );
+
+    expect(result).toMatchObject({ returned: 1, hasMore: false });
+    expect(result).not.toHaveProperty('truncated');
+  });
+});
+
+/**
+ * The parent being the caller's says nothing about whose records a relationship reaches, and a
+ * navigation property cannot be filtered — so the rows themselves are scoped, by a rule decided
+ * from the TARGET before anything is read.
+ */
+describe('get_related_records in enduser mode', () => {
+  const PERSON = {
+    recId: 'E1',
+    category: 'employee',
+    displayName: 'Harold Sanders',
+    loginId: 'HSanders',
+    matchedOn: 'LoginID',
+    provenance: 'asserted',
+  } as const;
+
+  const pinned = (): CallContext => {
+    const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+    context.pin?.pin({ ...PERSON });
+    return context;
+  };
+
+  const scoped = (responses: Record<string, unknown> = {}) => {
+    const { connection, urls } = connectionFixture({
+      entities: {
+        incident: {
+          fields: [
+            field('RecId'),
+            field('Subject'),
+            field('ProfileLink_RecID'),
+            field('ProfileLink_Category'),
+          ],
+          relationships: [
+            { name: 'IncidentContainsTask', target: 'task' },
+            { name: 'IncidentLinksIncident', target: 'incident' },
+            { name: 'IncidentAssociatesCI', target: 'ci' },
+            { name: 'IncidentContainsJournal', target: 'journal' },
+          ],
+        },
+        task: {
+          fields: [
+            field('RecId'),
+            field('Subject'),
+            field('ParentLink_RecID'),
+            field('ParentLink_Category'),
+          ],
+        },
+        ci: { fields: [field('RecId'), field('Name')] },
+        journal: { fields: [field('RecId'), field('Subject'), field('ParentLink_RecID')] },
+        employee: {},
+      },
+      responses: {
+        // Each relationship before the bare record: the fixture matches by URL substring, in
+        // declaration order. An override keeps its key's place and replaces only the value.
+        "incidents('i1')/IncidentContainsTask": {
+          value: [
+            { RecId: 't1', Subject: 'Replace toner', ParentLink_RecID: 'I1' },
+            { RecId: 't2', Subject: 'Elsewhere', ParentLink_RecID: 'OTHER' },
+          ],
+        },
+        "incidents('i1')/IncidentLinksIncident": {
+          value: [
+            { RecId: 'i2', Subject: 'Mine too', ProfileLink_RecID: 'e1', ProfileLink_Category: 'Employee' },
+            { RecId: 'i3', Subject: 'Not mine', ProfileLink_RecID: 'OTHER', ProfileLink_Category: 'Employee' },
+          ],
+        },
+        "incidents('i1')/IncidentAssociatesCI": { value: [{ RecId: 'c1', Name: 'Printer 7' }] },
+        "incidents('i1')/IncidentContainsJournal": { value: [{ RecId: 'j1', Subject: 'internal' }] },
+        "incidents('i1')": { RecId: 'i1', ProfileLink_RecID: 'E1', ProfileLink_Category: 'Employee' },
+        incidents: {
+          value: [{ RecId: 'i1', ProfileLink_RecID: 'E1', ProfileLink_Category: 'Employee' }],
+        },
+        employees: { value: [] },
+        ...responses,
+      },
+    });
+    return {
+      urls,
+      tool: createGetRelatedRecordsTool({
+        connection,
+        gate: OPEN_GATE,
+        logger: logger(),
+        ownRecordsOnly: true,
+        actions: OPEN_ACTIONS,
+      }),
+    };
+  };
+
+  it('keeps only the caller’s own rows when the target belongs to people', async () => {
+    const { tool } = scoped();
+
+    const result = body(
+      await tool.handler(
+        { object: 'Incidents', recordId: 'i1', relationship: 'IncidentLinksIncident', fields: 'Subject' },
+        pinned(),
+      ),
+    );
+
+    expect(result['rows']).toEqual([{ RecId: 'i2', Subject: 'Mine too' }]);
+    expect(result).toMatchObject({ scopedTo: 'Harold Sanders', returned: 1 });
+    expect(String(result['showing'])).toContain('own');
+  });
+
+  it('keeps only the rows that hang off this record when the target is a child', async () => {
+    const { tool } = scoped();
+
+    const result = body(
+      await tool.handler(
+        { object: 'Incidents', recordId: 'i1', relationship: 'IncidentContainsTask', fields: 'Subject' },
+        pinned(),
+      ),
+    );
+
+    expect(result['rows']).toEqual([{ RecId: 't1', Subject: 'Replace toner' }]);
+    expect(result).toMatchObject({ scopedTo: 'Harold Sanders' });
+  });
+
+  it('refuses a target that neither belongs to a person nor hangs off the record, unread', async () => {
+    const { tool, urls } = scoped();
+
+    const result = await tool.handler(
+      { object: 'Incidents', recordId: 'i1', relationship: 'IncidentAssociatesCI' },
+      pinned(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Refusing rather than showing all of them');
+    expect(urls.some((url) => url.includes('IncidentAssociatesCI'))).toBe(false);
+  });
+
+  it('refuses the journal even where the gate allows it, and points to list_notes', async () => {
+    // A traversal cannot tell a note written for the customer from an agent's internal one.
+    const { tool, urls } = scoped();
+
+    const result = await tool.handler(
+      { object: 'Incidents', recordId: 'i1', relationship: 'IncidentContainsJournal' },
+      pinned(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('list_notes');
+    expect(urls.some((url) => url.includes('IncidentContainsJournal'))).toBe(false);
+  });
+
+  it('does not call a zero it produced by filtering a real zero', async () => {
+    const { tool } = scoped({
+      "incidents('i1')/IncidentLinksIncident": {
+        value: [{ RecId: 'i3', ProfileLink_RecID: 'OTHER', ProfileLink_Category: 'Employee' }],
+      },
+    });
+
+    const result = body(
+      await tool.handler(
+        { object: 'Incidents', recordId: 'i1', relationship: 'IncidentLinksIncident' },
+        pinned(),
+      ),
+    );
+
+    expect(result).toMatchObject({ returned: 0, rows: [] });
+    expect(String(result['note'])).toContain('not the same as none existing');
+    expect(String(result['note'])).not.toContain('REAL ZERO');
   });
 });

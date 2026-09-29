@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { field } from '../../ivanti/connection.fixture.js';
 import { formFixture } from '../../ivanti/session/form.fixture.js';
 import type { EntityMetadata } from '../../ivanti/metadata/csdl.js';
-import { assertKnownFields, FieldNotOnObjectError } from './known-fields.js';
+import { FieldNameError } from './explain-field-error.js';
+import { assertKnownFields, FieldNotOnObjectError, knownFields } from './known-fields.js';
 
 const incident = (names: string[] = ['Subject', 'Symptom', 'Status', 'Category', 'ProfileLink_RecID', 'ProfileLink_Category']): EntityMetadata =>
   ({ name: 'incident', fields: names.map((n) => field(n)), relationships: [] });
@@ -83,5 +84,40 @@ describe('assertKnownFields', () => {
 
     expect(thrown).toContain('`Nope`');
     expect(thrown).toContain('`Wibble`');
+  });
+
+  // Typed as a refusal, so `runTool` answers it as one rather than logging a fault.
+  it('is a FieldNameError, which is what the tool runner treats as a caller\'s mistake', () => {
+    expect(() => { assertKnownFields(['Nope'], incident()); }).toThrow(FieldNameError);
+  });
+});
+
+/**
+ * The name check matched case-insensitively and handed the caller's spelling on — to lookups that
+ * were exact. `status` passed the check and then missed the picklist, its identifier and the
+ * read-back, so a bogus value went out unresolved and came back reported as written.
+ */
+describe('knownFields', () => {
+  it('returns the write keyed by the schema spelling', () => {
+    expect(knownFields({ status: 'Active', SUBJECT: 'x', Symptom: 'y' }, incident())).toEqual({
+      Status: 'Active',
+      Subject: 'x',
+      Symptom: 'y',
+    });
+  });
+
+  it('refuses the same field twice in two spellings, and names both', () => {
+    const thrown = message(() => { knownFields({ Status: 'Active', status: 'Logged' }, incident()); });
+
+    expect(thrown).toContain('`Status` and `status` name ONE field');
+    expect(thrown).toContain('Nothing was written');
+  });
+
+  it('still refuses a field the object does not have', () => {
+    expect(() => knownFields({ Nope: 1 }, incident())).toThrow(FieldNotOnObjectError);
+  });
+
+  it('keeps the caller spelling when there is no schema to take one from', () => {
+    expect(knownFields({ anything: 1 }, incident([]))).toEqual({ anything: 1 });
   });
 });

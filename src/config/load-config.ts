@@ -63,7 +63,8 @@ export function loadConfig(env: EnvRecord, readFile?: FileReader): Config {
     );
   }
 
-  const problems = validateConfig(parsed.data);
+  // What was actually set, not defaulted: some rules refuse a setting the mode would ignore.
+  const problems = validateConfig(parsed.data, new Set(Object.keys(resolved)));
   if (problems.length > 0) {
     throw new ConfigError(problems);
   }

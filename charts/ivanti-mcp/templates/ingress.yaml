@@ -4,11 +4,9 @@ kind: Ingress
 metadata:
   name: {{ include "ivanti-mcp.fullname" . }}
   labels: {{- include "ivanti-mcp.labels" . | nindent 4 }}
-  annotations:
-    {{- with .Values.ingress.annotations }}{{- toYaml . | nindent 4 }}{{- end }}
-    {{- if .Values.sessionAffinity.enabled }}
-    {{- toYaml .Values.sessionAffinity.ingressAnnotations | nindent 4 }}
-    {{- end }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . }}

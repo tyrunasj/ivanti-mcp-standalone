@@ -27,7 +27,8 @@ interface Bucket {
   error?: string;
 }
 
-const countOf = (bucket: Bucket): number => bucket.count ?? -1;
+/** For SORTING only: a bucket that failed goes last rather than pretending to be a zero. */
+const sortKey = (bucket: Bucket): number => bucket.count ?? -1;
 
 export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -161,7 +162,12 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
         // buckets summed to 12 of 51. Every bucket said `exact: true`, because each count was
         // right; it was the set of buckets that was short. So the whole is compared against the
         // real total and the shortfall reported, rather than left to be noticed.
-        const bucketTotal = groups.reduce((sum, group) => sum + countOf(group), 0);
+        //
+        // Only the buckets that were counted are summed. The sort key used to double as the
+        // count, so each failed bucket added −1 — inflating `unaccounted` by one per failure, and
+        // then blaming the field's list for records that were really in a bucket nobody could read.
+        const failedBuckets = groups.filter((group) => group.count === undefined).length;
+        const bucketTotal = groups.reduce((sum, group) => sum + (group.count ?? 0), 0);
         const wholeUrl = withQuery(
           transport.routes.entitySet(entitySet),
           buildQuery({ filter: scoped.filter, top: 1, count: true }),
@@ -183,7 +189,21 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
           // One tester summed seven buckets by hand to prove it; on a 25-bucket field they said
           // they would have skipped that and reported a partial as a total.
           ...(unaccounted === undefined ? {} : { unaccounted: Math.max(0, unaccounted) }),
-          ...(unaccounted === undefined || unaccounted <= 0
+          // A bucket that could not be counted makes the whole answer partial, whatever else is
+          // true — and it changes what `unaccounted` means, so it is said INSTEAD of the warning
+          // below, which would put those records down to the field's list.
+          ...(failedBuckets > 0
+            ? {
+                partial: true,
+                warning:
+                  `${String(failedBuckets)} of ${String(groups.length)} buckets could not be ` +
+                  'counted (each carries its `error`), so THIS IS A PARTIAL ANSWER: the ' +
+                  'buckets below do not add up to a breakdown, and `unaccounted` includes ' +
+                  'whatever the failed buckets hold. Do not report their values as zero — ask ' +
+                  'again, or count those values with count_records.',
+              }
+            : {}),
+          ...(failedBuckets > 0 || unaccounted === undefined || unaccounted <= 0
             ? {}
             : {
                 // The wording has to follow where the values came from. Said the old way to a
@@ -209,7 +229,7 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
           ...(values.length > counted.length ? { truncated: values.length } : {}),
           // Biggest bucket first: that is the shape of the answer, and a bucket that failed
           // sorts last rather than pretending to be a zero.
-          groups: [...groups].sort((a, b) => countOf(b) - countOf(a)),
+          groups: [...groups].sort((a, b) => sortKey(b) - sortKey(a)),
         });
       }),
   });

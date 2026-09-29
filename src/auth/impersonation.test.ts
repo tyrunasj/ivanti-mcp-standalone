@@ -170,3 +170,178 @@ describe('two opens in flight', () => {
     await expect(slot.open('BReed')).resolves.toMatchObject({ loginId: 'BReed' });
   });
 });
+
+/** A handshake the test lands by hand, and a record of every login the slot opened for. */
+function manual() {
+  const landings: ((session: ImpersonatedSession) => void)[] = [];
+  const opened: string[] = [];
+  const slot = createImpersonationSlot((login) => {
+    opened.push(login);
+    return new Promise<ImpersonatedSession>((resolve) => landings.push(resolve));
+  });
+  return { slot, opened, land: (index: number, session: ImpersonatedSession) => landings[index]?.(session) };
+}
+
+/**
+ * A conversation that ends while `act_as` is still opening a session.
+ *
+ * A stdio re-initialize or an idle expiry ended it with nobody pinned yet, so nothing was released;
+ * the handshake then landed and stored the first person's session in the NEXT conversation's slot,
+ * where every `act_as` for anyone else was refused — naming someone that conversation had never
+ * heard of — until the process restarted. And `release` left the handshake pending, so a later
+ * `open` for someone else could join it and be handed the first person's session.
+ */
+describe('a handshake that outlives its conversation', () => {
+  it('is given back when it lands, not kept', async () => {
+    const { slot, land } = manual();
+    const release = vi.fn(() => Promise.resolve());
+
+    const first = slot.open('ACope');
+    const released = slot.release();
+    land(0, session('ACope', release));
+
+    await expect(first).rejects.toThrow(/conversation ended/);
+    await released;
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(slot.session()).toBeUndefined();
+  });
+
+  it('does not bind the next conversation to the person it was opened for', async () => {
+    const { slot, land, opened } = manual();
+
+    const first = slot.open('ACope');
+    const released = slot.release();
+    land(0, session('ACope'));
+    await first.catch(() => undefined);
+    await released;
+
+    const next = slot.open('BReed');
+    land(1, session('BReed'));
+
+    await expect(next).resolves.toMatchObject({ loginId: 'BReed' });
+    expect(opened).toEqual(['ACope', 'BReed']);
+  });
+
+  it('is never joined by an open for someone else after the release', async () => {
+    const { slot, land, opened } = manual();
+
+    const first = slot.open('ACope');
+    void slot.release();
+    // Still in flight. The next person gets a handshake of their own, not this one.
+    const next = slot.open('BReed');
+    land(0, session('ACope'));
+    land(1, session('BReed'));
+
+    await expect(first).rejects.toThrow(/conversation ended/);
+    await expect(next).resolves.toMatchObject({ loginId: 'BReed' });
+    expect(opened).toEqual(['ACope', 'BReed']);
+    expect(slot.session()?.loginId).toBe('BReed');
+  });
+
+  // Shutdown waits on `release`; it must not resolve before the in-flight session is given back.
+  it('releases only once the in-flight session has been given back', async () => {
+    const { slot, land } = manual();
+    let givenBack = false;
+    const release = vi.fn(() => {
+      givenBack = true;
+      return Promise.resolve();
+    });
+
+    const first = slot.open('ACope');
+    const released = slot.release();
+    setTimeout(() => {
+      land(0, session('ACope', release));
+    }, 5);
+    await released;
+
+    expect(givenBack).toBe(true);
+    await first.catch(() => undefined);
+  });
+});
+
+/**
+ * A session Ivanti has stopped honouring.
+ *
+ * `open` handed back the cached session however dead it was, so a conversation whose session
+ * expired or was evicted answered every later call with a 401 — and a repeated `act_as` for the
+ * same person handed the dead one back again.
+ */
+describe('a dead session', () => {
+  it('is replaced once Ivanti has refused it', async () => {
+    const release = vi.fn(() => Promise.resolve());
+    const sessions = [session('HSanders', release), session('HSanders')];
+    const open = vi.fn(() => Promise.resolve(sessions.shift() ?? session('HSanders')));
+    const slot = createImpersonationSlot(open);
+
+    const dead = await slot.open('HSanders');
+    slot.discard(dead);
+    const fresh = await slot.open('HSanders');
+
+    expect(fresh).not.toBe(dead);
+    expect(open).toHaveBeenCalledTimes(2);
+    // The documented teardown still runs for the one replaced.
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  // A call that started on the old session can report its 401 after the new one is open.
+  it('ignores a late refusal of a session already replaced', async () => {
+    const open = vi.fn(() => Promise.resolve(session('HSanders')));
+    const slot = createImpersonationSlot(open);
+
+    const dead = await slot.open('HSanders');
+    slot.discard(dead);
+    const fresh = await slot.open('HSanders');
+    slot.discard(dead);
+
+    expect(await slot.open('HSanders')).toBe(fresh);
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it('is replaced by one handshake however many calls notice together', async () => {
+    const open = vi.fn(
+      () => new Promise<ImpersonatedSession>((resolve) => setTimeout(() => { resolve(session('HSanders')); }, 5)),
+    );
+    const slot = createImpersonationSlot(open);
+    const dead = await slot.open('HSanders');
+    slot.discard(dead);
+
+    const [a, b] = await Promise.all([slot.open('HSanders'), slot.open('HSanders')]);
+
+    expect(a).toBe(b);
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it('is replaced once it is past the expiry CentralConfig gave it', async () => {
+    vi.useFakeTimers();
+    try {
+      const expiring = (): ImpersonatedSession =>
+        impersonatedSessionFixture({ expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() });
+      const open = vi.fn(() => Promise.resolve(expiring()));
+      const slot = createImpersonationSlot(open);
+
+      const first = await slot.open('HSanders');
+      vi.advanceTimersByTime(5 * 60_000);
+      expect(await slot.open('HSanders')).toBe(first);
+
+      vi.advanceTimersByTime(5 * 60_000);
+      expect(await slot.open('HSanders')).not.toBe(first);
+      expect(open).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The timestamp carries no zone. Read in the wrong one, every fresh session would look expired
+  // and every call would open another.
+  it('disregards an expiry that had already passed when the session was handed over', async () => {
+    const open = vi.fn(() =>
+      Promise.resolve(impersonatedSessionFixture({ expiresAt: '2000-01-01T00:00:00' })),
+    );
+    const slot = createImpersonationSlot(open);
+
+    const first = await slot.open('HSanders');
+
+    expect(await slot.open('HSanders')).toBe(first);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+});

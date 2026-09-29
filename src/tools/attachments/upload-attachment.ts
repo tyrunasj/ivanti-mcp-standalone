@@ -2,7 +2,12 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
-import { uploadAttachment } from '../../ivanti/attachments/upload.js';
+import {
+  AttachmentLinkUnconfirmedError,
+  OrphanedAttachmentError,
+  uploadAttachment,
+  type UploadedAttachment,
+} from '../../ivanti/attachments/upload.js';
 import { toObjectId } from '../../ivanti/write/validated-write.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { assertRecordWritable } from '../shared/own-records.js';
@@ -24,6 +29,36 @@ const MAX_BYTES = 2 * 1024 * 1024;
 
 /** Anything not obviously text, which is most of what gets attached. */
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
+
+/**
+ * What to do about a file that is uploaded but not (or not provably) on the record.
+ *
+ * Mode decides it. `delete_attachment` refuses, in `enduser`, a file that names no record —
+ * nothing then shows whose it is — so advising it there sent the person into a refusal with a
+ * file they could neither reach nor remove.
+ */
+function remedy(
+  error: OrphanedAttachmentError | AttachmentLinkUnconfirmedError,
+  enduser: boolean,
+): string {
+  const id = error.attachmentId;
+  if (error instanceof OrphanedAttachmentError) {
+    return enduser
+      ? 'It cannot be removed from here: delete_attachment refuses a file that is on no record, ' +
+          'because nothing shows whose it is. Uploading again is how to get the file onto the ' +
+          `ticket — tell the person a stray copy (id ${id}) was left behind for the service desk ` +
+          'to remove.'
+      : `Delete it with delete_attachment (id ${id}) before uploading again, or the retry leaves ` +
+          'two copies.';
+  }
+  return enduser
+    ? `Check with get_attachment_details (id ${id}) before uploading again: if it answers, the ` +
+        'file is on the ticket; if it refuses because the file names no record, upload again and ' +
+        'tell the person a stray copy was left for the service desk to remove.'
+    : `Check with get_attachment_details (id ${id}) before uploading again: if it names this ` +
+        'record the file is attached; if it names none, delete it with delete_attachment and ' +
+        'upload again.';
+}
 
 export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -97,40 +132,68 @@ export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition
           );
         }
 
-        const uploaded = await uploadAttachment({
-          transport,
-          parentEntitySet: target.entitySet,
-          // Ivanti wants the AdminUI form here, `Incident#`, not the entity set.
-          parentObjectType: toObjectId(target.entity.name),
-          parentRecId: args.recordId,
-          // What `ParentLink_Category` holds: the object name without the `#`.
-          parentCategory: target.entity.name,
-          filename: args.filename,
-          bytes,
-          contentType: args.contentType ?? DEFAULT_CONTENT_TYPE,
-          // So the file is not stamped with this server's service account. Same attribution rule
-          // as a record created through `create_record`.
-          author: context.pin?.person()?.loginId,
-        });
+        let uploaded: UploadedAttachment;
+        try {
+          uploaded = await uploadAttachment({
+            transport,
+            parentEntitySet: target.entitySet,
+            // Ivanti wants the AdminUI form here, `Incident#`, not the entity set.
+            parentObjectType: toObjectId(target.entity.name),
+            parentRecId: args.recordId,
+            // CSDL's name, so the link can be written in the tenant's casing.
+            parentCategory: target.entity.name,
+            filename: args.filename,
+            bytes,
+            contentType: args.contentType ?? DEFAULT_CONTENT_TYPE,
+            // So the file is not stamped with this server's service account. Same attribution
+            // rule as a record created through `create_record`.
+            author: context.pin?.person()?.loginId,
+          });
+        } catch (error: unknown) {
+          if (
+            error instanceof OrphanedAttachmentError ||
+            error instanceof AttachmentLinkUnconfirmedError
+          ) {
+            // Error level: nobody asked for a file in Ivanti that may be on no record, and
+            // someone has to find out which it is.
+            deps.logger.error('attachment uploaded but not attached', {
+              object: target.entitySet,
+              attachmentId: error.attachmentId,
+              confirmed: error instanceof OrphanedAttachmentError,
+            });
+            return errorResult(`${error.message} ${remedy(error, deps.ownRecordsOnly)}`);
+          }
+          throw error;
+        }
 
         deps.logger.info('ivanti attachment uploaded', {
           object: target.entitySet,
           bytes: uploaded.sizeBytes,
         });
 
+        const { stored } = uploaded;
         return jsonResult({
           object: target.entitySet,
           recordId: args.recordId,
           attachmentId: uploaded.attachmentId,
-          filename: uploaded.filename,
-          sizeBytes: uploaded.sizeBytes,
+          // What the attachment row says after the link, read back — not what was sent.
+          filename: stored.name ?? uploaded.filename,
+          sizeBytes: stored.sizeBytes ?? uploaded.sizeBytes,
           attached: true,
-          // Both halves, because Ivanti stores both and they differ. `CreatedBy` is the person
-          // this was filed for and is overridable; `LastModBy` is not, and always records the
-          // account that performed the write. Reporting only the first answered "who added it"
-          // with half the truth, and a caller asking exactly that had to spend another call.
-          createdBy: context.pin?.person()?.loginId ?? 'this server’s service account',
-          lastModBy: 'this server’s service account (Ivanti will not let that be overridden)',
+          // Who Ivanti recorded, from the row. These used to be asserted — `lastModBy` was
+          // hard-coded to the service account, which is false the moment `act_as` opens an
+          // impersonated session and the write runs as the person. A field the row does not
+          // carry is left out rather than guessed.
+          ...(stored.createdBy === undefined ? {} : { createdBy: stored.createdBy }),
+          ...(stored.lastModBy === undefined ? {} : { lastModBy: stored.lastModBy }),
+          ...(uploaded.linkReplyLost === undefined
+            ? {}
+            : {
+                linkNote:
+                  `The request linking the file failed (${uploaded.linkReplyLost.slice(0, 200)}), ` +
+                  'but reading the file back shows it on the record — it IS attached. Do not ' +
+                  'upload it again.',
+              }),
         });
       }),
   });

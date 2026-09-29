@@ -8,6 +8,7 @@ import {
   submitWithAttachments,
   isChosenOption,
   ISO_DATETIME,
+  readRequestAttachments,
   readSubmitReply,
   verifyStoredAnswers,
   type ParameterAnswer,
@@ -34,6 +35,49 @@ const ANSWER = z.union([
 
 /** The same ceiling the attachment tools use, and for the same reason: base64 crosses twice. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * What the request carries, against what was staged for it.
+ *
+ * `attached` used to be the list of files STAGED — which says what was sent, not what the request
+ * has. A staging id the submit did not bind leaves the request without that file while the answer
+ * listed it, and the person was told a document was on their request that nobody would ever see.
+ */
+function attachmentReport(
+  staged: readonly StagedAttachment[],
+  onRequest: string[] | Error,
+): Record<string, unknown> {
+  if (staged.length === 0) return {};
+
+  if (onRequest instanceof Error) {
+    return {
+      attached: 'unknown',
+      attachmentWarning:
+        `${String(staged.length)} file(s) were sent with the request, but reading its ` +
+        `attachments back failed: ${onRequest.message.slice(0, 200)}. So they are NOT confirmed ` +
+        'to be on it. Do not send them again until the request has been checked in Ivanti — a ' +
+        'second copy is worse than a moment spent looking.',
+    };
+  }
+
+  const carried = new Set(onRequest.map((name) => name.toLowerCase()));
+  const missing = staged
+    .map((file) => file.filename)
+    .filter((name) => !carried.has(name.toLowerCase()));
+
+  return {
+    attached: onRequest,
+    ...(missing.length === 0
+      ? {}
+      : {
+          notAttached: missing,
+          attachmentWarning:
+            'These files were sent with the request but are NOT on it when it is read back. ' +
+            'The request exists; add them with upload_attachment (`object: "ServiceReq"` and ' +
+            'this RecId) rather than submitting again.',
+        }),
+  };
+}
 
 export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -83,10 +127,10 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
         .string()
         .optional()
         .describe(
-          "Proposed subject. MOST OFFERINGS IGNORE IT — the template computes the subject from " +
-            'itself, and the read-back does not check this field, so a request commonly comes ' +
-            "back titled after the offering whatever is passed here. Do not promise the person " +
-            'their wording will appear.',
+          "Proposed subject. MOST OFFERINGS IGNORE IT — the template computes the subject " +
+            'itself, so a request commonly comes back titled after the offering whatever is ' +
+            'passed here; the result says which. Do not promise the person their wording will ' +
+            'appear.',
         ),
       person: z
         .string()
@@ -294,6 +338,37 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
         const verification = check instanceof Error ? undefined : check;
         const verifyFailed = check instanceof Error ? check : undefined;
 
+        // What the request carries, read back — never the list of what was staged for it.
+        const onRequest =
+          staged.length === 0
+            ? []
+            : await readRequestAttachments(connection.transport, submitted.recId).catch(
+                (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+              );
+
+        // The subject is now sent on both paths, and neither is known to apply it on every
+        // offering — so what the request is titled is read off it, not assumed from what was sent.
+        const storedSubject = typeof filed?.['Subject'] === 'string' ? filed['Subject'] : undefined;
+        const subjectAsked = args.subject?.trim() ?? '';
+        const subjectReport =
+          subjectAsked === '' || filed === undefined
+            ? {}
+            : storedSubject?.trim() === subjectAsked
+              ? { subject: storedSubject }
+              : {
+                  subject: storedSubject ?? null,
+                  subjectNote:
+                    'The subject passed was not applied — the offering sets its own. Do not tell ' +
+                    'the person their wording is on the request.',
+                };
+
+        // The files path is the form submit, which is not measured to honour `localOffset` the
+        // way the plain submit is. A date that landed wrong there is most likely that, and the
+        // way round it is known — so say it, rather than leaving a second submit as the fix.
+        const dateLandedWrong =
+          staged.length > 0 &&
+          (verification?.mismatches.some((mismatch) => ISO_DATETIME.test(mismatch.sent)) ?? false);
+
         return jsonResult({
           requestNumber: submitted.requestNumber,
           name: submitted.name ?? null,
@@ -310,9 +385,10 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
           ...(typeof filed?.['CreatedBy'] === 'string'
             ? { createdBy: filed['CreatedBy'], createdByNote: 'who Ivanti recorded as filing it' }
             : {}),
+          ...subjectReport,
           answersSent: submitted.parametersSent,
           answersOnRequest: submitted.parametersOnRequest,
-          ...(staged.length === 0 ? {} : { attached: staged.map((file) => file.filename) }),
+          ...attachmentReport(staged, onRequest),
           ...(submitted.parametersOnRequest !== submitted.parametersSent
             ? {
                 answerNote:
@@ -348,6 +424,16 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
                     'The request exists, but what Ivanti stored is not what was sent. This was ' +
                     'found by reading the request back — Ivanti reported the submit as clean.',
                 }),
+          ...(dateLandedWrong
+            ? {
+                dateNote:
+                  'This request carried files, so it went through Ivanti\'s form submit, which ' +
+                  'is not measured to apply the tenant offset the way the plain submit does — ' +
+                  'the likeliest reason a date above landed wrong. Correct it in Ivanti rather ' +
+                  'than submitting again. Next time, submit without the files and add them ' +
+                  'afterwards with upload_attachment.',
+              }
+            : {}),
         });
       }),
   });

@@ -15,7 +15,7 @@ const VERIFIED = verifiedIdentity({
   subject: '367708',
   issuer: 'https://idp',
   scopes: [],
-  claims: { email: 'jsmith@corp.example' },
+  claims: { email: 'jsmith@corp.example', email_verified: true },
 });
 
 function person(overrides: Partial<PinnedPerson> = {}): PinnedPerson {
@@ -49,6 +49,16 @@ describe('createSessionPin', () => {
       IdentityConflictError,
     );
     expect(pin.person()?.displayName).toBe('John Smith');
+  });
+
+  // A desktop (stdio) client keeps one connection for its whole life: "start a new session" was
+  // advice its user could not follow. The way out has to work on both transports.
+  it('explains a way out that works on stdio as well as HTTP', () => {
+    const message = new IdentityConflictError('John Smith', 'Ada Dale').message;
+
+    expect(message).not.toMatch(/new session/i);
+    expect(message).toContain('new conversation');
+    expect(message).toContain('idle');
   });
 
   it('accepts the same person again', () => {

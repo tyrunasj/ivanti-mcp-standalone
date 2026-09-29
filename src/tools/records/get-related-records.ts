@@ -6,17 +6,33 @@ import { suggestNames } from '../../ivanti/metadata/suggest-names.js';
 import { ALL_FIELDS, resolveRowFields } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { buildQuery, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { assertOwnRecordById } from '../shared/own-records.js';
+import {
+  UnscopableObjectError,
+  assertOwnRecordById,
+  scopeRelatedRows,
+  type RelatedRowScope,
+} from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { compactMissedObject } from '../../ivanti/odata/compact-fields.js';
 import { compactFieldsFor } from '../../ivanti/odata/compact-fields.js';
 import { ignoredFieldNames, ignoredFieldsNote } from '../shared/ignored-fields.js';
 import { transportFor } from '../shared/transport-for.js';
+
+/**
+ * How many related rows one call reads.
+ *
+ * The request had no `$top` at all, so a relationship with a thousand rows came back whole — and
+ * there is no `skip` here to page it, so a cap alone would silently cut the answer. One row more
+ * than the cap is asked for, so "there are more" is known rather than guessed, and the rows are
+ * trimmed here as well in case Ivanti ignores `$top` on a navigation property.
+ */
+const RELATED_TOP = 50;
 
 export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -89,15 +105,51 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
           );
         }
 
-        // Related rows cannot be filtered, so the gate is the parent: someone else's incident
-        // must not become a way to read its tasks and journals.
+        // A journal holds staff-internal notes and Ivanti's own email traffic beside what was
+        // written for the customer, and a traversal cannot tell them apart. An operator can
+        // allowlist the journal object; that still does not make its rows the customer's.
+        if (deps.ownRecordsOnly && target !== undefined && /^journal/i.test(target)) {
+          return errorResult(
+            `${match} leads to the journal, which holds internal notes and Ivanti's own email ` +
+              'traffic beside what was written for you, so it is not read here. Use list_notes ' +
+              'for the notes on this record — it returns the ones published to you.',
+          );
+        }
+
+        // Related rows cannot be filtered, so the first gate is the parent: someone else's
+        // incident must not become a way to read its tasks and journals.
         await assertOwnRecordById(deps, context, resolved, args.recordId);
 
-        const url = transport.routes.related(entitySet, args.recordId, match);
+        // The second is the rows themselves, because the parent being theirs says nothing about
+        // whose records a relationship reaches. Decided before the read — an object that cannot
+        // be scoped is refused without being asked for.
+        let rowScope: RelatedRowScope | undefined;
+        if (deps.ownRecordsOnly) {
+          if (target === undefined) throw new UnscopableObjectError('related', match);
+          rowScope = await scopeRelatedRows(
+            deps,
+            context,
+            await resolveObject(deps, target),
+            args.recordId,
+            match,
+          );
+        }
+
+        const url = withQuery(
+          transport.routes.related(entitySet, args.recordId, match),
+          buildQuery({ top: RELATED_TOP + 1 }),
+        );
         const payload = await transport.request<OdataRecord>(url);
         // Ivanti answers an empty relationship with `{"value": "No instances found."}` — a
         // string, not an array. `readCollection` turns that into no rows rather than nineteen.
-        const rows = readRows<OdataRecord>(payload, url);
+        const fetched = readRows<OdataRecord>(payload, url);
+        const page = fetched.slice(0, RELATED_TOP);
+        const rows = rowScope === undefined ? page : page.filter(rowScope.keep);
+        // A count, where Ivanti sends one unasked. Not under a scope: it counts every related
+        // row, the ones that are someone else's included.
+        const total = rowScope === undefined ? readTotal(payload, fetched.length) : undefined;
+        const hasMore =
+          fetched.length > RELATED_TOP || (total !== undefined && total.total > page.length);
 
         const projection = resolveRowFields(parseFieldList(args.fields), args.fields);
         // Decided against the TARGET's rows: a journal, an attachment or a tenant's own object
@@ -111,7 +163,30 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
           object: entitySet,
           relationship: match,
           target,
+          ...(rowScope === undefined
+            ? {}
+            : {
+                scopedTo: rowScope.scopedTo,
+                showing:
+                  rowScope.rule === 'owner'
+                    ? `only ${rowScope.scopedTo}'s own ${target ?? 'related'} records — any ` +
+                      'belonging to someone else are left out, and not counted'
+                    : `only the ${target ?? 'related'} records that hang off this ` +
+                      `${entity.name} itself`,
+              }),
           returned: rows.length,
+          hasMore,
+          ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),
+          ...(hasMore
+            ? {
+                truncated:
+                  `This relationship holds more than ${String(RELATED_TOP)} rows and only the ` +
+                  `first ${String(RELATED_TOP)} were read — THIS IS NOT ALL OF THEM, and this ` +
+                  `tool cannot page. For the rest, query ${target ?? 'the target object'} with ` +
+                  'list_records, filtering on its link to this record (a task or an attachment ' +
+                  "names its parent in `ParentLink_RecID`), and page with `skip`.",
+              }
+            : {}),
           /**
            * What zero means, said here rather than left to be inferred.
            *
@@ -121,7 +196,18 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
            * check it worked at all. Two zeros in that run were never verified and went into an
            * answer as assertions.
            */
-          ...(rows.length === 0
+          // Under a scope, zero is about what this person may see and not about the record — the
+          // "real zero" below would be a false reassurance there, and saying WHY it is zero would
+          // tell them someone else's records are attached to their ticket.
+          ...(rows.length === 0 && rowScope !== undefined
+            ? {
+                note:
+                  `No ${target ?? 'related'} rows on this ${entity.name} are visible to ` +
+                  `${rowScope.scopedTo}. That is not the same as none existing — only rows that ` +
+                  'are theirs, or that hang off this record itself, are shown here.',
+              }
+            : {}),
+          ...(rows.length === 0 && rowScope === undefined
             ? {
                 note:
                   `The relationship resolved and this ${entity.name} has no ` +

@@ -13,26 +13,123 @@ import {
 import type { CallerIdentity } from '../auth/identity.js';
 import type { TokenVerifier } from '../auth/oauth/verify-token.js';
 import type { Config } from '../config/env-schema.js';
+import { isExposedToNetwork } from '../config/validate-config.js';
 import type { Logger } from '../logger.js';
 import type { CallContext } from '../tools/tool-definition.js';
+import type { McpConnection } from './create-server.js';
 import { authorizeRequest, type AuthorizationResult } from './http/authorize-request.js';
 import { buildHealth, MINIMAL_HEALTH } from './http/health.js';
 import { createMcpHandler, type McpSession } from './http/mcp-handler.js';
 import { sendJson } from './http/respond.js';
 import { resolveRoute } from './http/resolve-route.js';
-import { SessionManager } from './http/session-manager.js';
+import { SessionManager, type SessionSlot } from './http/session-manager.js';
 import { isOriginAllowed } from './http/validate-origin.js';
 
 const SWEEP_INTERVAL_MS = 30_000;
 
+/**
+ * How long an idle keep-alive connection stays open — longer than whatever sits in front.
+ *
+ * An AWS ALB and the nginx ingress both keep an idle upstream connection for 60 s and reuse it;
+ * Node's default closes it after 5. A request the proxy sent down a connection this server had
+ * just closed came back as a sporadic 502 that no log on this side ever saw.
+ */
+export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+
+/**
+ * Above the keep-alive timeout, as Node's own guidance puts it: otherwise a request arriving late
+ * on a reused connection can be cut at the header stage before the keep-alive timer would have.
+ */
+export const HEADERS_TIMEOUT_MS = 66_000;
+
+/**
+ * How long receiving a request may take — the request only, never the answer, so a tool call that
+ * waits thirty seconds on an Ivanti write is not affected by it. Sized for the 4 MB body limit on
+ * a slow uplink. Node refuses a value below the headers timeout.
+ */
+export const REQUEST_TIMEOUT_MS = 120_000;
+
 export interface HttpDeps {
   verifier?: TokenVerifier;
-  /** A fresh McpServer per session: `connect()` binds one transport at a time. */
-  createMcpServer: (context: CallContext) => McpServer;
+  /** A fresh server per session: `connect()` binds one transport at a time. */
+  createMcpServer: (context: CallContext) => McpConnection;
   serverName: string;
   serverVersion: string;
   /** Resolved once at startup: reading it walks node_modules, and /health is a hot path. */
   sdkVersion: string;
+  /** What the `listening on http` line carries besides the address — the manifest, the tools. */
+  listeningFields?: Record<string, unknown>;
+}
+
+/** The listener could not bind. Already logged; the process has nothing to serve and exits. */
+export class ListenError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string | undefined,
+  ) {
+    super(message);
+    this.name = 'ListenError';
+  }
+}
+
+/** Why a bind failed, in the words of the setting that fixes it. */
+function explainListenFailure(error: NodeJS.ErrnoException, bind: string, port: number): string {
+  const where = `Cannot listen on ${bind}:${String(port)}`;
+  switch (error.code) {
+    case 'EADDRINUSE':
+      return (
+        `${where}: the port is already in use. Stop whatever holds it, or set MCP_PORT to a ` +
+        'free one.'
+      );
+    case 'EACCES':
+      return (
+        `${where}: permission denied. A port below 1024 needs privileges this server does not ` +
+        'have — the image runs as uid 65532 — so set MCP_PORT to 1024 or above.'
+      );
+    case 'EADDRNOTAVAIL':
+      return (
+        `${where}: this host has no such address. Set MCP_BIND to one of its own addresses, or ` +
+        'to 0.0.0.0 inside a container.'
+      );
+    default:
+      return `${where}: ${error.message}`;
+  }
+}
+
+/**
+ * What an unauthenticated listener owes its operator, said before it binds.
+ *
+ * Warned, not refused: inside a container `0.0.0.0` is the ordinary bind, and whether that
+ * reaches a network is decided by how the port is published, which this process cannot see.
+ */
+export function openModeWarnings(
+  config: Config,
+): { message: string; fields: Record<string, unknown> }[] {
+  if (config.AUTH_MODE !== 'none') return [];
+  const where = { bind: config.MCP_BIND, port: config.MCP_PORT };
+  if (!isExposedToNetwork(config)) {
+    return [
+      {
+        message: 'AUTH_MODE=none: no authentication, the network is the only boundary',
+        fields: { ...where, trustedOrigins: config.TRUSTED_ORIGINS },
+      },
+    ];
+  }
+  const port = String(config.MCP_PORT);
+  return [
+    {
+      message:
+        `AUTH_MODE=none on ${config.MCP_BIND}, not loopback: anything that can reach port ` +
+        `${port} acts in Ivanti through this server's account, unauthenticated`,
+      fields: {
+        ...where,
+        trustedOrigins: config.TRUSTED_ORIGINS,
+        advice:
+          `In a container, publish the port on loopback only (-p 127.0.0.1:${port}:${port}); ` +
+          'elsewhere set MCP_BIND=127.0.0.1, or AUTH_MODE to bearer or oauth.',
+      },
+    },
+  ];
 }
 
 interface Session extends McpSession {
@@ -62,11 +159,18 @@ export interface HttpServer {
   close: () => Promise<void>;
 }
 
-export function startHttp(config: Config, logger: Logger, deps: HttpDeps): HttpServer {
+export async function startHttp(
+  config: Config,
+  logger: Logger,
+  deps: HttpDeps,
+): Promise<HttpServer> {
   const sessions = new SessionManager<Session>({
     maxSessions: config.MCP_MAX_SESSIONS,
     idleTtlMs: config.MCP_SESSION_IDLE_TTL_SECONDS * 1000,
     logger,
+    ...(config.MCP_MAX_SESSIONS_PER_SUBJECT === undefined
+      ? {}
+      : { maxPerSubject: config.MCP_MAX_SESSIONS_PER_SUBJECT }),
   });
 
   const publicUrl = config.MCP_PUBLIC_URL;
@@ -84,11 +188,12 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): HttpS
       { verifier: deps.verifier, resourceMetadataUrl },
     );
 
-  const createSession = (identity: CallerIdentity): Session => {
+  const createSession = (identity: CallerIdentity, slot: SessionSlot<Session>): Session => {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: (): string => crypto.randomUUID(),
       onsessioninitialized: (sessionId: string): void => {
-        sessions.register(sessionId, session);
+        // Into the slot `admit()` reserved for it, which nothing else can have taken meanwhile.
+        slot.commit(sessionId, session);
       },
       onsessionclosed: (sessionId: string): void => {
         sessions.unregister(sessionId);
@@ -99,7 +204,7 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): HttpS
     // means for the verified path: a later request cannot change who this conversation acts as.
     // The session id is not fixed — it does not exist until `initialize` completes — so it is
     // read when a tool is called rather than captured now.
-    const mcpServer = deps.createMcpServer({
+    const connection = deps.createMcpServer({
       identity,
       get sessionId(): string | undefined {
         return transport.sessionId;
@@ -108,10 +213,12 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): HttpS
 
     const session: Session = {
       transport,
-      server: mcpServer,
+      server: connection.server,
       identity,
-      connect: () => mcpServer.connect(transport),
-      close: () => void transport.close(),
+      connect: () => connection.server.connect(transport),
+      // The connection's close, not the transport's: that one returns before the person's Ivanti
+      // session is released, so shutdown awaited it and then exited ahead of the release.
+      close: () => connection.close(),
     };
 
     return session;
@@ -126,81 +233,126 @@ export function startHttp(config: Config, logger: Logger, deps: HttpDeps): HttpS
       : { directoryClaim: config.OAUTH_IDENTITY_CLAIM }),
   });
 
-  const http = createHttpServer((request, response): void => {
-    void (async (): Promise<void> => {
-      switch (resolveRoute(request.url, oauthPaths)) {
-        case 'health': {
-          // Always 200, because a liveness probe cannot authenticate — but the detail is gated
-          // on the same authorization as everything else. Anonymous callers learn only that
-          // the process is alive.
-          const permitted = await authorize(request);
-          sendJson(
-            response,
-            200,
-            permitted.authorized
-              ? buildHealth({
-                  name: deps.serverName,
-                  version: deps.serverVersion,
-                  protocolVersion: LATEST_PROTOCOL_VERSION,
-                  sdkVersion: deps.sdkVersion,
-                  sessions: () => sessions.size,
-                })
-              : MINIMAL_HEALTH,
-          );
-          return;
-        }
-
-        case 'oauth-metadata': {
-          // Unauthenticated by necessity: this document is how a client discovers *how* to
-          // authenticate, so requiring a token to read it would be circular.
-          sendJson(
-            response,
-            200,
-            buildProtectedResourceMetadata({
-              resource: publicUrl ?? '',
-              issuer: config.OAUTH_ISSUER ?? '',
-              scopesSupported: config.OAUTH_SCOPES_SUPPORTED,
-              resourceName: 'Ivanti MCP',
-            }),
-          );
-          return;
-        }
-
-        case 'mcp': {
-          if (!isOriginAllowed(request.headers.origin, config.TRUSTED_ORIGINS)) {
-            logger.warn('rejected request with untrusted origin', {
-              origin: request.headers.origin,
-            });
-            sendJson(response, 403, { error: 'forbidden_origin' });
+  const http = createHttpServer(
+    {
+      keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS,
+      headersTimeout: HEADERS_TIMEOUT_MS,
+      requestTimeout: REQUEST_TIMEOUT_MS,
+    },
+    (request, response): void => {
+      void (async (): Promise<void> => {
+        switch (resolveRoute(request.url, oauthPaths)) {
+          case 'health': {
+            // Always 200, because a liveness probe cannot authenticate — but the detail is gated
+            // on the same authorization as everything else. Anonymous callers learn only that
+            // the process is alive.
+            const permitted = await authorize(request);
+            sendJson(
+              response,
+              200,
+              permitted.authorized
+                ? buildHealth({
+                    name: deps.serverName,
+                    version: deps.serverVersion,
+                    protocolVersion: LATEST_PROTOCOL_VERSION,
+                    sdkVersion: deps.sdkVersion,
+                    sessions: () => sessions.size,
+                  })
+                : MINIMAL_HEALTH,
+            );
             return;
           }
 
-          const authorization = await authorize(request);
-          if (!authorization.authorized) {
-            logger.warn('rejected unauthorized request', { reason: authorization.reason });
-            if (authorization.challenge !== undefined) {
-              response.setHeader('WWW-Authenticate', authorization.challenge);
+          case 'oauth-metadata': {
+            // Unauthenticated by necessity: this document is how a client discovers *how* to
+            // authenticate, so requiring a token to read it would be circular.
+            sendJson(
+              response,
+              200,
+              buildProtectedResourceMetadata({
+                resource: publicUrl ?? '',
+                issuer: config.OAUTH_ISSUER ?? '',
+                scopesSupported: config.OAUTH_SCOPES_SUPPORTED,
+                resourceName: 'Ivanti MCP',
+              }),
+            );
+            return;
+          }
+
+          case 'mcp': {
+            if (!isOriginAllowed(request.headers.origin, config.TRUSTED_ORIGINS)) {
+              logger.warn('rejected request with untrusted origin', {
+                origin: request.headers.origin,
+              });
+              sendJson(response, 403, { error: 'forbidden_origin' });
+              return;
             }
-            sendJson(response, authorization.status, { error: 'unauthorized' });
+
+            const authorization = await authorize(request);
+            if (!authorization.authorized) {
+              logger.warn('rejected unauthorized request', { reason: authorization.reason });
+              if (authorization.challenge !== undefined) {
+                response.setHeader('WWW-Authenticate', authorization.challenge);
+              }
+              sendJson(response, authorization.status, { error: 'unauthorized' });
+              return;
+            }
+
+            await handleMcp(request, response, authorization);
             return;
           }
 
-          await handleMcp(request, response, authorization);
-          return;
+          default:
+            sendJson(response, 404, { error: 'not_found' });
         }
+      })().catch((error: unknown) => {
+        logger.error('request handler failed', { error });
+        if (!response.headersSent) sendJson(response, 500, { error: 'internal_error' });
+      });
+    },
+  );
 
-        default:
-          sendJson(response, 404, { error: 'not_found' });
-      }
-    })().catch((error: unknown) => {
-      logger.error('request handler failed', { error });
-      if (!response.headersSent) sendJson(response, 500, { error: 'internal_error' });
-    });
+  for (const warning of openModeWarnings(config)) logger.warn(warning.message, warning.fields);
+
+  // Awaited, and only then announced: `listen()` returns before the port is bound, so the line
+  // used to say "listening" for a server about to die of EADDRINUSE — as an uncaught exception
+  // with a stack, a moment after the log had said all was well.
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: NodeJS.ErrnoException): void => {
+      http.off('listening', onListening);
+      const reason = explainListenFailure(error, config.MCP_BIND, config.MCP_PORT);
+      logger.error('cannot listen on http', {
+        bind: config.MCP_BIND,
+        port: config.MCP_PORT,
+        code: error.code,
+        reason,
+      });
+      reject(new ListenError(reason, error.code));
+    };
+    const onListening = (): void => {
+      http.off('error', onError);
+      resolve();
+    };
+    http.once('error', onError);
+    http.once('listening', onListening);
+    http.listen(config.MCP_PORT, config.MCP_BIND);
+  });
+
+  const address = http.address();
+  logger.info('listening on http', {
+    bind: config.MCP_BIND,
+    // The port actually bound, which is the configured one unless that was 0.
+    port: typeof address === 'object' && address !== null ? address.port : config.MCP_PORT,
+    authMode: config.AUTH_MODE,
+    mcpMode: config.MCP_MODE,
+    maxSessions: config.MCP_MAX_SESSIONS,
+    ...(config.MCP_MAX_SESSIONS_PER_SUBJECT === undefined
+      ? {}
+      : { maxSessionsPerSubject: config.MCP_MAX_SESSIONS_PER_SUBJECT }),
+    ...deps.listeningFields,
   });
 
   const stopSweeping = sessions.startSweeping(SWEEP_INTERVAL_MS);
-
-  http.listen(config.MCP_PORT, config.MCP_BIND);
 
   return {
     server: http,

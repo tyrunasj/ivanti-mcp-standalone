@@ -3,7 +3,7 @@
 
 import type { Logger } from '../../logger.js';
 import { countIvantiRequest } from '../../usage/call-usage.js';
-import { IvantiApiError, pathOf, scrubErrorBody } from './errors.js';
+import { IvantiApiError, pathOf, ResponseTooLargeError, scrubErrorBody } from './errors.js';
 
 export interface FetchResponse {
   ok: boolean;
@@ -12,6 +12,8 @@ export interface FetchResponse {
   /** Only a binary read needs these; a fixture that serves no files may omit them. */
   arrayBuffer?: () => Promise<ArrayBuffer>;
   headers?: { get: (name: string) => string | null };
+  /** The body as a stream, so a capped read can stop at the cap rather than after the whole file. */
+  body?: ReadableStream<Uint8Array> | null;
 }
 
 export type FetchLike = (
@@ -34,7 +36,17 @@ export interface ExchangeInit {
 export interface ExchangeContext {
   fetchImpl: FetchLike;
   logger: Logger;
+  /** How long a GET may take. */
   timeoutMs: number;
+  /**
+   * How long anything else may take; `timeoutMs` when absent.
+   *
+   * Separate because a write runs the tenant's workflow before it answers, and a create that
+   * fires business rules, notifications and an assignment routinely takes longer than a read ever
+   * should. One timeout for both either hangs reads or cuts writes off — and a write cut off is
+   * the worst failure there is, because it may well have been applied.
+   */
+  writeTimeoutMs?: number;
   /** Every credential the call carries — redacted from anything Ivanti echoes back. */
   secrets: readonly string[];
 }
@@ -64,7 +76,10 @@ export async function exchange<T>(
   context: ExchangeContext,
   read: (response: FetchResponse) => Promise<T>,
 ): Promise<{ status: number; body: T }> {
-  const { fetchImpl, logger, timeoutMs, secrets } = context;
+  const { fetchImpl, logger, secrets } = context;
+  const timeoutMs = isReadMethod(init.method)
+    ? context.timeoutMs
+    : (context.writeTimeoutMs ?? context.timeoutMs);
   const started = Date.now();
   // Counted when sent, not when answered: a timeout cost the call as much as a reply did.
   countIvantiRequest();
@@ -80,10 +95,11 @@ export async function exchange<T>(
   });
 
   const unanswered = (cause: unknown): IvantiApiError => {
-    const reason = scrubErrorBody(cause instanceof Error ? cause.message : String(cause), ...secrets);
+    const reason = scrubErrorBody(describeFailure(cause, timeoutMs), ...secrets);
+    const code = failureCode(cause);
     logger.debug('ivanti request failed', line(0, reason));
     return new IvantiApiError(
-      { status: 0, method: init.method, url, body: reason },
+      { status: 0, method: init.method, url, body: reason, ...(code === undefined ? {} : { code }) },
       `Ivanti ${init.method} did not complete: ${reason}`,
     );
   };
@@ -118,12 +134,77 @@ export async function exchange<T>(
   } catch (cause) {
     // Already says what went wrong — a transport that cannot read the body it was asked for.
     if (cause instanceof IvantiApiError) throw cause;
+    // Ivanti answered; the caller declined to hold that much. Not a failure to reach anyone.
+    if (cause instanceof ResponseTooLargeError) {
+      logger.debug('ivanti request', line(response.status, 'larger than the caller reads'));
+      throw cause;
+    }
     throw unanswered(cause);
   }
 
   logger.debug('ivanti request', line(response.status));
   return { status: response.status, body };
 }
+
+/** Methods that change nothing, and so get the read timeout. */
+export const isReadMethod = (method: string): boolean =>
+  ['GET', 'HEAD'].includes(method.toUpperCase());
+
+/**
+ * Why a request got no answer, in words an operator can act on.
+ *
+ * Node's fetch rejects every network failure with the same `TypeError: fetch failed`, and puts
+ * the reason — `getaddrinfo ENOTFOUND`, `ECONNRESET`, `unable to verify the first certificate` —
+ * in `.cause`. Reporting the message alone made a DNS typo, a firewall and a corporate proxy's
+ * certificate indistinguishable: all three read "did not complete: fetch failed".
+ */
+function describeFailure(cause: unknown, timeoutMs: number): string {
+  if (isTimeout(cause)) return `no answer within ${String(timeoutMs)} ms`;
+
+  const parts: string[] = [];
+  let current: unknown = cause;
+  // Bounded: a cause chain is two or three deep, and a cycle must not hang the error path.
+  for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth += 1) {
+    if (!(current instanceof Error)) {
+      // A rejection with a bare value; an object says nothing useful as `[object Object]`.
+      if (typeof current === 'string' || typeof current === 'number') parts.push(String(current));
+      break;
+    }
+    const code = codeOf(current);
+    // `AggregateError` (every address refused) has an empty message and only a code.
+    const text = [
+      code !== undefined && !current.message.includes(code) ? code : undefined,
+      current.message,
+    ]
+      .filter((part) => part !== undefined && part !== '')
+      .join(' ');
+    if (text !== '' && !parts.includes(text)) parts.push(text);
+    current = current.cause;
+  }
+  return parts.length === 0 ? 'no reason given' : parts.join(': ');
+}
+
+/** The innermost code in the chain, which is the specific one: `ENOTFOUND` over `fetch failed`. */
+function failureCode(cause: unknown): string | undefined {
+  if (isTimeout(cause)) return 'TimeoutError';
+  let found: string | undefined;
+  let current: unknown = cause;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth += 1) {
+    found = codeOf(current) ?? found;
+    current = current.cause;
+  }
+  return found;
+}
+
+function codeOf(error: Error): string | undefined {
+  const code = (error as { code?: unknown }).code;
+  // Only something code-shaped: this goes into a warn line, which must never carry a message.
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]*$/.test(code) ? code : undefined;
+}
+
+/** `AbortSignal.timeout` rejects with a `TimeoutError` — a DOMException, which is an Error. */
+const isTimeout = (cause: unknown): boolean =>
+  cause instanceof Error && cause.name === 'TimeoutError';
 
 /**
  * A parameter whose value is a credential, by name. CentralConfig's `RemoveSession` takes the

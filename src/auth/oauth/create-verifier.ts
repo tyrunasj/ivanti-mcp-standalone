@@ -2,6 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Config } from "../../config/env-schema.js";
+import type { Logger } from "../../logger.js";
 import { expectedAudiences } from "../../config/validate-config.js";
 import {
   discoverAuthorizationServer,
@@ -40,6 +41,12 @@ const defaultFetch: FetchLike = (url) =>
 export async function createOAuthSetup(
   config: Config,
   fetchImpl: FetchLike = defaultFetch,
+  /**
+   * Where an IdP outage is reported. Optional only for tests: without it the verifier's 503s and
+   * the key set's fallback to its last good copy are invisible, which is the one place either
+   * could be seen at all.
+   */
+  logger?: Logger,
 ): Promise<OAuthSetup> {
   const issuer = config.OAUTH_ISSUER;
   const audiences = expectedAudiences(config);
@@ -59,7 +66,8 @@ export async function createOAuthSetup(
       issuer,
       audience: audiences,
       requiredScopes: config.OAUTH_REQUIRED_SCOPES,
-      keyResolver: createRemoteKeyResolver(jwksUri),
+      keyResolver: createRemoteKeyResolver(jwksUri, logger === undefined ? {} : { logger }),
+      ...(logger === undefined ? {} : { logger }),
     }),
     issuer,
     audiences,

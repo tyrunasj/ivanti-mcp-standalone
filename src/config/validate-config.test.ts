@@ -9,6 +9,7 @@ import {
   isHttpTransport,
   isImpersonationConfigured,
   isIvantiConfigured,
+  requiredImpersonationProblems,
   validateConfig,
 } from './validate-config.js';
 
@@ -201,6 +202,75 @@ describe('validateConfig', () => {
   });
 });
 
+/**
+ * Each of these carries a credential or decides which tokens are trusted. Over plain http anyone on
+ * the path reads the API key, or swaps the signing keys a token is checked against.
+ */
+describe('settings that must not travel in clear text', () => {
+  /** What each setting needs alongside it, so the only problem left is the scheme. */
+  const PAIRS = {
+    IVANTI_BASE_URL: { IVANTI_API_KEY: 'k' },
+    IVANTI_CONFIG_URL: {
+      IVANTI_BASE_URL: 'https://t.ivanticloud.com',
+      IVANTI_API_KEY: 'k',
+      IVANTI_CENTRAL_CONFIG_API_KEY: 'c',
+    },
+    OAUTH_ISSUER: {},
+    OAUTH_JWKS_URI: {},
+  } as const;
+
+  it.each(Object.keys(PAIRS) as (keyof typeof PAIRS)[])('refuses http:// for %s', (setting) => {
+    const problems = validateConfig(
+      config({ ...PAIRS[setting], [setting]: 'http://idp.example.com/realms/corp' }),
+    );
+
+    expect(problems).toEqual([expect.stringMatching(new RegExp(`^${setting} must use https://`))]);
+  });
+
+  it.each([
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+    'http://127.12.0.3',
+    'http://[::1]:8443',
+  ])('allows http:// to a loopback host (%s), where there is no network to cross', (url) => {
+    expect(validateConfig(config({ IVANTI_BASE_URL: url, IVANTI_API_KEY: 'k' }))).toEqual([]);
+    expect(validateConfig(config({ OAUTH_ISSUER: url }))).toEqual([]);
+  });
+
+  it.each(['http://127.0.0.1.example.com', 'http://localhost.example.com', 'http://10.0.0.5'])(
+    'does not take %s for loopback',
+    (url) => {
+      expect(validateConfig(config({ OAUTH_JWKS_URI: url }))).toHaveLength(1);
+    },
+  );
+
+  it('refuses a scheme that is not http at all', () => {
+    expect(validateConfig(config({ OAUTH_ISSUER: 'ftp://idp.example.com' }))).toHaveLength(1);
+  });
+});
+
+describe('bearer token strength', () => {
+  const bearer = (token: string) =>
+    config({
+      HTTP_TRANSPORT_ON: true,
+      AUTH_MODE: 'bearer',
+      BEARER_TOKEN: token,
+      MCP_PUBLIC_URL: 'https://mcp.example.com',
+      TRUSTED_ORIGINS: ['https://claude.ai'],
+    });
+
+  it('refuses a token under 32 characters — the old placeholder among them', () => {
+    expect(validateConfig(bearer('change-me'))).toEqual([
+      expect.stringMatching(/BEARER_TOKEN is 9 characters; it must be at least 32/),
+    ]);
+    expect(validateConfig(bearer('x'.repeat(31)))).toHaveLength(1);
+  });
+
+  it('accepts one of 32 or more', () => {
+    expect(validateConfig(bearer('x'.repeat(32)))).toEqual([]);
+  });
+});
+
 describe('isIvantiConfigured', () => {
   it('is true only when both halves are present', () => {
     expect(isIvantiConfigured(config({}))).toBe(false);
@@ -273,5 +343,86 @@ describe('isImpersonationConfigured', () => {
     expect(isImpersonationConfigured(config({ IVANTI_CONFIG_URL: 'https://c' }))).toBe(false);
     expect(isImpersonationConfigured(config({ IVANTI_CENTRAL_CONFIG_API_KEY: 'c' }))).toBe(false);
     expect(isImpersonationConfigured(config({ ...CONFIG_DB }))).toBe(true);
+  });
+});
+
+const OAUTH = {
+  HTTP_TRANSPORT_ON: true,
+  AUTH_MODE: 'oauth' as const,
+  OAUTH_ISSUER: 'https://id.example.com',
+  MCP_PUBLIC_URL: 'https://mcp.example.com/mcp',
+  TRUSTED_ORIGINS: ['https://mcp.example.com'],
+};
+
+describe('MCP_MAX_SESSIONS_PER_SUBJECT', () => {
+  it('is accepted under oauth, where a token names the subject', () => {
+    expect(validateConfig(config({ ...OAUTH, MCP_MAX_SESSIONS_PER_SUBJECT: 3 }))).toEqual([]);
+  });
+
+  // Under `none` and `bearer` every caller is one anonymous subject: the limit would either do
+  // nothing or cap the whole deployment at it.
+  it.each(['none', 'bearer'] as const)('is refused under AUTH_MODE=%s', (mode) => {
+    const problems = validateConfig(
+      config({
+        ...OAUTH,
+        AUTH_MODE: mode,
+        BEARER_TOKEN: 't',
+        MCP_MAX_SESSIONS_PER_SUBJECT: 3,
+      }),
+    );
+
+    expect(problems.some((problem) => problem.includes('MCP_MAX_SESSIONS_PER_SUBJECT'))).toBe(true);
+  });
+
+  it('is refused above the global cap, which it could never reach', () => {
+    const problems = validateConfig(
+      config({ ...OAUTH, MCP_MAX_SESSIONS: 5, MCP_MAX_SESSIONS_PER_SUBJECT: 6 }),
+    );
+
+    expect(problems.some((problem) => problem.includes('could never apply'))).toBe(true);
+  });
+});
+
+describe('IVANTI_IMPERSONATION_REQUIRED', () => {
+  it('is refused without the ConfigDB pair it requires', () => {
+    const problems = validateConfig(config({ ...TENANT, IVANTI_IMPERSONATION_REQUIRED: true }));
+
+    expect(problems.some((problem) => problem.includes('IVANTI_IMPERSONATION_REQUIRED'))).toBe(
+      true,
+    );
+  });
+
+  it('is accepted alongside the pair', () => {
+    expect(
+      validateConfig(config({ ...TENANT, ...CONFIG_DB, IVANTI_IMPERSONATION_REQUIRED: true })),
+    ).toEqual([]);
+  });
+});
+
+describe('requiredImpersonationProblems', () => {
+  const required = config({ ...TENANT, ...CONFIG_DB, IVANTI_IMPERSONATION_REQUIRED: true });
+
+  // The one outcome the setting exists to rule out: a probe that failed, and a server that then
+  // carried on as the service account.
+  it('refuses to run when the probe could not impersonate, naming why', () => {
+    const problems = requiredImpersonationProblems(required, {
+      canImpersonate: false,
+      impersonationReason: 'ConfigDB answered 401',
+    });
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('ConfigDB answered 401');
+    expect(problems[0]).toContain('service account');
+  });
+
+  it('is satisfied when the probe could', () => {
+    expect(requiredImpersonationProblems(required, { canImpersonate: true })).toEqual([]);
+  });
+
+  // Unchanged default: a failed probe degrades with a warning rather than stopping the server.
+  it('says nothing when impersonation is not required', () => {
+    expect(
+      requiredImpersonationProblems(config({ ...TENANT, ...CONFIG_DB }), { canImpersonate: false }),
+    ).toEqual([]);
   });
 });

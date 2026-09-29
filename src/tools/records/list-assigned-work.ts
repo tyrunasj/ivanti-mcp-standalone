@@ -7,6 +7,7 @@ import { buildQuery, quoteOdataString, readTotal, withQuery } from '../../ivanti
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
+import { findPerson } from '../shared/find-person.js';
 import { transportFor } from '../shared/transport-for.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
@@ -36,49 +37,7 @@ const WORK_OBJECTS = [
   { object: 'problems', identifier: 'ProblemNumber', closed: ['Closed', 'Cancelled', 'Resolved'] },
 ] as const;
 
-/** Tried in order: Ivanti stores the assignee as a login id, so that is the reliable match. */
-const PERSON_FIELDS = [
-  { field: 'LoginID', matchedOn: 'loginId' },
-  { field: 'PrimaryEmail', matchedOn: 'email' },
-  { field: 'DisplayName', matchedOn: 'displayName' },
-] as const;
-
-interface Person {
-  loginId: string;
-  matchedOn: string;
-  displayName?: string;
-  email?: string;
-}
-
 export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition {
-  // Turning a name into a login is a fact about the tenant's directory, not about the caller, so
-  // it keeps the service account — the same split `connectionFor` makes for `people.directory`.
-  // The WORK ROWS below are the opposite and must follow the person; they used to share this
-  // transport, which was captured at factory scope where `transportFor` could never reach it.
-  const directory = deps.connection.transport;
-
-  const findPerson = async (person: string): Promise<Person | undefined> => {
-    for (const attempt of PERSON_FIELDS) {
-      const url = withQuery(
-        directory.routes.entitySet('employees'),
-        buildQuery({ filter: `${attempt.field} eq ${quoteOdataString(person)}`, top: 2 }),
-      );
-      const rows = readRows<OdataRecord>(await directory.request<OdataRecord>(url), url);
-      const loginId = rows[0]?.['LoginID'];
-      if (typeof loginId !== 'string' || loginId === '') continue;
-
-      const displayName = rows[0]?.['DisplayName'];
-      const email = rows[0]?.['PrimaryEmail'];
-      return {
-        loginId,
-        matchedOn: attempt.matchedOn,
-        ...(typeof displayName === 'string' ? { displayName } : {}),
-        ...(typeof email === 'string' ? { email } : {}),
-      };
-    }
-    return undefined;
-  };
-
   return defineTool({
     name: 'list_assigned_work',
     title: 'List assigned work',
@@ -140,15 +99,39 @@ export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition
           );
         }
 
-        const person = await findPerson(asked);
-        if (person === undefined) {
+        // The person the conversation is pinned to needs no lookup: `act_as` resolved them.
+        //
+        // Anyone else goes through the shared resolver, which is the tenant's directory — a fact
+        // about the tenant rather than the caller, so it stays on the service account. This tool
+        // used to run its own ladder, asking for two rows and silently taking the first: two
+        // Jane Smiths, and the answer was one of their queues, presented as the one asked about.
+        // The shared resolver answers exactly one person or none.
+        const found =
+          pinned?.loginId !== undefined && asked.toLowerCase() === pinned.loginId.toLowerCase()
+            ? {
+                loginId: pinned.loginId,
+                displayName: pinned.displayName,
+                matchedOn: 'the pinned identity',
+              }
+            : await findPerson(deps.connection, asked);
+
+        if (found === undefined) {
           return jsonResult({
             person: null,
             message:
-              `No employee matches '${asked}' by login id, email address or display name. ` +
-              'Ivanti stores assignees as login ids; ask the user for theirs rather than guessing.',
+              `No single employee matches '${asked}' by login id, email address or name — ` +
+              'either nobody does, or more than one person does, and this does not guess which. ' +
+              'NOTHING WAS LOOKED UP, so this is not an empty queue. Ivanti stores assignees as ' +
+              'login ids; ask the user for theirs.',
           });
         }
+
+        const person = {
+          loginId: found.loginId,
+          displayName: found.displayName,
+          matchedOn: found.matchedOn,
+          ...('email' in found && found.email !== undefined ? { email: found.email } : {}),
+        };
 
         const top = args.top ?? 5;
         const fields = parseFieldList(args.fields);

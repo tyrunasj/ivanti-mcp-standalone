@@ -118,4 +118,210 @@ describe('vote_on_approval — whose row it is', () => {
 
     expect(text(result)).toContain('act_as');
   });
+
+  /**
+   * Two people called John Smith. `Owner_Valid` used to be one clause in an OR with the `Owner`
+   * spellings, so a row naming the OTHER John Smith's employee record still matched on the shared
+   * display name — and each could vote on the other's approval, recorded as the other's decision.
+   */
+  it.each([
+    ['the same display name', { Owner: 'Tyrunas Jokubauskas', Owner_Valid: 'E2' }],
+    ['the same login spelling', { Owner: 'tyrunasj', Owner_Valid: 'E2' }],
+    ['the same address', { Owner: 'tyrunasj@synergy.eu', Owner_Valid: 'E2' }],
+  ])("refuses a namesake's row with %s, because Owner_Valid decides alone", async (_label, row) => {
+    const { tool, context } = setup(row);
+
+    const result = await tool.handler({ approvalId: 'V1', decision: 'approve' }, context);
+
+    expect(text(result)).toContain(REFUSED);
+    expect(text(result)).toContain('someone who shares that name');
+  });
+});
+
+/**
+ * After the vote, which used to count as done once the row was merely "no longer Pending" — the
+ * wrong decision, an unreadable approval and a reason left behind on a failed vote all passed.
+ */
+describe('vote_on_approval — what it reports after voting', () => {
+  const MINE = { RecId: 'V1', Owner: 'tyrunasj', Owner_Valid: 'E1', ParentLink_RecID: 'A1', Reason: null };
+
+  interface Script {
+    /** Each read of the vote row in turn: before the vote, after it, after a clean-up. */
+    reads: (Record<string, unknown> | Error)[];
+    approval?: Record<string, unknown> | Error;
+    /** Each PATCH in turn: undefined succeeds. */
+    patches?: (Error | undefined)[];
+    action?: unknown;
+  }
+
+  function scripted(script: Script) {
+    const { connection } = connectionFixture({
+      entities: { frs_approvalvotetracking: {} },
+      capability: { tier: 'session' },
+      sessionCalls: {
+        GetObjectQuickActions: [
+          ['qa-approve', 'Approve Vote', 'Action'],
+          ['qa-deny', 'Deny Vote', 'Action'],
+        ],
+        SaveDataExecuteAction: script.action ?? { status: 'OK', saved: true },
+      },
+    });
+
+    const patched: unknown[] = [];
+    vi.spyOn(connection.transport, 'request').mockImplementation((url, init) => {
+      const method = init?.method ?? 'GET';
+      if (method === 'PATCH') {
+        patched.push(init?.body);
+        const outcome = script.patches?.shift();
+        return outcome === undefined ? Promise.resolve(undefined as never) : Promise.reject(outcome);
+      }
+      if (url.includes('frs_approvals(')) {
+        return script.approval instanceof Error
+          ? Promise.reject(script.approval)
+          : Promise.resolve(script.approval as never);
+      }
+      const next = script.reads.shift();
+      return next instanceof Error
+        ? Promise.reject(next)
+        : Promise.resolve({ value: next === undefined ? [] : [next] } as never);
+    });
+
+    const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+    context.pin?.pin({ ...PERSON });
+    const tool = createVoteOnApprovalTool({
+      connection,
+      gate: OPEN_GATE,
+      logger: logger(),
+      ownRecordsOnly: false,
+      actions: OPEN_ACTIONS,
+    });
+    return { tool, context, patched };
+  }
+
+  const pending = { ...MINE, Status: 'Pending' };
+
+  it('reports a vote that landed as the decision made', async () => {
+    const { tool, context } = scripted({
+      reads: [pending, { ...MINE, Status: 'Approved' }],
+      approval: { RecId: 'A1', Status: 'Approved' },
+    });
+
+    const result = await tool.handler({ approvalId: 'V1', decision: 'approve' }, context);
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(text(result))).toMatchObject({ decision: 'Approved', approval: 'Approved' });
+  });
+
+  it('fails a vote that landed as the OPPOSITE decision', async () => {
+    const { tool, context } = scripted({
+      reads: [pending, { ...MINE, Status: 'Approved' }],
+      approval: { RecId: 'A1', Status: 'Approved' },
+    });
+
+    const result = await tool.handler({ approvalId: 'V1', decision: 'deny' }, context);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('OPPOSITE');
+  });
+
+  it('reports a status it cannot place as it reads, rather than as the decision', async () => {
+    const { tool, context } = scripted({
+      reads: [pending, { ...MINE, Status: 'Complete' }],
+      approval: { RecId: 'A1', Status: 'Complete' },
+    });
+
+    const result = JSON.parse(
+      text(await tool.handler({ approvalId: 'V1', decision: 'approve' }, context)),
+    ) as Record<string, unknown>;
+
+    expect(result['decisionNote']).toContain("reads 'Complete'");
+  });
+
+  it('says when the approval behind the vote could not be read, instead of a bare null', async () => {
+    const { tool, context } = scripted({
+      reads: [pending, { ...MINE, Status: 'Approved' }],
+      approval: new Error('timeout'),
+    });
+
+    const result = JSON.parse(
+      text(await tool.handler({ approvalId: 'V1', decision: 'approve' }, context)),
+    ) as Record<string, unknown>;
+
+    expect(result['approval']).toBeNull();
+    expect(result['note']).toContain('could not be read back');
+  });
+
+  it('takes the reason off again when the vote did not register', async () => {
+    const { tool, context, patched } = scripted({
+      reads: [pending, pending, pending],
+    });
+
+    const result = await tool.handler(
+      { approvalId: 'V1', decision: 'deny', reason: 'Over budget' },
+      context,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('did not register');
+    expect(text(result)).not.toContain('could NOT be taken off');
+    expect(patched).toEqual([{ Reason: 'Over budget' }, { Reason: null }]);
+  });
+
+  it('says the reason is still there when taking it off failed', async () => {
+    const { tool, context } = scripted({
+      reads: [pending, pending],
+      patches: [undefined, new Error('refused')],
+    });
+
+    const result = await tool.handler(
+      { approvalId: 'V1', decision: 'deny', reason: 'Over budget' },
+      context,
+    );
+
+    expect(text(result)).toContain('could NOT be taken off');
+    expect(text(result)).toContain('Over budget');
+  });
+
+  it('says the reason is still there when the action itself failed', async () => {
+    const { tool, context } = scripted({
+      reads: [pending, { ...pending, Reason: 'Over budget' }],
+      action: new Error('Ivanti unavailable'),
+    });
+
+    const result = await tool.handler(
+      { approvalId: 'V1', decision: 'deny', reason: 'Over budget' },
+      context,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('could not be cast (Ivanti unavailable)');
+    expect(text(result)).toContain('could NOT be taken off');
+  });
+
+  it('leaves the failure to the ordinary explanation when nothing was left behind', async () => {
+    const { tool, context, patched } = scripted({
+      reads: [pending, pending],
+      action: new Error('Ivanti unavailable'),
+    });
+
+    const result = await tool.handler(
+      { approvalId: 'V1', decision: 'deny', reason: 'Over budget' },
+      context,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Ivanti unavailable');
+    expect(text(result)).not.toContain('could NOT be taken off');
+    expect(patched).toHaveLength(2);
+  });
+
+  // The action ran and may have registered: a failure here would invite a second vote.
+  it('does not invite a second vote when the row cannot be read back afterwards', async () => {
+    const { tool, context } = scripted({ reads: [pending, new Error('timeout')] });
+
+    const result = await tool.handler({ approvalId: 'V1', decision: 'approve' }, context);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Do NOT cast it again');
+  });
 });

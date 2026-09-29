@@ -1,0 +1,67 @@
+# Version updates, weekly and grouped, so the supply chain moves by reviewed pull
+# request — each one through the same Checks and Image gates as any other change —
+# rather than by whatever a registry serves on the next build.
+#
+# Three things are pinned so that only this moves them: npm packages by the
+# lockfile, the base images by digest (docker/Dockerfile), and every third-party
+# action by commit SHA (.github/workflows, .github/actions).
+#
+# `cooldown` holds a release back for a few days after it is published: most
+# compromised packages are caught and yanked within that window.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      # The SDK is excluded from both: it decides the protocol version this
+      # server speaks, so it arrives in a pull request of its own.
+      production:
+        dependency-type: production
+        update-types: [minor, patch]
+        exclude-patterns: ['@modelcontextprotocol/sdk']
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # TypeScript stays on 6.0.x: typescript-eslint requires <6.1.0 (CLAUDE.md).
+      - dependency-name: typescript
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      # Zod v4 only — the SDK's schema shim silently takes its legacy path otherwise.
+      - dependency-name: zod
+        update-types: [version-update:semver-major]
+      # Node 22 is the runtime (engines, both base images); its types follow it.
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
+
+  # docker/Dockerfile: node:22-slim (build stages) and the distroless runtime.
+  - package-ecosystem: docker
+    directory: /docker
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 3
+    groups:
+      base-images:
+        patterns: ['*']
+    ignore:
+      # A new Node major is a runtime change, not a refresh: taken by hand, with
+      # engines and the distroless nodejsNN image in the same commit.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directories: [/, /.github/actions/checks]
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    groups:
+      # A new major (checkout v4 -> v5) arrives on its own, to be read.
+      actions:
+        patterns: ['*']
+        update-types: [minor, patch]

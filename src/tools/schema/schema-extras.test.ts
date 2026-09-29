@@ -42,11 +42,12 @@ const body = (result: CallToolResult): Record<string, never> => {
   return JSON.parse(block?.type === 'text' ? block.text : '{}') as Record<string, never>;
 };
 
-const deps = (sessionCalls = FORM_CHAIN) => {
+const deps = (sessionCalls = FORM_CHAIN, responses: Record<string, unknown> = {}) => {
   const { connection } = connectionFixture({
     entities: { incident: entityFixture('incident') },
     capability: { tier: 'session', identity: { role: 'Admin' } },
     sessionCalls,
+    responses,
   });
   return { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS };
 };
@@ -70,6 +71,32 @@ describe('get_link_fields', () => {
         categoryField: 'ProfileLink_Category',
       },
     ]);
+  });
+
+  it('reports every value a Category field was seen holding, not the first', async () => {
+    // A customer can be an employee or an external contact. Reporting the first one sampled as
+    // "use it verbatim" sent every external contact's link to the wrong object.
+    const result = body(
+      await createGetLinkFieldsTool(
+        deps(FORM_CHAIN, {
+          incidents: {
+            value: [
+              { RecId: 'i1', ProfileLink_Category: 'Employee', OwnerLink_Category: 'Employee' },
+              { RecId: 'i2', ProfileLink_Category: 'ExternalContact' },
+              { RecId: 'i3', ProfileLink_Category: 'Employee' },
+            ],
+          },
+        }),
+      ).handler({ object: 'Incidents' }),
+    );
+
+    const links = result.links as unknown as { field: string; categoryValues?: string[] }[];
+    expect(links.find((link) => link.field === 'ProfileLink')?.categoryValues).toEqual([
+      'Employee',
+      'ExternalContact',
+    ]);
+    expect(links.find((link) => link.field === 'OwnerLink')?.categoryValues).toEqual(['Employee']);
+    expect(String(result.note)).toContain('more than one');
   });
 });
 

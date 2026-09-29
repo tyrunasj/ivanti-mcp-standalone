@@ -7,6 +7,7 @@ import { createSessionPin } from '../../auth/identity-pin.js';
 import { createImpersonationSlot } from '../../auth/impersonation.js';
 import { connectionFixture } from '../../ivanti/connection.fixture.js';
 import type { ImpersonatedSession } from '../../ivanti/session/impersonated-session.js';
+import { RoleNotAppliedError } from '../../ivanti/session/roles.js';
 import type { Logger } from '../../logger.js';
 import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
@@ -119,5 +120,24 @@ describe('switch_role', () => {
 
     expect(body(result)['role']).toBe('ServiceDeskAnalyst');
     expect(String(body(result)['note'])).toContain('rather than SelfServiceMobile');
+  });
+
+  // An empty ActiveRole was once taken as the role asked for, and reported as a switch that
+  // happened. The session may now hold no role at all, which reads nothing.
+  it('refuses, and sets the session aside, when Ivanti confirms no role', async () => {
+    const failing = session(vi.fn(() => Promise.reject(new RoleNotAppliedError('SelfServiceMobile'))));
+    const fresh = session();
+    const opened = [failing, fresh];
+    const slot = createImpersonationSlot(() => Promise.resolve(opened.shift() ?? fresh));
+    await slot.open('HSanders');
+    const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS), impersonation: slot };
+
+    const result = await tool().handler({ role: 'SelfServiceMobile' }, context);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('no active role');
+    expect(text(result)).toContain('next call opens a new one');
+    // Set aside: asked for again, the slot opens a fresh session rather than handing it back.
+    expect(await slot.open('HSanders')).toBe(fresh);
   });
 });

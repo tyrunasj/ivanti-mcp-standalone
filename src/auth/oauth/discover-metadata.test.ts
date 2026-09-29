@@ -75,4 +75,35 @@ describe('discoverAuthorizationServer', () => {
       /oauth-authorization-server[\s\S]*openid-configuration/,
     );
   });
+
+  /**
+   * The keys every token is checked against, fetched without TLS, can be swapped by anyone on the
+   * path — who can then sign a token as anybody. The configured OAUTH_JWKS_URI is checked at
+   * startup; a discovered one was taken on the metadata document's word.
+   */
+  describe('the discovered key-set URL', () => {
+    const discovering = (jwksUri: string): FetchLike =>
+      vi.fn().mockResolvedValue(ok({ issuer, jwks_uri: jwksUri }));
+
+    it.each([
+      ['plain http to another host', 'http://id.example.com/keys'],
+      ['a scheme that is not a web address', 'file:///etc/keys.json'],
+      ['something that is not a URL at all', 'keys.json'],
+    ])('is refused over %s', async (_label, jwksUri) => {
+      await expect(discoverAuthorizationServer(issuer, discovering(jwksUri))).rejects.toThrow(
+        /OAUTH_JWKS_URI/,
+      );
+    });
+
+    it.each([
+      ['https', 'https://id.example.com/keys'],
+      ['http on localhost', 'http://localhost:8080/keys'],
+      ['http on 127.0.0.1', 'http://127.0.0.1:8080/keys'],
+      ['http on ::1', 'http://[::1]:8080/keys'],
+    ])('is accepted over %s', async (_label, jwksUri) => {
+      await expect(discoverAuthorizationServer(issuer, discovering(jwksUri))).resolves.toMatchObject({
+        jwks_uri: jwksUri,
+      });
+    });
+  });
 });

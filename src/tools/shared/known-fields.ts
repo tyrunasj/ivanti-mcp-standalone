@@ -3,7 +3,9 @@
 
 import { visibleFields, type EntityMetadata } from '../../ivanti/metadata/csdl.js';
 import { suggestNames } from '../../ivanti/metadata/suggest-names.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { ResolvedForm } from '../../ivanti/session/form-context.js';
+import { FieldNameError } from './explain-field-error.js';
 
 /**
  * Refuses a field the object does not have, before the write is sent.
@@ -58,13 +60,63 @@ export function assertKnownFields(
   );
 }
 
-/** Typed so it reads as a caller's mistake to fix, not as a failure of this server. */
-export class FieldNotOnObjectError extends Error {
-  readonly fields: string[];
+/**
+ * The write, keyed by the schema's own spelling of every field — or a refusal.
+ *
+ * `assertKnownFields` matches case-insensitively, and until this existed that was the whole of
+ * it: the caller's spelling went on to everything after. Everything after looks names up
+ * EXACTLY — the form's validated fields, the CSDL's `validated` flag, the read-back — so
+ * `{ status: 'Bogus' }` passed the name check, matched no validated field, skipped the picklist
+ * and the read-back both, and went out unresolved and unconfirmed while the tool reported
+ * success. One name, two spellings, two different answers.
+ *
+ * So the spelling is settled HERE, once, before anything else reads it. Two keys that differ only
+ * by case are refused rather than merged: the schema has the field once, and which of the two
+ * values would land is not something this server gets to pick for the caller.
+ */
+export function knownFields(
+  fields: OdataRecord,
+  entity: EntityMetadata,
+  form?: ResolvedForm,
+): OdataRecord {
+  assertKnownFields(Object.keys(fields), entity, form);
 
+  const spelling = new Map(visibleFields(entity).map((field) => [field.name.toLowerCase(), field.name]));
+  const canonical: OdataRecord = {};
+  const seen = new Map<string, string[]>();
+
+  for (const [name, value] of Object.entries(fields)) {
+    const lower = name.toLowerCase();
+    seen.set(lower, [...(seen.get(lower) ?? []), name]);
+    // An empty schema keeps the caller's spelling — see `assertKnownFields` for why it is let
+    // through at all.
+    canonical[spelling.get(lower) ?? name] = value;
+  }
+
+  const clashes = [...seen.values()].filter((names) => names.length > 1);
+  if (clashes.length > 0) {
+    throw new FieldNameError(
+      `${clashes.map((names) => names.map((name) => `\`${name}\``).join(' and ')).join('; ')} ` +
+        `${clashes.length === 1 ? 'name' : 'each name'} ONE field — the object has it once, so ` +
+        'which value would land is a guess. Nothing was written. Send each field once, spelled ' +
+        'as get_object_metadata spells it.',
+      clashes.flat(),
+    );
+  }
+
+  return canonical;
+}
+
+/**
+ * Typed so it reads as a caller's mistake to fix, not as a failure of this server.
+ *
+ * A `FieldNameError`, because that is the class `runTool` already treats as a refusal. Standing
+ * alone it fell through to the catch-all, which logs the caller's typo at error level as a fault
+ * of this server and counts it as one in the usage report.
+ */
+export class FieldNotOnObjectError extends FieldNameError {
   constructor(message: string, fields: string[]) {
-    super(message);
+    super(message, fields);
     this.name = 'FieldNotOnObjectError';
-    this.fields = fields;
   }
 }

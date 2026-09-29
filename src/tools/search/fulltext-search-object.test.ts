@@ -60,6 +60,41 @@ describe('fulltext_search_object', () => {
     expect(urls[0]).toContain('$filter=Status%20eq%20');
   });
 
+  it('returns whole records for "*", as the description promises', async () => {
+    // `"*"` reached the projection as a field NAME no row has, so every hit was its RecId alone.
+    const { tool: search } = tool({ incidents: { value: [ROW] } });
+
+    const rows = body(await search.handler({ object: 'Incidents', query: 'printer', fields: '*' }))
+      .rows as unknown as Record<string, unknown>[];
+
+    expect(rows[0]).toEqual(ROW);
+  });
+
+  it('shows a tenant’s own object by its own fields, not as bare RecIds', async () => {
+    // Nothing on the preference list, so the fixed default had nothing to show but the id.
+    const { connection } = connectionFixture({
+      entities: { workorder: { fields: [field('RecId'), field('WorkOrderRef'), field('Summary')] } },
+      responses: {
+        workorders: { value: [{ RecId: 'w1', WorkOrderRef: 'WO-7', Summary: 'Fix the printer' }] },
+      },
+    });
+    const search = createFulltextSearchObjectTool({
+      connection,
+      gate: OPEN_GATE,
+      logger: logger(),
+      ownRecordsOnly: false,
+      actions: OPEN_ACTIONS,
+    });
+
+    const result = body(await search.handler({ object: 'workorders', query: 'printer' }));
+
+    expect((result.rows as unknown as Record<string, unknown>[])[0]).toMatchObject({
+      WorkOrderRef: 'WO-7',
+      Summary: 'Fix the printer',
+    });
+    expect(String(result.fields)).toContain('NOT ONE OF THE ONES THE DEFAULT KNOWS');
+  });
+
   it('still refuses a filter Ivanti would silently drop', async () => {
     const { tool: search } = tool({ incidents: { value: [] } });
 

@@ -69,8 +69,12 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
          * guessing `SLA` or `ServiceAgreement` writes a link that is accepted and points nowhere.
          *
          * One page of rows, best effort: a value here is a value this tenant has really stored.
+         *
+         * EVERY distinct value, not the first. A link can point at more than one object — a
+         * customer is an employee or an external contact — and reporting whichever the first row
+         * held, with "use it verbatim", sent every link of the other kind to the wrong object.
          */
-        const observed = new Map<string, string>();
+        const observed = new Map<string, Set<string>>();
         const sampleUrl = withQuery(
           deps.connection.transport.routes.entitySet(entitySet),
           buildQuery({ top: SAMPLE_ROWS }),
@@ -82,15 +86,16 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
         for (const row of sample) {
           for (const link of links) {
             const value = row[link.categoryField];
-            if (typeof value === 'string' && value !== '' && !observed.has(link.categoryField)) {
-              observed.set(link.categoryField, value);
-            }
+            if (typeof value !== 'string' || value === '') continue;
+            const seen = observed.get(link.categoryField) ?? new Set<string>();
+            seen.add(value);
+            observed.set(link.categoryField, seen);
           }
         }
 
         const described = links.map((link) => {
-          const categoryValue = observed.get(link.categoryField);
-          return categoryValue === undefined ? link : { ...link, categoryValue };
+          const seen = observed.get(link.categoryField);
+          return seen === undefined ? link : { ...link, categoryValues: [...seen].sort() };
         });
 
         return jsonResult({
@@ -99,11 +104,14 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
           links: described,
           note:
             'Write both fields of a pair in the same call — a RecId without its Category is ' +
-            'refused. `categoryValue` is the string this tenant actually stores in that ' +
-            "`_Category` field, taken from real records: use it verbatim. It is an object name " +
-            'in the tenant’s own casing and may be dotted (a group object plus its extension, ' +
-            'e.g. `ServiceAgreement.SLA`) — neither half alone is a valid value. A link with no ' +
-            `\`categoryValue\` was simply unset on all ${String(SAMPLE_ROWS)} rows sampled.`,
+            'refused. `categoryValues` are the strings this tenant actually stores in that ' +
+            '`_Category` field, taken from real records: write one verbatim. Where there is more ' +
+            'than one, the link points at more than one kind of object — write the one that ' +
+            'names the object the RecId came from. Each is an object name in the tenant’s own ' +
+            'casing and may be dotted (a group object plus its extension, e.g. ' +
+            '`ServiceAgreement.SLA`) — neither half alone is a valid value. A link with no ' +
+            `\`categoryValues\` was simply unset on all ${String(SAMPLE_ROWS)} rows sampled, and ` +
+            'the values listed are only those the sample held, not every one the link accepts.',
         });
       }),
   });

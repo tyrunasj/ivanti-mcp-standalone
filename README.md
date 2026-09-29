@@ -57,7 +57,7 @@ It **fails closed**: an incomplete configuration exits `78` and lists every prob
 | **Kubernetes** | a Deployment | HTTP only | `oci://ghcr.io/tyrunasj/charts/ivanti-mcp` |
 
 ```bash
-docker run -d --name ivanti-mcp --env-file .env -p 3000:3000 -e MCP_BIND=0.0.0.0 \
+docker run -d --name ivanti-mcp --env-file .env -p 127.0.0.1:3000:3000 -e MCP_BIND=0.0.0.0 \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   tyrunas/ivanti-mcp:$VERSION        # a release from the Releases page
 ```

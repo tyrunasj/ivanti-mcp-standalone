@@ -126,6 +126,28 @@ describe('saved_search', () => {
     expect(String(result.answeredFor)).toContain('NOT the person asking');
   });
 
+  it('shows rows of an unfamiliar shape by their own fields, not as bare RecIds', async () => {
+    // The fixed preference list, with no fallback: a search over a tenant's own fields came back
+    // as a column of ids.
+    const { deps: d } = deps({
+      'All%20Active': { value: [{ RecId: 'a', WorkOrderRef: 'WO-7', Summary: 'Fix it' }] },
+    });
+
+    const result = body(
+      await createSavedSearchTool(d).handler({
+        object: 'Incidents',
+        name: 'All Active',
+        searchId: 'f1',
+      }),
+    );
+
+    expect((result.rows as unknown as Record<string, unknown>[])[0]).toMatchObject({
+      WorkOrderRef: 'WO-7',
+      Summary: 'Fix it',
+    });
+    expect(String(result.fields)).toContain('NOT ONE OF THE ONES THE DEFAULT KNOWS');
+  });
+
   it('returns whole records only when asked outright', async () => {
     const { deps: d } = deps({
       'All%20Active': { value: [{ RecId: 'a', Symptom: 'long text' }] },

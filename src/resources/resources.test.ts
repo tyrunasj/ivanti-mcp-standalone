@@ -100,6 +100,19 @@ describe('the reference documents', () => {
     expect(uris('full', 'session')).toContain('ivanti://reference/workflow');
   });
 
+  it('never tells an end user that a zero means the record does not exist', () => {
+    // Under an own-records scope, someone else's record answers zero too. The queries document
+    // said "zero rows means the records do not exist" unqualified — in every deployment,
+    // including the one where the tools themselves say the opposite.
+    for (const [mode, tier] of DEPLOYMENTS) {
+      const queries = deployment(mode, tier).resources.find(
+        (resource) => resource.uri === 'ivanti://reference/queries',
+      );
+      expect(queries?.text).not.toMatch(/zero rows means the records do not exist/i);
+      expect(queries?.text).toContain('scopedTo');
+    }
+  });
+
   it('are well formed, so a client can list them', () => {
     for (const [mode, tier] of DEPLOYMENTS) {
       for (const resource of deployment(mode, tier).resources) {

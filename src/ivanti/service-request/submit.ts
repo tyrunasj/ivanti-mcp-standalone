@@ -6,6 +6,7 @@ import type { IvantiSession } from '../session/asmx-session.js';
 import type { StagedAttachment } from './stage-attachment.js';
 import type { OdataRecord } from '../odata/response.js';
 import { readCollection } from '../odata/response.js';
+import { buildQuery, MAX_TOP, quoteOdataString, withQuery } from '../odata/query.js';
 
 /**
  * Submitting a service request, which Ivanti will tell you went fine when it did not.
@@ -47,6 +48,9 @@ const DEFAULT_FORM = 'ServiceReq.ResponsiveAnalyst.DefaultLayout';
 /** Matches an ISO-8601 instant or a bare date, which is what needs the offset applied. */
 export const ISO_DATETIME =
   /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/** A `time` parameter's answer: a time of day with no date, which Ivanti stores as an instant. */
+const TIME_OF_DAY = /^\d{2}:\d{2}(?::\d{2})?$/;
 
 /** A combo answer: the value the person chose, and the option's own identifier. */
 export interface ChosenOption {
@@ -241,6 +245,14 @@ function sameMoment(sent: string, stored: string, localOffset: number): boolean 
     return false;
   }
 
+  // A time of day is stored as an instant on the day it was submitted — measured: `14:30` on a
+  // UTC+2 tenant came back as `…T12:30:00Z`. Compare the wall clock it lands on in the tenant's
+  // frame, exactly: the offset was read today, so there is no season to drift across.
+  if (TIME_OF_DAY.test(sent)) {
+    const local = new Date(storedAt + tenantOffset * 60_000).toISOString().slice(11, 19);
+    return local.startsWith(sent.length === 5 ? `${sent}:` : sent);
+  }
+
   // An explicit instant is compared as one, exactly — but in the TENANT's frame, not the host's.
   //
   // The tool asks for `YYYY-MM-DDTHH:MM` in the tenant's local time, and ECMAScript resolves a
@@ -308,7 +320,8 @@ export async function verifyStoredAnswers(
 
     // A datetime is compared as an instant, never as text.
     const datesAgree =
-      ISO_DATETIME.test(sentText) && sameMoment(sentText, storedText, localOffset);
+      (ISO_DATETIME.test(sentText) || TIME_OF_DAY.test(sentText)) &&
+      sameMoment(sentText, storedText, localOffset);
 
     if (want !== '' && want !== got && !datesAgree) {
       mismatches.push({
@@ -336,6 +349,14 @@ const SUBSCRIPTION_SERVICE = 'ServiceCatalog/services/ServiceSubscription.asmx';
  * submit refuses them without it. And the two location fields are **not** what their names
  * suggest: `strCustomerLocation` carries the form name (`ServiceReqHeader.New`), which is the
  * shape that works.
+ *
+ * The subject and the offset go too. This sent `serviceReqData: {}` and no `localOffset`, so a
+ * request with files silently lost its subject, and its dates were sent without the offset they
+ * were then verified against. **Whether `SubmitRequestForUser` honours either is not measured**:
+ * `serviceReqData` is one of its own arguments and carries `Subject` in the REST submit's shape;
+ * `localOffset` is not known to be one, and an ASMX service skips a key it does not declare — the
+ * way it already skips the `_csrfToken` every call here carries in the body. So sending both costs
+ * nothing where they are ignored, and the read-back of the request is what says whether they took.
  */
 export async function submitWithAttachments(
   session: IvantiSession,
@@ -360,8 +381,32 @@ export async function submitWithAttachments(
     strOrgUnit: null,
     strCustomerLocation: 'ServiceReqHeader.New',
     formName: '',
-    serviceReqData: {},
+    // `{}` unless a subject was given, which is exactly what this sent before.
+    serviceReqData: payload['serviceReqData'],
     delayedFulfill: false,
     saveReqState: false,
+    localOffset: request.localOffset,
+  });
+}
+
+/**
+ * The files a request actually carries, by name.
+ *
+ * What was staged is not what is attached: the staging ids are bound only by this submit, and a
+ * submit that did not bind one says nothing about it. An attachment's link to its request is its
+ * own `ParentLink_RecID`, so the request's files are one filtered read.
+ */
+export async function readRequestAttachments(
+  transport: IvantiTransport,
+  requestRecId: string,
+): Promise<string[]> {
+  const url = withQuery(
+    transport.routes.entitySet('attachments'),
+    buildQuery({ filter: `ParentLink_RecID eq ${quoteOdataString(requestRecId)}`, top: MAX_TOP }),
+  );
+  const rows = readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url);
+  return rows.flatMap((row) => {
+    const name = row['ATTACHNAME'];
+    return typeof name === 'string' && name !== '' ? [name] : [];
   });
 }

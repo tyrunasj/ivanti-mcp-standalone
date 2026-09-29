@@ -63,7 +63,7 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
         // The note is reached through the ticket, so the ticket is what is checked.
         await assertOwnRecordById(deps, context, parent, args.recordId);
 
-        const rows = await readNotes(deps, transport, args.recordId, {
+        const { rows, total } = await readNotes(deps, transport, args.recordId, {
           visibleOnly: enduser,
           top: args.top ?? DEFAULT_TOP,
         });
@@ -72,11 +72,26 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
           const note = toNote(row);
           return note === undefined ? [] : [note];
         });
+        // Against the rows Ivanti sent, not the notes built from them: the question is whether
+        // the page was all there is.
+        const hasMore = total.total > rows.length;
 
         // What was NOT returned, because a bare `returned: 0` on a record with eight escalation
         // entries reads as "nothing has happened here" — which is the opposite of true.
-        const allEntries = await countJournalEntries(deps, transport, args.recordId).catch(() => 0);
-        const otherEntries = Math.max(0, allEntries - notes.length);
+        //
+        // A failed count is NOT a zero. It was read as one, and the zero then became the
+        // sentence below asserting this record "genuinely has no other activity" — a claim made
+        // on no evidence at all. Nor is a floor: `exact: false` means "at least".
+        const allEntries = await countJournalEntries(deps, transport, args.recordId).catch(
+          () => undefined,
+        );
+        // Every note is also a journal entry, so it is the notes' TOTAL that comes off — not the
+        // page. Subtracting the twenty shown from a record with sixty notes reported forty notes
+        // as "Ivanti's own emails and escalations".
+        const otherEntries =
+          allEntries === undefined || !allEntries.exact
+            ? undefined
+            : Math.max(0, allEntries.total - total.total);
 
         /**
          * This object's own journal relationship, read from its metadata rather than assumed.
@@ -91,33 +106,59 @@ export function createListNotesTool(deps: IvantiToolDeps): ToolDefinition {
           relationship.target.startsWith('journal'),
         )?.name;
 
+        // In `enduser` the journal is not readable even where the gate names it —
+        // `get_related_records` refuses it there, so offering it would be the same dead end.
+        const journalReadable = !enduser && deps.gate.allows('journal');
+
+        // In `enduser` the notes counted are the published ones, so what is left over includes
+        // any an agent kept internal — said without a separate count, which would be one.
+        const notShown = enduser
+          ? "Ivanti's own emails, escalations and assignment notices, and any note not published " +
+            'to the customer'
+          : "Ivanti's own emails, escalations and assignment notices";
+
         return jsonResult({
           object: parent.entitySet,
           recordId: args.recordId,
           returned: notes.length,
-          // Always, including zero. Omitting it when there was nothing to report made "0 notes
-          // and 0 journals" and "0 notes, this feature is not present" render identically — and
-          // the empty answer is exactly where a reader most needs to know the count is real.
-          otherJournalEntries: otherEntries,
+          total: total.total,
+          ...(total.exact ? {} : { totalIsExact: false }),
+          hasMore,
+          ...(hasMore
+            ? {
+                moreNotes:
+                  `THESE ARE NOT ALL THE NOTES: ${total.exact ? '' : 'at least '}` +
+                  `${String(total.total)} match and ${String(rows.length)} are shown, newest ` +
+                  `first. Pass a larger \`top\` (up to ${String(MAX_TOP)}) for older ones.`,
+              }
+            : {}),
+          // Always, including zero, whenever it is known. Omitting it when there was nothing to
+          // report made "0 notes and 0 journals" and "0 notes, this feature is not present"
+          // render identically — and the empty answer is exactly where a reader most needs to
+          // know the count is real. When it is NOT known, it is absent and the line below says so.
+          ...(otherEntries === undefined ? {} : { otherJournalEntries: otherEntries }),
           // Where to go next depends on whether the caller can go there. In `enduser` the journal
           // object is outside the gate, so naming `get_related_records` sends them into a
           // refusal that points straight back here — a circular dead end that cost a tester two
           // calls to discover.
-          ...(deps.gate.allows('journal') && journalRelationship !== undefined
+          ...(journalReadable && journalRelationship !== undefined
             ? { journalRelationship }
             : {}),
           alsoOnThisRecord:
-            otherEntries === 0
-              ? 'No journal entries beyond the notes above — this record genuinely has no other ' +
-                'activity logged, rather than the count being unavailable.'
-              : deps.gate.allows('journal')
-                ? `${String(otherEntries)} journal entries that are not notes — Ivanti's own ` +
-                  'emails, escalations and assignment notices. Read them with ' +
-                  `get_related_records({ relationship: '${journalRelationship ?? 'the journal relationship'}' }).`
-                : `${String(otherEntries)} journal entries that are not notes — Ivanti's own ` +
-                  'emails, escalations and assignment notices. This server does not expose ' +
-                  'them, so the count is all there is: say that the ticket has system activity ' +
-                  'on it rather than implying nothing has happened.',
+            otherEntries === undefined
+              ? 'The other journal entries on this record could not be counted, so whether it ' +
+                `has other activity — ${notShown} — is UNKNOWN. Do not say it has none.`
+              : otherEntries === 0
+                ? 'No journal entries beyond the notes above — this record genuinely has no ' +
+                  'other activity logged, rather than the count being unavailable.'
+                : journalReadable
+                  ? `${String(otherEntries)} journal entries that are not notes — ${notShown}. ` +
+                    'Read them with ' +
+                    `get_related_records({ relationship: '${journalRelationship ?? 'the journal relationship'}' }).`
+                  : `${String(otherEntries)} journal entries not listed here — ${notShown}. ` +
+                    'This server does not expose them, so the count is all there is: say that ' +
+                    'the ticket has system activity on it rather than implying nothing has ' +
+                    'happened.',
           ...(enduser
             ? { showing: 'notes published to the customer; internal ones are not listed' }
             : {}),

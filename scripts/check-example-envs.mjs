@@ -37,7 +37,9 @@ let failed = 0;
 for (const name of files) {
   const env = parse(readFileSync(new URL(name, dir), 'utf8'));
   try {
-    const c = loadConfig(env, (p) => `stub-secret-for:${p}`);
+    // Padded: a bearer token must be at least 32 characters, and whether an example
+    // passes must not depend on how long its secret's path happens to be.
+    const c = loadConfig(env, (p) => `stub-secret-for:${p}`.padEnd(48, '.'));
     const shape = [
       c.STDIO_TRANSPORT_ON ? 'stdio' : null,
       c.HTTP_TRANSPORT_ON ? `http/${env.AUTH_MODE ?? 'none'}` : null,

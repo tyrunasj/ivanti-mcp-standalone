@@ -57,6 +57,22 @@ function chosenBy(candidate: PersonCandidate, choice: string): boolean {
   );
 }
 
+/** Whether two of these records answer to the same login or address, which a person cannot pick between. */
+function sharesAKey(candidates: readonly PersonCandidate[]): boolean {
+  const logins = new Set<string>();
+  const emails = new Set<string>();
+  for (const candidate of candidates) {
+    const login = candidate.loginId?.toLowerCase();
+    const email = candidate.primaryEmail?.toLowerCase();
+    if ((login !== undefined && logins.has(login)) || (email !== undefined && emails.has(email))) {
+      return true;
+    }
+    if (login !== undefined) logins.add(login);
+    if (email !== undefined) emails.add(email);
+  }
+  return false;
+}
+
 function toPinned(candidate: PersonCandidate, provenance: 'asserted' | 'verified'): PinnedPerson {
   return {
     recId: candidate.recId,
@@ -122,17 +138,25 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
 
         const identity = pin.identity();
         const verified = identity.provenance === 'verified';
+        const choice = args.person?.trim();
 
         // Rule 1, made concrete: on a signed-in conversation the search term is the token's, never
         // the caller's. A claimed name may only *choose between* records the token already
         // matched — it can never widen the search to someone else.
-        const lookup = verified ? identity.directoryKey : args.person?.trim();
+        //
+        // Unverified, the argument is the search term — so a RecId given back from the list this
+        // conversation was just shown would be searched for as a login and find nobody, and two
+        // records sharing a login or an address could never be told apart. A RecId that WAS on
+        // that list repeats the lookup that found it, and chooses among those records only.
+        const offered = verified || choice === undefined ? undefined : pin.offeredBy(choice);
+        const lookup = verified ? identity.directoryKey : (offered ?? choice);
 
         if (verified && lookup === undefined) {
           return errorResult(
             'This conversation is signed in, but the token carries no claim naming the person ' +
-              '(an email, username or UPN), so there is nothing to match against Ivanti. Set ' +
-              'OAUTH_IDENTITY_CLAIM to the claim this provider uses.',
+              '(an email the provider marked verified, a username or a UPN — an unverified email ' +
+              'is not used, since a user may be able to set it to anyone), so there is nothing ' +
+              'to match against Ivanti. Set OAUTH_IDENTITY_CLAIM to the claim this provider uses.',
           );
         }
 
@@ -175,17 +199,28 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
         // again ("John", when the three Johns all remain). Falling back to the whole list keeps
         // the candidates in front of the model instead of answering an empty one, which reads
         // as "nobody matches" and is the opposite of true.
-        const choice = args.person?.trim();
         const chosen =
           candidates.length > 1 && choice !== undefined && choice !== ''
             ? candidates.filter((candidate) => chosenBy(candidate, choice))
             : candidates;
-        const narrowed = chosen.length > 0 ? chosen : candidates;
+        const named = chosen.length > 0 ? chosen : candidates;
+
+        // Two records can share a login or an address — typically a leaver's old record beside
+        // the one they use now — and nothing the person could type tells those apart. When every
+        // record but one is marked as no longer active, that one is the only one this
+        // conversation could act as anyway (`Terminated` is refused below). Read from the status
+        // the directory already reports; a record without one — an external contact — counts as
+        // active, so this never decides between two people it knows nothing about.
+        const active = named.filter((candidate) => statusProblem(candidate) === undefined);
+        const narrowed = named.length > 1 && active.length === 1 ? active : named;
 
         const only = narrowed.length === 1 ? narrowed[0] : undefined;
 
         if (only === undefined) {
           const shown = narrowed.slice(0, MAX_CANDIDATES);
+          // Remembered so the answer can come back as a RecId — the only thing that tells apart
+          // records sharing a login or address.
+          pin.offer(lookup, shown.map((candidate) => candidate.recId));
           return jsonResult({
             pinned: false,
             question: 'Which of these is the person you are helping? Ask them — do not guess.',
@@ -196,7 +231,10 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
                   note: 'Too many to list. Ask for their login or email address.',
                 }
               : {}),
-            next: 'Call act_as again with the login or email of the right one.',
+            next: sharesAKey(shown)
+              ? 'Some of these share a login or email address, so only the recId tells them ' +
+                'apart. Once the person has said which is theirs, call act_as again with its recId.'
+              : 'Call act_as again with the login or email of the right one.',
           });
         }
 

@@ -61,6 +61,22 @@ export const envSchema = z.object({
   MCP_IDENTITY_IDLE_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
   /** Ceiling on concurrent sessions: unbounded growth is a DoS surface in `none` mode. */
   MCP_MAX_SESSIONS: z.coerce.number().int().positive().default(100),
+  /**
+   * How many sessions one signed-in subject may hold. Unset is no limit of its own.
+   *
+   * Past it the subject's own least recently used session is closed rather than the new one
+   * refused: a person who opens another is almost always one who abandoned the last without a
+   * DELETE. Only `oauth` names a subject, so `validateConfig` refuses it under any other mode.
+   */
+  MCP_MAX_SESSIONS_PER_SUBJECT: z.coerce.number().int().positive().optional(),
+  /**
+   * Refuse to run as the service account when impersonation was asked for and cannot work.
+   *
+   * Off, a ConfigDB that does not answer at startup degrades `act_as` to deciding who "my" means,
+   * with a warning — right for a deployment that is still useful that way. On, it exits instead:
+   * for one whose whole promise is that Ivanti scopes every answer to the person.
+   */
+  IVANTI_IMPERSONATION_REQUIRED: z.stringbool().default(false),
 
   BEARER_TOKEN: z.string().min(1).optional(),
 
@@ -117,6 +133,19 @@ export const envSchema = z.object({
    * deployment cannot test what a customer without admin rights will see by asking nicely.
    */
   IVANTI_MAX_TIER: z.enum(['odata', 'session', 'admin']).optional(),
+  /**
+   * How long a read may wait for Ivanti. The range is a rule in `validate-config.ts`.
+   *
+   * Two settings rather than one because a create runs the tenant's workflow before it answers,
+   * and a write cut off by a read's timeout may well have been applied — the caller, told it
+   * failed, files it again.
+   */
+  IVANTI_TIMEOUT_MS: z.coerce.number().int().default(10_000),
+  /**
+   * Everything but a GET — plus the whole ASMX session, which POSTs its reads too, and
+   * CentralConfig, whose calls open and close sessions.
+   */
+  IVANTI_WRITE_TIMEOUT_MS: z.coerce.number().int().default(30_000),
 
   /**
    * The ConfigDB tenant, e.g. `https://config-<tenant>/`.

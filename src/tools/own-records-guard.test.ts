@@ -253,6 +253,54 @@ describe('enduser mode never answers with records before it knows who is asking'
     }
   });
 
+  /**
+   * The filter is the whole boundary for a collection read — there is no post-read check — and it
+   * is `(<caller's filter>) and <mine>`. A caller filter that closes the wrapper early turns it
+   * into `(A) or (B) and mine`, which reads everyone's A. Driven through the real handlers, because
+   * the helper refusing it is only half: a tool that composed its own filter would not.
+   */
+  describe('a caller’s filter cannot break out of the own-records scope', () => {
+    const ESCAPES = [
+      // The report's exact filter: every active ticket in the tenant.
+      "Status eq 'Active') or (Status ne 'x'",
+      "Subject eq 'x')) or ((Subject ne 'x'",
+      // An open quote swallows the constraint into a value.
+      "Subject eq 'x",
+      // A group left open takes the constraint inside it.
+      "(Subject eq 'x' or (Subject ne 'x'",
+    ];
+
+    const reads: [string, (filter: string) => Record<string, unknown>][] = [
+      ['list_records', (filter) => ({ object: 'Incidents', filter })],
+      ['count_records', (filter) => ({ object: 'Incidents', filter })],
+      [
+        'group_count',
+        (filter) => ({ object: 'Incidents', groupBy: 'Subject', values: ['Printer'], filter }),
+      ],
+      ['fulltext_search_object', (filter) => ({ object: 'Incidents', query: 'printer', filter })],
+    ];
+
+    for (const [name, args] of reads) {
+      for (const filter of ESCAPES) {
+        it(`${name} refuses ${filter} and sends nothing carrying it`, async () => {
+          const { tools, urls } = enduserTools();
+          const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+          const tool = (toolName: string) => tools.find((entry) => entry.name === toolName)!;
+          await tool('act_as').handler({ person: 'JSmith' }, context);
+          urls.length = 0;
+
+          const result = await tool(name).handler(args(filter), context);
+
+          expect(result.isError, `${name} sent an escaping filter`).toBe(true);
+          expect(text(result)).toMatch(/parentheses do not balance|never closes it/);
+          // Refused before the wire, not after Ivanti happened to reject it.
+          const sent = urls.map((url) => decodeURIComponent(url)).filter((url) => url.includes('$filter='));
+          expect(sent.filter((url) => url.includes("Subject eq 'x") || url.includes("Status ne 'x'"))).toEqual([]);
+        });
+      }
+    }
+  });
+
   it('refuses a record that belongs to someone else, and says nothing about whether it exists', async () => {
     const { tools } = enduserTools();
     const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };

@@ -3,14 +3,53 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { ANONYMOUS } from '../auth/identity.js';
+import type * as ImpersonationModule from '../auth/impersonation.js';
+import type { ImpersonationSlot } from '../auth/impersonation.js';
+import type * as ImpersonatedSessionModule from '../ivanti/session/impersonated-session.js';
 import { configFixture } from '../config/config.fixture.js';
 import { connectionFixture } from '../ivanti/connection.fixture.js';
 import type { Logger } from '../logger.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createImpersonationSlot } from '../auth/impersonation.js';
 import type { ImpersonatedSession } from '../ivanti/session/impersonated-session.js';
 import { createServerFactory, endOnInitialize, releaseOnClose } from './create-server.js';
 import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
+
+/**
+ * The slots the factory creates, so a test can open one the way `act_as` would without driving a
+ * whole tool call — and the session that opening hands back, so its release can be slowed down.
+ */
+const seen = vi.hoisted(() => ({
+  slots: [] as ImpersonationSlot[],
+  release: undefined as (() => Promise<void>) | undefined,
+}));
+
+vi.mock('../auth/impersonation.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof ImpersonationModule>();
+  return {
+    ...actual,
+    createImpersonationSlot: (open: Parameters<typeof actual.createImpersonationSlot>[0]) => {
+      const slot = actual.createImpersonationSlot(open);
+      seen.slots.push(slot);
+      return slot;
+    },
+  };
+});
+
+vi.mock('../ivanti/session/impersonated-session.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof ImpersonatedSessionModule>();
+  const { impersonatedSessionFixture: fixture } = await import(
+    '../ivanti/session/impersonated-session.fixture.js'
+  );
+  return {
+    ...actual,
+    openImpersonatedSession: () =>
+      Promise.resolve(
+        fixture({ release: () => seen.release?.() ?? Promise.resolve() }),
+      ),
+  };
+});
 
 const config = configFixture();
 
@@ -77,15 +116,57 @@ describe('the impersonated session\'s lifetime', () => {
   it('installs a close hook when the deployment can impersonate', () => {
     const factory = createServerFactory(config, impersonating(vi.fn(() => Promise.resolve())));
 
-    expect(factory.create(CALL).server.onclose).toBeDefined();
+    expect(factory.create(CALL).server.server.onclose).toBeDefined();
   });
 
   it('closes cleanly when nothing was ever opened', () => {
     const release = vi.fn(() => Promise.resolve());
-    const server = createServerFactory(config, impersonating(release)).create(CALL);
+    const { server } = createServerFactory(config, impersonating(release)).create(CALL);
 
     expect(() => server.server.onclose?.()).not.toThrow();
     expect(release).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The SDK runs `onclose` synchronously and awaits nothing it starts, so `McpServer.close()`
+   * resolved while the release was still in flight. Shutdown awaited exactly that, then exited —
+   * and the request handing the person's Ivanti session back never left the machine.
+   */
+  it('closes a connection only once the Ivanti session it opened is released', async () => {
+    let released = false;
+    seen.release = () =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          released = true;
+          resolve();
+        }, 20);
+      });
+    const connection = createServerFactory(
+      config,
+      impersonating(() => Promise.resolve()),
+    ).create(CALL);
+    // A transport that closes the way the SDK's do: synchronously, through `onclose`.
+    const transport: Transport = {
+      start: () => Promise.resolve(),
+      send: () => Promise.resolve(),
+      close(): Promise<void> {
+        this.onclose?.();
+        return Promise.resolve();
+      },
+    };
+    await connection.server.connect(transport);
+    await seen.slots.at(-1)?.open('HSanders');
+
+    await connection.close();
+
+    expect(released).toBe(true);
+    seen.release = undefined;
+  });
+
+  it('closes a connection that never impersonated without waiting on anything', async () => {
+    const connection = createServerFactory(config, deps()).create(CALL);
+
+    await expect(connection.close()).resolves.toBeUndefined();
   });
 
   it('leaves no slot at all when the deployment cannot impersonate', () => {
@@ -144,6 +225,29 @@ describe('releaseOnClose', () => {
       expect(release).toHaveBeenCalledTimes(1);
     });
     expect(slot.session()).toBeUndefined();
+  });
+
+  // What lets a caller wait for the release: `onclose` itself cannot be awaited.
+  it('hands back the release a close started, for whoever must not exit before it', async () => {
+    let released = false;
+    const release = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            released = true;
+            resolve();
+          }, 10);
+        }),
+    );
+    const slot = createImpersonationSlot(() => Promise.resolve(opened(release)));
+    await slot.open('HSanders');
+    const target = server();
+
+    const releasing = releaseOnClose(target, slot);
+    target.server.onclose?.();
+    await releasing();
+
+    expect(released).toBe(true);
   });
 
   it('releases nothing when the conversation never impersonated', () => {

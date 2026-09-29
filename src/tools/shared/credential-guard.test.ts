@@ -25,11 +25,6 @@ import { describe, expect, it } from 'vitest';
  * **what the tenant is**? Only the first belongs on the caller's credential.
  */
 const SERVICE_ACCOUNT_BY_DESIGN: Record<string, string> = {
-  'records/list-assigned-work.ts':
-    'Turns a name into a login against `employees` before anything is read. That is the tenant\'s ' +
-    'directory, the same fact `connectionFor` keeps on the service account for `people.directory`, ' +
-    'and an analyst must be able to name a colleague whose record their own role cannot read. The ' +
-    'WORK ROWS in the same file go through `transportFor` and are the caller\'s data.',
   'schema/get-link-fields.ts':
     'Samples rows to learn a link field\'s `_Category` spelling. That is a fact about the tenant, ' +
     'not about the caller, and reading it per person would make a process-wide answer vary by ' +

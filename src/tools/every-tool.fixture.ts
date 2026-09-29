@@ -24,7 +24,13 @@ export const RESPONSES: Record<string, unknown> = {
   servicereqs: { value: [] },
   changes: { value: [] },
   employees: { value: [{ RecId: 'e1', LoginID: 'JSmith', DisplayName: 'Jon Smith' }] },
-  attachments: { value: [{ RecId: 'a1', ATTACHNAME: 'work-order.log' }] },
+  // On the incident: upload_attachment reads the row back after linking, and a row on no record
+  // is reported as an orphan rather than as attached.
+  attachments: {
+    value: [
+      { RecId: 'a1', ATTACHNAME: 'work-order.log', ParentLink_RecID: 'abc', ParentLink_Category: 'Incident' },
+    ],
+  },
   // The fixture serves a file body as text, which is what download_attachment reads.
   'rest/Attachment': 'log line one',
   'POST journal__notess': { RecId: 'n1', NotesBody: 'hello', PublishToWeb: false },
@@ -43,7 +49,10 @@ export const RESPONSES: Record<string, unknown> = {
   frs_knowledges: {
     value: [{ KnowledgeNumber: 10052, Title: 'VPN error 413', Status: 'Published', Details: '<p>Reconnect.</p>' }],
   },
-  journal__notess: { value: [{ RecId: 'n1', NotesBody: 'hello', PublishToWeb: false }] },
+  // add_note reads the note back and requires it on the record it was written to.
+  journal__notess: {
+    value: [{ RecId: 'n1', NotesBody: 'hello', PublishToWeb: false, ParentLink_RecID: 'abc' }],
+  },
   // The multipart upload answers with the new attachment's RecId in `Message`, and leaves the
   // parent link unset — the tool patches it afterwards.
   'POST Attachment': [{ FileName: 'x.txt', IsUploaded: true, Message: 'A'.repeat(32) }],
@@ -99,8 +108,10 @@ export const ARGUMENTS: Record<string, Record<string, unknown>> = {
   preview_quick_action: { object: 'Incidents', recordId: 'abc', actionId: 'act-1' },
   run_quick_action: { object: 'Incidents', recordId: 'abc', actionId: 'act-1' },
   preview_delete: { object: 'Incidents', recordId: 'abc' },
-  create_record: { object: 'Incidents', fields: { Subject: 'stub' } },
-  update_record: { object: 'Incidents', recordId: 'abc', fields: { Subject: 'stub' } },
+  // What `incidents('abc')` already holds: every written field is read back now, and a stub that
+  // stored something other than what was written is a write that did not take.
+  create_record: { object: 'Incidents', fields: { Subject: 'Printer' } },
+  update_record: { object: 'Incidents', recordId: 'abc', fields: { Subject: 'Printer' } },
   delete_record: { object: 'Incidents', recordId: 'abc' },
   close_ticket: { object: 'Incidents', recordId: 'abc' },
   reopen_ticket: { object: 'Incidents', recordId: 'abc' },

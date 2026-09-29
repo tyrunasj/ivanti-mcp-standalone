@@ -52,8 +52,15 @@ import { createActionGate } from './shared/action-gate.js';
 import { createActAsTool } from './identity/act-as.js';
 import { switchRoleTool } from './identity/switch-role.js';
 import { auditFields } from '../auth/identity.js';
-import { createSessionPin, IdentityRequiredError } from '../auth/identity-pin.js';
+import {
+  createSessionPin,
+  IdentityRequiredError,
+  type PinnedPerson,
+} from '../auth/identity-pin.js';
+import type { ImpersonationSlot } from '../auth/impersonation.js';
+import type { ImpersonatedSession } from '../ivanti/session/impersonated-session.js';
 import { callSize } from './shared/call-size.js';
+import { declaredArguments } from './strict-input.js';
 import type { ManifestFingerprint } from './manifest-fingerprint.js';
 import { errorResult } from './shared/result.js';
 import type { CallContext, ToolDefinition } from './tool-definition.js';
@@ -209,8 +216,9 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
  * what makes identity a per-conversation fact rather than a global.
  *
  * Every call is audited here, and gated here, because this is the one place they all pass
- * through. Arguments are never logged — they carry ticket text and personal data — so the record
- * is what was called, by which session, on whose behalf, and how that was established.
+ * through. Argument values are never logged — they carry ticket text and personal data — so the
+ * record is what was called, by which session, on whose behalf, and how that was established; a
+ * write adds which record it was aimed at, by id alone (`auditTargets`).
  */
 export interface RegisteredTools {
   /** The names registered, in the order they were given. */
@@ -283,20 +291,28 @@ export function registerTools(
   const session = (): { sessionId?: string } =>
     context.sessionId === undefined ? {} : { sessionId: context.sessionId };
 
-  const endConversation = async (reason: 'idle' | 'reinitialized'): Promise<void> => {
+  /**
+   * Everything the conversation held is dropped before this returns; the promise is only the
+   * Ivanti session being given back, for a caller that has a reason to wait for that.
+   */
+  const endConversation = (reason: 'idle' | 'reinitialized'): Promise<void> => {
     const held = pin.person() !== undefined;
     pin = createSessionPin(context.identity);
     bound = { ...context, pin };
     conversation += 1;
     signingIn = undefined;
-    if (!held) return;
 
     // The person is never named here: on an asserted pin it is a claim, and an audit line that
     // records a claim as a fact is worse than one that records nothing.
-    logger.info('conversation ended; identity forgotten', { reason, ...session() });
+    if (held) logger.info('conversation ended; identity forgotten', { reason, ...session() });
+
     // Given back, not left to expire: the next person cannot open a session while this one holds
     // the slot, and `act_as` would refuse them by naming somebody they never asked about.
-    await context.impersonation?.release();
+    //
+    // ALWAYS, not only when somebody was pinned. An `act_as` whose handshake is still in flight has
+    // pinned nobody yet, and returning early here let that handshake land in the next
+    // conversation's slot — refusing everyone else, by that person's name, until a restart.
+    return context.impersonation?.release() ?? Promise.resolve();
   };
 
   // `act_as` is the only tool that answers before an identity is pinned — and a deployment that
@@ -339,8 +355,16 @@ export function registerTools(
       signingIn = Promise.resolve(actAs.handler({}, bound));
     }
 
-    const answer = await signingIn;
+    const attempt = signingIn;
+    const answer = await attempt;
     if (mayAnswer()) return undefined;
+
+    // A question — which of these records is yours — stands until it is answered, so it is kept and
+    // asked again. A refusal is not kept: it was a directory lookup that failed, a timeout, a
+    // handshake Ivanti refused, and caching it replayed one bad second for the rest of the
+    // conversation. Only the attempt this caller shared is forgotten, never a newer one.
+    const failed = answer.isError === true;
+    if (failed && signingIn === attempt) signingIn = undefined;
 
     // It could not pin: the token names nobody in Ivanti, or matched a record that has to be
     // confirmed first. Its explanation is the useful one, but the call the caller actually made
@@ -357,8 +381,131 @@ export function registerTools(
             'signed-in token, and could not:',
         },
         ...answer.content,
+        ...(failed
+          ? [
+              {
+                type: 'text' as const,
+                text: 'That was not remembered: calling `act_as` tries again, and so does the next call.',
+              },
+            ]
+          : []),
       ],
     };
+  };
+
+  /**
+   * Makes sure the person's Ivanti session is one Ivanti will still honour, opening a new one for
+   * the same login when it is not. On the ordinary call this is no work at all: the slot hands back
+   * the session it holds unless that one is known dead or past its expiry.
+   *
+   * Returns the refusal when no session can be had. Never falls back to the service account — a
+   * caller who asked to act as someone and was quietly answered as this server's own account has
+   * been told something false about whose data they are reading.
+   */
+  const keepSession = async (
+    tool: ToolDefinition,
+    slot: ImpersonationSlot,
+    person: PinnedPerson,
+  ): Promise<{ live: ImpersonatedSession } | { refused: CallToolResult }> => {
+    try {
+      // `act_as` refuses to pin anyone without a login where it opens sessions, so this is a
+      // backstop rather than a case.
+      if (person.loginId === undefined) throw new Error('They have no Ivanti login to sign in as.');
+      return { live: await slot.open(person.loginId) };
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : 'The reason is unknown.';
+      logger.warn('the person\'s ivanti session could not be re-opened', {
+        tool: tool.name,
+        ...session(),
+        reason: reason.slice(0, 200),
+      });
+      noteOutcome('SessionUnavailable');
+      return {
+        refused: errorResult(
+          `This conversation acts as ${person.displayName} in Ivanti, and the session it held for ` +
+            'them has ended. Opening a new one failed, so nothing was sent — this server does not ' +
+            `answer as its own account instead. ${reason} The next call tries again.`,
+        ),
+      };
+    }
+  };
+
+  /**
+   * The slot as one call sees it: always the session the call started on.
+   *
+   * The conversation's slot empties when the conversation ends, and an empty slot means "use the
+   * service account" to everything that routes a request. A call still running at that moment —
+   * a re-initialize, an idle expiry noticed by another call — would have sent the rest of its
+   * requests, writes included, as this server's own account. Its result is discarded afterwards,
+   * but a write is not undone by discarding what it answered.
+   */
+  const pinnedTo = (slot: ImpersonationSlot, held: ImpersonatedSession): ImpersonationSlot => ({
+    session: () => held,
+    open: (login) => slot.open(login),
+    discard: (dead): void => {
+      slot.discard(dead);
+    },
+    release: () => slot.release(),
+  });
+
+  /**
+   * Runs the handler, on the person's own Ivanti session where the conversation holds one — and
+   * when Ivanti refuses that session partway, re-opens it once for the same login and retries.
+   *
+   * A session dies without saying so: it lapses, the tenant evicts it, the tenant restarts. Before
+   * this, the cached one was handed back regardless and every later call — `act_as` for the same
+   * person included — answered 401 until the conversation ended.
+   *
+   * The retry is automatic only for a read-only tool. A write refused partway may already have
+   * done part of its work — a create that stored the record and then failed to read it back — and
+   * repeating it would do that part twice, so it is reported instead.
+   */
+  const run = async (
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    call: CallContext,
+    usage: CallUsage,
+    startedIn: number,
+  ): Promise<CallToolResult> => {
+    const slot = call.impersonation;
+    // `act_as` opens the session itself; everything else runs on the one it opened.
+    const person = tool.name === ACT_AS ? undefined : call.pin?.person();
+    if (slot === undefined || person === undefined) return tool.handler(args, call);
+
+    const kept = await keepSession(tool, slot, person);
+    if ('refused' in kept) return kept.refused;
+
+    // Judged on this handler's outcome alone, not on anything noted earlier in the call.
+    const noted = usage.outcome;
+    usage.outcome = undefined;
+    const result = await tool.handler(args, { ...call, impersonation: pinnedTo(slot, kept.live) });
+    const refused = usage.outcome === 'ivanti 401';
+    usage.outcome ??= noted;
+    // A 401 is Ivanti refusing the credential, not the request. Anything else is the call's answer.
+    if (!refused || conversation !== startedIn) return result;
+
+    // Named, so a refusal that arrives after another call already replaced it discards nothing.
+    slot.discard(kept.live);
+    logger.info('ivanti refused the person\'s session; opening a new one', {
+      tool: tool.name,
+      ...session(),
+    });
+    const renewed = await keepSession(tool, slot, person);
+    if ('refused' in renewed) return renewed.refused;
+
+    if (tool.config.annotations.readOnlyHint !== true) {
+      noteOutcome('SessionRenewed');
+      return errorResult(
+        `Ivanti refused that call as unauthenticated (401): the session this conversation held as ` +
+          `${person.displayName} had most likely ended. A new one is open now, but the call was not ` +
+          'repeated — it changes records, and part of it may have gone through before the ' +
+          'refusal. Check the record, then call it again if it is still needed.',
+      );
+    }
+
+    // Once. A second refusal on a session opened a moment ago is reported as it is.
+    usage.outcome = undefined;
+    return tool.handler(args, { ...call, impersonation: pinnedTo(slot, renewed.live) });
   };
 
   const answer = async (
@@ -366,21 +513,37 @@ export function registerTools(
     args: Record<string, unknown>,
     /** Filled in with the conversation the call turned out to belong to, for its usage line. */
     began: { conversation?: number },
+    usage: CallUsage,
+    /** The arguments naming what a write touches — see `auditTargets`. */
+    targets: readonly string[],
   ): Promise<CallToolResult> => {
     const at = Date.now();
     const quiet = idleMs !== undefined && at - lastCallAt >= idleMs;
     lastCallAt = at;
-    if (quiet) await endConversation('idle');
+    if (quiet) {
+      // Not awaited. Everything the conversation held is dropped before `endConversation` returns;
+      // what is left is RemoveSession, which ends nothing on Ivanti's side (docs/notes.md) and
+      // made the first call after a quiet spell wait up to its 15 s timeout for no benefit.
+      endConversation('idle').catch((error: unknown) => {
+        logger.warn('giving back the ivanti session failed', {
+          reason: error instanceof Error ? error.message.slice(0, 120) : 'unknown',
+        });
+      });
+    }
 
     // Read after any expiry above, so a call that ends the previous conversation belongs to the
     // new one rather than being refused by its own arrival.
     const startedIn = conversation;
     began.conversation = startedIn;
+    // The conversation's context as it stands now. A retry below must run in the conversation the
+    // call was made in, not whichever one has started since.
+    const call = bound;
 
     logger.info('tool called', {
       tool: tool.name,
       ...session(),
       ...auditFields(pin.identity()),
+      ...auditTargets(targets, args),
     });
 
     // The gate, at the one place every call passes through. Tool by tool it would be forgettable,
@@ -398,7 +561,7 @@ export function registerTools(
       }
     }
 
-    const result = await tool.handler(args, bound);
+    const result = await run(tool, args, call, usage, startedIn);
 
     // Ended underneath us. The result was computed for a conversation that is over, and for
     // `act_as` it was computed against a pin nothing reads any more — so it is refused rather
@@ -410,8 +573,14 @@ export function registerTools(
       });
       noteOutcome('discarded');
       return errorResult(
-        'This conversation ended while that call was running, so its result was discarded. ' +
-          'Call `act_as` again to say who you are helping, then retry.',
+        // "Retry" is only safe to say about a read. A write that got as far as Ivanti happened,
+        // whatever became of its result, and retrying it blind would do it twice.
+        tool.config.annotations.readOnlyHint === true
+          ? 'This conversation ended while that call was running, so its result was discarded. ' +
+              'Call `act_as` again to say who you are helping, then retry.'
+          : 'This conversation ended while that call was running, so its result was discarded — ' +
+              'but it changes records, and the change may already have been made. Call `act_as` ' +
+              'again to say who you are helping, then check the record before trying it again.',
       );
     }
 
@@ -419,6 +588,7 @@ export function registerTools(
   };
 
   for (const tool of tools) {
+    const targets = targetArguments(tool);
     server.registerTool(
       tool.name,
       tool.config,
@@ -433,7 +603,7 @@ export function registerTools(
           const started = Date.now();
           let result: CallToolResult | undefined;
           try {
-            result = await withCallUsage(usage, () => answer(tool, args, began));
+            result = await withCallUsage(usage, () => answer(tool, args, began, usage, targets));
             return result;
           } finally {
             // What this call put into the conversation, in characters — sizes and markers only,
@@ -463,6 +633,46 @@ export function registerTools(
     endConversation: () => endConversation('reinitialized'),
     mayAnswer,
   };
+}
+
+/**
+ * The arguments that say WHICH record a write touched: its object, a relationship, and anything
+ * named `…Id` — `recordId`, `targetId`, `approvalId`, `attachmentId`, `actionId`,
+ * `subscriptionId`. Identifiers and schema names, never values: `fields`, `note`, `answers` and
+ * the rest carry ticket text and personal data, and stay unlogged.
+ *
+ * Read from the declared schema rather than listed by hand, so a write tool added later is
+ * audited by what it declares instead of by someone remembering to add it here.
+ */
+const TARGET_ARGUMENT = /^(object|relationship)$|Id$/;
+
+/** An id is 32 characters. Anything much longer in one of these is not an id, and is cut. */
+const MAX_TARGET_CHARS = 64;
+
+function targetArguments(tool: ToolDefinition): readonly string[] {
+  // A read touches nothing, so it names nothing — its arguments stay out of the log entirely.
+  if (tool.config.annotations.readOnlyHint === true) return [];
+  return Object.keys(declaredArguments(tool.config.inputSchema)).filter((name) =>
+    TARGET_ARGUMENT.test(name),
+  );
+}
+
+/**
+ * Which record a write was aimed at, for the audit line. Without it a `delete_record` line said
+ * who deleted something and never what.
+ */
+function auditTargets(
+  names: readonly string[],
+  args: Record<string, unknown>,
+): { targets?: Record<string, string> } {
+  const targets: Record<string, string> = {};
+  for (const name of names) {
+    const value = args[name];
+    if (typeof value === 'string' || typeof value === 'number') {
+      targets[name] = String(value).slice(0, MAX_TARGET_CHARS);
+    }
+  }
+  return Object.keys(targets).length === 0 ? {} : { targets };
 }
 
 /**

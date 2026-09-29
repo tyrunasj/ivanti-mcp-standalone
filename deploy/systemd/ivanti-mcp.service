@@ -7,6 +7,9 @@
 #   sudo install -m 0640 -o root -g ivanti-mcp .env /etc/ivanti-mcp/env
 #   sudo systemctl enable --now ivanti-mcp
 #
+# Rotating a key: replace it where it lives (the env file, or the credential file
+# below), then `sudo systemctl restart ivanti-mcp`. It is read once, at startup.
+#
 # The unit mirrors the container's posture: unprivileged, read-only filesystem,
 # no capabilities, nothing written to disk.
 
@@ -22,10 +25,26 @@ User=ivanti-mcp
 Group=ivanti-mcp
 WorkingDirectory=/opt/ivanti-mcp
 
-# Secrets live here, not in the unit: a unit file is world-readable and shows up
-# in `systemctl cat`. Mode 0640 root:ivanti-mcp keeps it out of everyone else's
-# reach. Set STDIO_TRANSPORT_ON=false in it — see the note below.
+# Configuration lives here, not in the unit: a unit file is world-readable and
+# shows up in `systemctl cat`. Mode 0640 root:ivanti-mcp keeps it out of everyone
+# else's reach.
+#
+# Set STDIO_TRANSPORT_ON=false in it. A service's stdin is /dev/null, so the stdio
+# transport reads EOF at once: beside HTTP that is harmless noise in the journal,
+# and on its own it is a service nothing can talk to.
 EnvironmentFile=/etc/ivanti-mcp/env
+
+# Recommended: the keys as systemd credentials rather than lines in the env file.
+# systemd copies each into a private in-memory directory that only this service
+# can read, whatever the source file's ownership — so the source can stay
+# root:root 0600, and the key never sits in an environment `/proc` can show.
+# Remove the inline IVANTI_API_KEY (or BEARER_TOKEN) from the env file when you
+# enable a pair here: giving both forms of one secret is refused with exit 78.
+# `%d` is the credentials directory (systemd 248+).
+#LoadCredential=ivanti-api-key:/etc/ivanti-mcp/ivanti-api-key
+#Environment=IVANTI_API_KEY_FILE=%d/ivanti-api-key
+#LoadCredential=bearer-token:/etc/ivanti-mcp/bearer-token
+#Environment=BEARER_TOKEN_FILE=%d/bearer-token
 
 ExecStart=/usr/bin/node /opt/ivanti-mcp/dist/index.js
 

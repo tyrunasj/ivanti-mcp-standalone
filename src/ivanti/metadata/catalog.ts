@@ -2,7 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Logger } from '../../logger.js';
-import { parseCsdl, type CsdlDocument, type EntityMetadata } from './csdl.js';
+import { looksLikeCsdl, parseCsdl, type CsdlDocument, type EntityMetadata } from './csdl.js';
 import { toCsdlEntity, toEnglishSingular, toGuessedEntitySet } from './entity-names.js';
 import { IvantiApiError } from '../http/errors.js';
 import { suggestNames, toStem } from './suggest-names.js';
@@ -96,10 +96,10 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
 
     const pending = (async (): Promise<CsdlDocument | undefined> => {
       // Two phases, and they fail for different reasons. Fetching can fail because the tenant is
-      // having a bad moment, which must not be remembered. Parsing can only fail because Ivanti
-      // ANSWERED and the answer was not a schema — the fabricated field-less document it returns
-      // for an unknown entity set, or a WAF page — which is definitive and must be remembered, or
-      // every mistyped name costs a round trip on every call rather than once.
+      // having a bad moment, which must not be remembered. Parsing fails because something
+      // ANSWERED and the answer was not a schema — and only when that something was Ivanti, with
+      // the fabricated field-less document it returns for an unknown entity set, is it definitive
+      // and worth remembering, or every mistyped name costs a round trip on every call.
       let body: string;
       try {
         body = await transport.requestText(url);
@@ -140,11 +140,19 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
         logger.debug('csdl parsed', { url, entities: document.entities.size });
         return document;
       } catch (error: unknown) {
-        // Ivanti's own answer, and it is not a schema. Cached: this is how a typo arrives, and it
-        // should cost one round trip rather than one per call.
+        // Only Ivanti's OWN answer is cached: a CSDL document declaring nothing with fields, which
+        // is what it fabricates for an entity set that does not exist. That is how a typo
+        // arrives, and it should cost one round trip rather than one per call.
+        //
+        // Anything that is not CSDL-shaped at all is someone else answering — a WAF block page, a
+        // maintenance page, a login redirect — and says nothing about the schema. This branch once
+        // cached those too, contradicting rule 3 above: a WAF page on the seed URL made Incidents
+        // unknown until a restart, which is the exact outage the rule was written against.
+        const retryable = !looksLikeCsdl(body);
+        if (retryable) documents.delete(url);
         logger.debug('csdl unusable', {
           url,
-          retryable: false,
+          retryable,
           reason: error instanceof Error ? error.message.slice(0, 120) : 'unknown',
         });
         return undefined;
