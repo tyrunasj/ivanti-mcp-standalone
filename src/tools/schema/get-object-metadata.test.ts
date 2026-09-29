@@ -60,6 +60,15 @@ type Payload = Record<string, unknown>;
 const payload = (result: { content: { type: string; text?: string }[] }): Payload =>
   JSON.parse(result.content[0]?.text ?? '{}') as Payload;
 
+/** The table's rows, header dropped, keyed by field name. */
+const rowsOf = (body: Payload): Record<string, string> =>
+  Object.fromEntries(
+    (typeof body.fields === 'string' ? body.fields : '')
+      .split('\n')
+      .slice(1)
+      .map((line) => [line.split('|')[0] ?? '', line]),
+  );
+
 describe('get_object_metadata', () => {
   it('reports fields with short types, and marks required and validated ones', async () => {
     const body = payload(await tool().handler({ object: 'Incident#' }));
@@ -68,32 +77,73 @@ describe('get_object_metadata', () => {
       object: 'incident',
       entitySet: 'incidents',
       fields: [
-        { name: 'RecId', type: 'String', required: true },
-        { name: 'Subject', type: 'String' },
-        { name: 'Status', type: 'String', validated: true },
-        { name: 'Priority', type: 'Int32' },
-      ],
-      relationships: [{ name: 'IncidentContainsTask', target: 'task' }],
+        'name|type|label|flags',
+        'RecId|String||required',
+        'Subject|String',
+        'Status|String||validated',
+        'Priority|Int32',
+      ].join('\n'),
+      relationships: ['IncidentContainsTask → task'],
     });
+    // The columns are explained once, beside them, rather than spelled out on every field.
+    expect(body.fieldsFormat).toContain('name|type|label|flags');
+  });
+
+  it('folds a link into one row that keeps its label, its flags and all three names', async () => {
+    const { connection } = connectionFixture({
+      entities: {
+        incident: {
+          fields: [
+            field('Subject'),
+            field('ProfileLink'),
+            field('ProfileLink_RecID', { nullable: false }),
+            field('ProfileLink_Category'),
+          ],
+          relationships: [],
+        },
+      },
+      capability: { tier: 'session' },
+    });
+    const linked = createGetObjectMetadataTool({
+      connection: {
+        ...connection,
+        // The label sits on the `_RecID` half, as incident's "Customer" does.
+        forms: { get: () => Promise.resolve(formFixture({ fieldLabels: { ProfileLink_RecID: 'Customer' } })) },
+      },
+      gate: OPEN_GATE,
+      logger: logger(),
+      ownRecordsOnly: false,
+      actions: OPEN_ACTIONS,
+    });
+
+    const body = payload(await linked.handler({ object: 'incident' }));
+    expect(String(body.fields).split('\n')).toEqual([
+      'name|type|label|flags',
+      'Subject|String',
+      'ProfileLink|link|Customer|required',
+    ]);
+    // Four fields, in two rows.
+    expect(body.fieldCount).toBe(4);
+    expect(body.fieldsFormat).toContain('_RecID');
+
+    // A search for the half a filter uses still finds the row it was folded into.
+    const searched = payload(await linked.handler({ object: 'incident', search: 'profilelink_recid' }));
+    expect(rowsOf(searched)).toHaveProperty('ProfileLink');
   });
 
   it("reports the tenant's own label for a field, which is the name a person is shown", async () => {
     const body = payload(await labelledTool({ Subject: 'Summary', Status: 'State' }).handler({ object: 'incident' }));
 
-    expect(body.fields).toMatchObject([
-      { name: 'RecId' },
-      { name: 'Subject', label: 'Summary' },
-      { name: 'Status', label: 'State' },
-      { name: 'Priority' },
-    ]);
+    expect(rowsOf(body)).toMatchObject({
+      Subject: 'Subject|String|Summary',
+      Status: 'Status|String|State|validated',
+    });
   });
 
   it('omits a label that only repeats the field name, which most of them do', async () => {
     const body = payload(await labelledTool({ Subject: 'Subject', Status: 'State' }).handler({ object: 'incident' }));
-    const fields = body.fields as Record<string, unknown>[];
-
-    expect(fields.find((f) => f.name === 'Subject')).not.toHaveProperty('label');
-    expect(fields.find((f) => f.name === 'Status')).toHaveProperty('label', 'State');
+    expect(rowsOf(body).Subject).toBe('Subject|String');
+    expect(rowsOf(body).Status).toBe('Status|String|State|validated');
   });
 
   it('searches labels as well as names, or a caller told to say "Customer" cannot find it', async () => {
@@ -101,7 +151,8 @@ describe('get_object_metadata', () => {
       await labelledTool({ Subject: 'Customer summary' }).handler({ object: 'incident', search: 'customer' }),
     );
 
-    expect(body).toMatchObject({ fieldCount: 1, fields: [{ name: 'Subject', label: 'Customer summary' }] });
+    expect(body).toMatchObject({ fieldCount: 1 });
+    expect(rowsOf(body).Subject).toBe('Subject|String|Customer summary');
   });
 
   it('says WHY there are no labels, because the caller is told to prefer them', async () => {
@@ -161,33 +212,31 @@ describe('required and read-only rules', () => {
   const payloadOf = async (rules: { requiredRuleFields?: readonly string[]; readOnlyFields?: readonly string[] }) =>
     payload(await labelledTool({}, undefined, rules).handler({ object: 'Incident#' }));
 
-  const fieldsOf = (body: Payload) => (body['fields'] as { name: string; required?: unknown; readOnly?: unknown }[]);
+  it("marks a governed field `required?`, which is weaker than the schema's own `required`", async () => {
+    const rows = rowsOf(await payloadOf({ requiredRuleFields: ['Status', 'Priority'] }));
 
-  it("marks a governed field 'sometimes', which is weaker than the schema's own true", async () => {
-    const fields = fieldsOf(await payloadOf({ requiredRuleFields: ['Status', 'Priority'] }));
-
-    expect(fields.find((f) => f.name === 'Status')?.required).toBe('sometimes');
+    expect(rows.Status).toBe('Status|String||required? validated');
     // RecId is nullable: false in the schema — an absolute answer, not a conditional one.
-    expect(fields.find((f) => f.name === 'RecId')?.required).toBe(true);
+    expect(rows.RecId).toBe('RecId|String||required');
     // Untouched by any rule.
-    expect(fields.find((f) => f.name === 'Subject')).not.toHaveProperty('required');
+    expect(rows.Subject).toBe('Subject|String');
   });
 
   /**
    * Conditional, not absolute: a problem lists `Category` read-only and accepts it on a create,
    * and `Category` is the one field its schema calls mandatory.
    */
-  it("marks a governed field 'sometimes' rather than claiming the write will fail", async () => {
-    const fields = fieldsOf(await payloadOf({ readOnlyFields: ['Priority'] }));
+  it('marks a governed field `readOnly?` rather than claiming the write will fail', async () => {
+    const rows = rowsOf(await payloadOf({ readOnlyFields: ['Priority'] }));
 
-    expect(fields.find((f) => f.name === 'Priority')?.readOnly).toBe('sometimes');
-    expect(fields.find((f) => f.name === 'Subject')).not.toHaveProperty('readOnly');
+    expect(rows.Priority).toBe('Priority|Int32||readOnly?');
+    expect(rows.Subject).toBe('Subject|String');
   });
 
   it('explains once that the two flags differ in kind', async () => {
     const note = (await payloadOf({ requiredRuleFields: ['Status'], readOnlyFields: ['Priority'] }))['rulesNote'];
 
-    expect(note).toContain('never the conditions');
+    expect(note).toContain('never says which conditions');
     expect(note).toContain('never as "this write will be refused"');
   });
 

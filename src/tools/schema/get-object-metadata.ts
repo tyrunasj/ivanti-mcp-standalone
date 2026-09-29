@@ -12,11 +12,7 @@ import { knownObjectNames } from '../shared/object-names.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type CallContext, type ToolDefinition } from '../tool-definition.js';
 import { OBJECT_ARGUMENT_IN_FULL } from '../shared/object-argument.js';
-
-/** `Edm.String` → `String`. The prefix is on every field of every entity and carries nothing. */
-function shortType(type: string): string {
-  return type.replace(/^Edm\./, '');
-}
+import { FIELDS_FORMAT, fieldRows, renderRows, rowMatches } from './field-table.js';
 
 /**
  * What the tenant calls each field, so an answer can be written in the tenant's words.
@@ -73,7 +69,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
       'Accepts any of the three naming forms: `Incident#`, `Incidents` or `incident`.\n\n' +
       'When `subtypes` comes back, the object is a base type — readable, but **not creatable**. ' +
       'Create one of the subtypes instead.\n\n' +
-      '`validated: true` marks a field whose value comes from a picklist. It is a FLOOR, not a ' +
+      'A `validated` flag marks a field whose value comes from a picklist. It is a FLOOR, not a ' +
       'ceiling: it comes from `$metadata`, and a field without the flag may still be backed by a ' +
       'list the form knows about — `Employee.Department` carries no flag and has 17 values. If a ' +
       (registersFormTools(deps)
@@ -112,36 +108,16 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
         const search = args.search?.toLowerCase();
         const subtypes = findSubtypes(await knownObjectNames(deps.connection), entity.name);
         const form = await formFacts(deps, context, entity.name);
-        const labels = form.labels;
 
-        const fields = visibleFields(entity)
-          // Searched on the label too, or this tool became unusable the moment anything started
-          // speaking in labels: `customer` is what the form calls `ProfileLink`, and a caller
-          // told to say "Customer" then cannot find the field that is called that.
-          .filter(
-            (field) =>
-              search === undefined ||
-              field.name.toLowerCase().includes(search) ||
-              (labels[field.name]?.toLowerCase().includes(search) ?? false),
-          )
-          .map((field) => ({
-            name: field.name,
-            // Only when it says something the name does not. `Owner` labelled "Owner" is noise on
-            // every field of every object, and this response is already large.
-            ...(labels[field.name] !== undefined && labels[field.name] !== field.name
-              ? { label: labels[field.name] }
-              : {}),
-            type: shortType(field.type),
-            // `true` is the schema's own answer and absolute; `'sometimes'` is the form's, and
-            // means a rule governs the field without saying under what condition.
-            ...(field.nullable
-              ? form.sometimesRequired.has(field.name)
-                ? { required: 'sometimes' as const }
-                : {}
-              : { required: true as const }),
-            ...(form.readOnly.has(field.name) ? { readOnly: 'sometimes' as const } : {}),
-            ...(field.validated ? { validated: true } : {}),
-          }));
+        // Searched on the label too, or this tool became unusable the moment anything started
+        // speaking in labels: `customer` is what the form calls `ProfileLink`, and a caller told
+        // to say "Customer" then cannot find the field that is called that. A folded link answers
+        // to any of its three names, so a search for `_RecID` still finds it.
+        const rows = fieldRows(visibleFields(entity), form).filter(
+          (row) => search === undefined || rowMatches(row, search),
+        );
+        // Fields, not rows: a link row stands for three, and `totalFieldCount` counts fields.
+        const fieldCount = rows.reduce((sum, row) => sum + row.covers.length, 0);
 
         /**
          * Why a field has no `label`, said once rather than per field.
@@ -152,7 +128,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
          * no other name", and the second case would have the caller quietly reporting technical
          * names to people on a deployment where better ones exist behind a session.
          */
-        const labelled = fields.filter((field) => 'label' in field).length;
+        const labelled = rows.filter((row) => row.label !== undefined).length;
         const labelsNote = registersFormTools(deps)
           ? labelled === 0
             ? 'No field on this object carries a label this role can see, so its technical names ' +
@@ -184,16 +160,12 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
            * used. Advertising a path the gate forbids is worse than not listing it, because the
            * refusal arrives after the caller has committed to a plan.
            */
-          .map((relationship) =>
-            deps.gate.allows(relationship.target)
-              ? relationship
-              : {
-                  ...relationship,
-                  available: false,
-                  reason: 'this deployment does not expose that object, so this relationship ' +
-                    'cannot be followed — get_related_records will refuse it',
-                },
+          .map(
+            (relationship) =>
+              `${relationship.name} → ${relationship.target}` +
+              (deps.gate.allows(relationship.target) ? '' : ' (not exposed)'),
           );
+        const unexposed = relationships.some((relationship) => relationship.endsWith('(not exposed)'));
 
         return jsonResult({
           object: entity.name,
@@ -204,7 +176,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
                 note: 'A base type: readable, but records are created on a subtype.',
               }
             : {}),
-          fieldCount: fields.length,
+          fieldCount,
           ...(labelsNote === undefined ? {} : { labelsNote }),
           /**
            * Said once, because the two flags differ in KIND and a reader that conflated them
@@ -213,15 +185,13 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
           ...(form.sometimesRequired.size === 0 && form.readOnly.size === 0
             ? {}
             : {
+                // Shortened from a paragraph of measured cases, re-sent on every call for every
+                // object with rules. What a caller must not get wrong is the kind of the flag.
                 rulesNote:
-                  "`'sometimes'` on either flag means a rule GOVERNS that field — the form lists " +
-                  'which fields have rules and never the conditions, so neither says what applies ' +
-                  'to the record you are writing. Measured: an incident needs no owner to reach ' +
-                  'Logged and requires Owner AND Team at Active, while a problem lists `Subject`, ' +
-                  '`Description` and `Category` as read-only and accepts all three on a create — ' +
-                  "`Category` is mandatory there. So treat `readOnly: 'sometimes'` as \"may be " +
-                  'computed or locked in some states", never as "this write will be refused", and ' +
-                  'read the value back afterwards rather than assuming yours was stored.',
+                  '`required?` and `readOnly?` mean a form rule governs the field in some states; ' +
+                  'the form never says which conditions. Neither is a promise — read-only fields ' +
+                  'have been accepted on a create — so treat `readOnly?` as "may be locked", ' +
+                  'never as "this write will be refused", and read the value back after writing.',
               }),
           ...(search === undefined
             ? {}
@@ -232,7 +202,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
                 // nothing reads as a typo in the OBJECT name. Measured: `category` has 9 fields
                 // and none contains "name".
                 totalFieldCount: visibleFields(entity).length,
-                ...(fields.length === 0
+                ...(rows.length === 0
                   ? {
                       fieldsNote:
                         `This object is real and has ${String(visibleFields(entity).length)} ` +
@@ -242,7 +212,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
                     }
                   : {}),
               }),
-          fields,
+          ...(rows.length === 0 ? {} : { fieldsFormat: FIELDS_FORMAT, fields: renderRows(rows) }),
           ...(args.includeRelationships === false
             ? {}
             : {
@@ -253,6 +223,13 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
                         `No relationship matches '${args.search ?? ''}'. Call again without ` +
                         '`search` to see all ' +
                         `${String(entity.relationships.length)} of them.`,
+                    }
+                  : {}),
+                ...(unexposed
+                  ? {
+                      unexposedNote:
+                        '`(not exposed)`: this deployment does not expose that object, so ' +
+                        'get_related_records will refuse the relationship.',
                     }
                   : {}),
                 relationships,
