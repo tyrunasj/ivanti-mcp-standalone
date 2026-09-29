@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, RequestId } from '@modelcontextprotocol/sdk/types.js';
 import type { Config } from '../config/env-schema.js';
 import type { IvantiConnection } from '../ivanti/connect.js';
 import { withLogContext, type Logger } from '../logger.js';
+import { noteOutcome, withCallUsage, type CallUsage } from '../usage/call-usage.js';
 import { createGetVersionTool } from './get-version.js';
 import { createCountRecordsTool } from './records/count-records.js';
 import { createCreateRecordTool } from './records/create-record.js';
@@ -51,6 +53,8 @@ import { createActAsTool } from './identity/act-as.js';
 import { switchRoleTool } from './identity/switch-role.js';
 import { auditFields } from '../auth/identity.js';
 import { createSessionPin, IdentityRequiredError } from '../auth/identity-pin.js';
+import { callSize } from './shared/call-size.js';
+import type { ManifestFingerprint } from './manifest-fingerprint.js';
 import { errorResult } from './shared/result.js';
 import type { CallContext, ToolDefinition } from './tool-definition.js';
 
@@ -254,6 +258,8 @@ export function registerTools(
   logger: Logger,
   /** Omitted means a conversation never goes stale on its own — the shape every test wants. */
   idleMs?: number,
+  /** Stamped on every usage line, so the report can compare one version of the text with another. */
+  manifest?: ManifestFingerprint,
 ): RegisteredTools {
   // One pin per conversation, and a new conversation gets a new one: re-creating is the whole of
   // "this conversation is over", and it leaves the pin's own rules with no reset to be tricked
@@ -266,6 +272,8 @@ export function registerTools(
   // would pin THAT one and report success, leaving the model certain it had an identity while
   // every later call refused. Counting is cheaper than making forty-one handlers re-read a pin.
   let conversation = 0;
+  // Names this server's conversations apart from every other session's and process's.
+  const instance = randomBytes(4).toString('hex');
   // The one in-flight attempt to pin a signed-in conversation, shared by concurrent callers.
   let signingIn: Promise<CallToolResult> | undefined;
 
@@ -353,6 +361,63 @@ export function registerTools(
     };
   };
 
+  const answer = async (
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    /** Filled in with the conversation the call turned out to belong to, for its usage line. */
+    began: { conversation?: number },
+  ): Promise<CallToolResult> => {
+    const at = Date.now();
+    const quiet = idleMs !== undefined && at - lastCallAt >= idleMs;
+    lastCallAt = at;
+    if (quiet) await endConversation('idle');
+
+    // Read after any expiry above, so a call that ends the previous conversation belongs to the
+    // new one rather than being refused by its own arrival.
+    const startedIn = conversation;
+    began.conversation = startedIn;
+
+    logger.info('tool called', {
+      tool: tool.name,
+      ...session(),
+      ...auditFields(pin.identity()),
+    });
+
+    // The gate, at the one place every call passes through. Tool by tool it would be forgettable,
+    // and a tool that forgot would not fail — it would answer, for nobody.
+    if (tool.name !== ACT_AS && !mayAnswer()) {
+      const unresolved = await pinFromToken();
+
+      if (!mayAnswer()) {
+        logger.info('tool refused on identity', {
+          tool: tool.name,
+          reason: 'IdentityRequiredError',
+        });
+        noteOutcome('IdentityRequiredError');
+        return unresolved ?? errorResult(new IdentityRequiredError().message);
+      }
+    }
+
+    const result = await tool.handler(args, bound);
+
+    // Ended underneath us. The result was computed for a conversation that is over, and for
+    // `act_as` it was computed against a pin nothing reads any more — so it is refused rather
+    // than reported, which is the difference between "call me again" and a silent lie.
+    if (conversation !== startedIn) {
+      logger.info('result discarded; the conversation ended first', {
+        tool: tool.name,
+        ...session(),
+      });
+      noteOutcome('discarded');
+      return errorResult(
+        'This conversation ended while that call was running, so its result was discarded. ' +
+          'Call `act_as` again to say who you are helping, then retry.',
+      );
+    }
+
+    return result;
+  };
+
   for (const tool of tools) {
     server.registerTool(
       tool.name,
@@ -363,52 +428,32 @@ export function registerTools(
         // which call it belongs to. Under HTTP conversations interleave, and a request line that
         // does not say whose it is cannot be joined to anything.
         withLogContext({ tool: tool.name, ...session(), rpcId: extra?.requestId }, async () => {
-          const at = Date.now();
-          const quiet = idleMs !== undefined && at - lastCallAt >= idleMs;
-          lastCallAt = at;
-          if (quiet) await endConversation('idle');
-
-          // Read after any expiry above, so a call that ends the previous conversation belongs to
-          // the new one rather than being refused by its own arrival.
-          const startedIn = conversation;
-
-          logger.info('tool called', {
-            tool: tool.name,
-            ...session(),
-            ...auditFields(pin.identity()),
-          });
-
-          // The gate, at the one place every call passes through. Tool by tool it would be
-          // forgettable, and a tool that forgot would not fail — it would answer, for nobody.
-          if (tool.name !== ACT_AS && !mayAnswer()) {
-            const unresolved = await pinFromToken();
-
-            if (!mayAnswer()) {
-              logger.info('tool refused on identity', {
-                tool: tool.name,
-                reason: 'IdentityRequiredError',
-              });
-              return unresolved ?? errorResult(new IdentityRequiredError().message);
-            }
-          }
-
-          const result = await tool.handler(args, bound);
-
-          // Ended underneath us. The result was computed for a conversation that is over, and for
-          // `act_as` it was computed against a pin nothing reads any more — so it is refused rather
-          // than reported, which is the difference between "call me again" and a silent lie.
-          if (conversation !== startedIn) {
-            logger.info('result discarded; the conversation ended first', {
+          const usage: CallUsage = { ivantiRequests: 0 };
+          const began: { conversation?: number } = {};
+          const started = Date.now();
+          let result: CallToolResult | undefined;
+          try {
+            result = await withCallUsage(usage, () => answer(tool, args, began));
+            return result;
+          } finally {
+            // What this call put into the conversation, in characters — sizes and markers only,
+            // never content. `pnpm usage:report` reads these back; see docs/development.md.
+            const answered = result === undefined ? 'fault' : result.isError === true ? 'error' : 'ok';
+            logger.info('tool finished', {
               tool: tool.name,
               ...session(),
+              // Unique across sessions and processes, so a report can follow one conversation
+              // through a log that interleaves many — stdio lines have no session id at all.
+              conversation: `${instance}.${String(began.conversation ?? conversation)}`,
+              ...clientOf(server),
+              ...manifest,
+              outcome: usage.outcome ?? answered,
+              ...callSize(args, result),
+              ...(usage.rowsRead === undefined ? {} : { rowsRead: usage.rowsRead }),
+              ivantiRequests: usage.ivantiRequests,
+              ms: Date.now() - started,
             });
-            return errorResult(
-              'This conversation ended while that call was running, so its result was discarded. ' +
-                'Call `act_as` again to say who you are helping, then retry.',
-            );
           }
-
-          return result;
         }),
     );
   }
@@ -418,4 +463,13 @@ export function registerTools(
     endConversation: () => endConversation('reinitialized'),
     mayAnswer,
   };
+}
+
+/**
+ * Which client made the call, as it named itself at `initialize` — the nearest a server gets to
+ * knowing the model, which MCP never says. Absent before `initialize`, and in tests.
+ */
+function clientOf(server: McpServer): { client?: string } {
+  const client = (server as Partial<McpServer>).server?.getClientVersion();
+  return client === undefined ? {} : { client: `${client.name}/${client.version}` };
 }

@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { decodeParameter } from '../../ivanti/service-request/parameter-shape.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { assertOwnRecordById } from '../shared/own-records.js';
@@ -129,7 +130,7 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
               top: 100,
             }),
           );
-          const answered = readCollection<OdataRecord>(
+          const answered = readRows<OdataRecord>(
             await transport.request<OdataRecord>(answersUrl),
             answersUrl,
           );
@@ -186,7 +187,7 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
         );
 
         const payload = await transport.request<OdataRecord>(url);
-        const rows = readCollection<OdataRecord>(payload, url);
+        const rows = readRows<OdataRecord>(payload, url);
 
         // Ivanti sends every field whatever is asked for, and a 16-parameter template is ~28 KB
         // of mostly UI layout. Dropping empties on top is safe here: for a form parameter,

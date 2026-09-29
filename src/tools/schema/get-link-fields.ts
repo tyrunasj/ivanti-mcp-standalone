@@ -10,7 +10,8 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { buildQuery, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 
 /** One page is enough to see which links this tenant actually uses, and cheap. */
 const SAMPLE_ROWS = 25;
@@ -80,7 +81,7 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
         );
         const sample = await deps.connection.transport
           .request<OdataRecord>(sampleUrl)
-          .then((payload) => readCollection<OdataRecord>(payload, sampleUrl))
+          .then((payload) => readRows<OdataRecord>(payload, sampleUrl))
           .catch(() => []);
         for (const row of sample) {
           for (const link of links) {

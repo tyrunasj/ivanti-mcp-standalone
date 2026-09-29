@@ -32,7 +32,8 @@ exits 78 (`EX_CONFIG`) with a list of every problem when configuration is incomp
 writes `package.json`'s version into `Chart.yaml` and the handbook.
 
 `pnpm budget` prints the manifest and `instructions` spend against their caps — the figures no
-document should quote, because they move with every description.
+document should quote, because they move with every description. `pnpm manifest:size` measures
+the whole manifest, schemas included; see [`usage.md`](./usage.md).
 
 `typecheck` is not redundant with `build` — the build config excludes tests and fixtures, so it is
 the only thing that type-checks the test suite. `/ship` runs them and refuses on the first failure.
@@ -68,6 +69,17 @@ The deployed build stays reachable alongside it as `ivanti-http`, so the working
 cluster can be compared in one session. A tool added after the session started is not in its
 manifest until the client restarts; a throwaway script that spawns the server and speaks
 JSON-RPC on stdin covers the gap.
+
+## Measuring what the server costs a conversation
+
+```bash
+pnpm manifest:size                            # what every request carries, per deployment and per tool
+pnpm manifest:size --compare /tmp/before.json # what an edit moved (CI does this on every PR)
+pnpm usage:report server.log                  # waste, refusals and cost per tool, from the usage lines
+```
+
+Both measure characters, not tokens — the server is vendor-agnostic. What they print, how to
+collect the logs, and the loop for tuning a description against them: [`usage.md`](./usage.md).
 
 ## Toolchain constraints
 

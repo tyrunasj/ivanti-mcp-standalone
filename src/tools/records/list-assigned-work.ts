@@ -4,7 +4,8 @@
 import { z } from 'zod';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { buildQuery, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { transportFor } from '../shared/transport-for.js';
 import { errorResult, jsonResult } from '../shared/result.js';
@@ -62,7 +63,7 @@ export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition
         directory.routes.entitySet('employees'),
         buildQuery({ filter: `${attempt.field} eq ${quoteOdataString(person)}`, top: 2 }),
       );
-      const rows = readCollection<OdataRecord>(await directory.request<OdataRecord>(url), url);
+      const rows = readRows<OdataRecord>(await directory.request<OdataRecord>(url), url);
       const loginId = rows[0]?.['LoginID'];
       if (typeof loginId !== 'string' || loginId === '') continue;
 
@@ -168,7 +169,7 @@ export function createListAssignedWorkTool(deps: IvantiToolDeps): ToolDefinition
                 buildQuery({ filter, top, count: true }),
               );
               const payload = await transport.request<OdataRecord>(url);
-              const rows = readCollection<OdataRecord>(payload, url);
+              const rows = readRows<OdataRecord>(payload, url);
               const total = readTotal(payload, rows.length);
 
               return {

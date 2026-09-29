@@ -115,6 +115,14 @@ It shipped one day before that revision. Check `LATEST_PROTOCOL_VERSION` before 
 Under the stdio transport it carries the JSON-RPC stream; anything written there corrupts the
 protocol. All logging goes to stderr via `createLogger`.
 
+**The manifest budget counts half the manifest.**
+`MANIFEST_BUDGET` and the per-description cap measure description characters. What a client is
+sent is the whole tool — name, description and the JSON Schema of its arguments, argument
+descriptions included — and measured with `pnpm manifest:size`, the name + schema part was
+about as large as the descriptions: `submit_service_request`'s schema outweighed its description.
+A tool trimmed to pass the cap can still be one of the dearest. → Judge a change with
+`pnpm manifest:size --compare`, not with the budget alone. *(Found 2026-09-28.)*
+
 **Tool annotations default to *destructive* and *open-world*.**
 An unannotated tool reads as dangerous — safe, but useless. Every tool needs explicit values, and
 **additive writes must set `destructiveHint: false` explicitly** because the default is `true`.

@@ -2,7 +2,8 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
@@ -57,7 +58,7 @@ export function createUnlinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           args.recordId,
           relationship,
         );
-        const linked = readCollection<OdataRecord>(
+        const linked = readRows<OdataRecord>(
           await transport.request<OdataRecord>(relatedUrl),
           relatedUrl,
         );

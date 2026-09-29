@@ -35,6 +35,35 @@ jobs:
       - run: ./scripts/release-tarball.sh "${RUNNER_TEMP}/release"
         if: ${{ !cancelled() }}
 
+      # What this pull request does to the manifest: the tools, their schemas and the
+      # instructions every conversation re-sends with every request. In characters,
+      # because this server serves any model and each vendor tokenizes differently.
+      #
+      # It INFORMS, it does not gate — the caps in description-budget.test.ts are what
+      # fail — so a problem here must never block a merge: `continue-on-error`, and a
+      # base that cannot be measured falls back to this PR's figures alone. The base is
+      # measured with THIS script, copied over, so a base that predates the script, or
+      # carries an older copy of it, is still compared like for like.
+      - name: Manifest size
+        if: ${{ github.event_name == 'pull_request' && !cancelled() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          base="$RUNNER_TEMP/base"
+          if git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF" \
+            && git worktree add --detach "$base" FETCH_HEAD \
+            && mkdir -p "$base/scripts/lib" \
+            && cp scripts/manifest-size.ts "$base/scripts/" \
+            && cp scripts/lib/manifest-size.ts "$base/scripts/lib/" \
+            && (cd "$base" && pnpm install --frozen-lockfile --reporter=silent > /dev/null \
+                && node --import tsx scripts/manifest-size.ts --json > "$RUNNER_TEMP/base.json"); then
+            pnpm -s manifest:size --compare "$RUNNER_TEMP/base.json" --markdown >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Manifest size::$(pnpm -s manifest:size --compare "$RUNNER_TEMP/base.json" --headline)"
+          else
+            echo "::warning title=Manifest size::Could not measure $GITHUB_BASE_REF; reporting this pull request alone."
+            pnpm -s manifest:size --markdown >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   image:
     name: Image
     runs-on: ubuntu-latest

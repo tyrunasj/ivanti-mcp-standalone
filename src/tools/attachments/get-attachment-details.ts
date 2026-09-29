@@ -3,7 +3,8 @@
 
 import { z } from 'zod';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { assertOwnRecordById } from '../shared/own-records.js';
@@ -70,7 +71,7 @@ export function createGetAttachmentDetailsTool(deps: IvantiToolDeps): ToolDefini
         );
 
         const payload = await transport.request<OdataRecord>(url);
-        const [row] = readCollection<OdataRecord>(payload, url);
+        const [row] = readRows<OdataRecord>(payload, url);
 
         if (row === undefined) {
           // Same rule as get_record: to a scoped caller, an attachment that is not there and one

@@ -88,6 +88,7 @@ async function main(): Promise<void> {
     logger.info('listening on stdio', {
       mcpMode: config.MCP_MODE,
       ivanti: ivanti !== undefined,
+      ...factory.manifest,
       tools: factory.toolNames,
     });
   }
@@ -168,6 +169,7 @@ async function main(): Promise<void> {
     mcpMode: config.MCP_MODE,
     ivanti: ivanti !== undefined,
     maxSessions: config.MCP_MAX_SESSIONS,
+    ...factory.manifest,
     tools: factory.toolNames,
   });
 }

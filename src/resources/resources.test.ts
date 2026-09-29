@@ -147,4 +147,26 @@ describe('reading a reference document', () => {
     // everything on a deployment that never asks who anyone is.
     expect(read()).toContain('Business Object');
   });
+
+  it('logs each read with its size, so the report can say how often a document is paid for', () => {
+    const registerResource = vi.fn();
+    const info = vi.fn();
+    const { resources } = deployment('full', 'admin');
+    registerResources({ registerResource } as unknown as McpServer, resources, () => true, {
+      debug: vi.fn(),
+      info,
+      warn: vi.fn(),
+      error: vi.fn(),
+    });
+
+    const callback = registerResource.mock.calls[0]?.[3] as (uri: URL) => {
+      contents: { text: string }[];
+    };
+    const text = callback(new URL('ivanti://reference/entity-naming')).contents[0]?.text ?? '';
+
+    expect(info).toHaveBeenCalledWith('resource read', {
+      uri: resources[0]?.uri,
+      resultChars: text.length,
+    });
+  });
 });

@@ -2,7 +2,8 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { buildQuery, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import type { ResolvedObject } from '../shared/resolve-object.js';
 import type { IvantiTransport } from '../../ivanti/http/transport.js';
@@ -100,7 +101,7 @@ export async function readNotes(
     }),
   );
 
-  return readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url);
+  return readRows<OdataRecord>(await transport.request<OdataRecord>(url), url);
 }
 
 /**
@@ -121,6 +122,6 @@ export async function countJournalEntries(
     buildQuery({ filter: `ParentLink_RecID eq ${quoteOdataString(parentRecId)}`, top: 1, count: true }),
   );
   const payload = await transport.request<OdataRecord>(url);
-  const rows = readCollection<OdataRecord>(payload, url);
+  const rows = readRows<OdataRecord>(payload, url);
   return readTotal(payload, rows.length)?.total ?? rows.length;
 }

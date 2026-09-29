@@ -168,6 +168,140 @@ describe('registerTools', () => {
     });
     expect(lines.find((line) => line.message === 'tool called')).toMatchObject({ sessionId: 's1' });
   });
+
+  describe('the usage line', () => {
+    type Line = Record<string, unknown> | undefined;
+    const harness = (
+      handler: ToolDefinition['handler'],
+      manifest?: { manifest: string; manifestChars: number },
+    ): { call: (args?: Record<string, unknown>) => Promise<Line>; endConversation: () => Promise<void> } => {
+      const lines: Record<string, unknown>[] = [];
+      const tool: ToolDefinition = {
+        name: 'probe',
+        config: { title: 'Probe', description: 'Measured.', inputSchema: {}, annotations: {} },
+        handler,
+      };
+      const registerTool = vi.fn();
+      const registered = registerTools(
+        { registerTool } as unknown as McpServer,
+        [tool],
+        { identity: ANONYMOUS, sessionId: 's1' },
+        createLogger('info', (line) => lines.push(JSON.parse(line) as Record<string, unknown>)),
+        undefined,
+        manifest,
+      );
+      const callback = registerTool.mock.calls[0]?.[2] as (
+        args: Record<string, unknown>,
+      ) => Promise<unknown>;
+      return {
+        call: async (args = {}) => {
+          await callback(args).catch(() => undefined);
+          return lines.filter((line) => line.message === 'tool finished').at(-1);
+        },
+        endConversation: registered.endConversation,
+      };
+    };
+    const run = (handler: ToolDefinition['handler'], args: Record<string, unknown> = {}): Promise<Line> =>
+      harness(handler).call(args);
+
+    it('recognises the same arguments in any order, without writing them down', async () => {
+      const probe = harness(() => ({ content: [] }));
+
+      const first = await probe.call({ object: 'Incident', top: 5 });
+      const reordered = await probe.call({ top: 5, object: 'Incident' });
+      const different = await probe.call({ object: 'Incident', top: 6 });
+
+      expect(first?.argsHash).toEqual(reordered?.argsHash);
+      expect(first?.argsHash).not.toEqual(different?.argsHash);
+      expect(JSON.stringify(first)).not.toContain('Incident');
+    });
+
+    it('says which conversation a call belongs to, and moves on when one ends', async () => {
+      const probe = harness(() => ({ content: [] }));
+
+      const before = await probe.call();
+      await probe.endConversation();
+      const after = await probe.call();
+
+      expect(before?.conversation).toMatch(/^[0-9a-f]{8}\.0$/);
+      expect(after?.conversation).toBe(String(before?.conversation).replace(/\.0$/, '.1'));
+    });
+
+    it('counts the rows a call read, so an empty answer is visible', async () => {
+      const { readRows } = await import('./shared/read-rows.js');
+
+      const empty = await run(() => {
+        readRows(undefined, 'https://t/x');
+        return { content: [] };
+      });
+      const two = await run(() => {
+        readRows({ value: [{}, {}] }, 'https://t/x');
+        return { content: [] };
+      });
+      const none = await run(() => ({ content: [] }));
+
+      expect(empty).toMatchObject({ rowsRead: 0 });
+      expect(two).toMatchObject({ rowsRead: 2 });
+      // A call that read no collection says nothing, rather than claiming an empty answer.
+      expect(none).not.toHaveProperty('rowsRead');
+    });
+
+    it('stamps the version of the instructions the call was made under', async () => {
+      const line = await harness(() => ({ content: [] }), { manifest: 'a1b2c3d4e5f6', manifestChars: 73_000 }).call();
+
+      expect(line).toMatchObject({ manifest: 'a1b2c3d4e5f6', manifestChars: 73_000 });
+    });
+
+    it('says how much a call put into the conversation, but never what', async () => {
+      const line = await run(
+        () => ({ content: [{ type: 'text', text: '{"Subject":"Printer on fire"}' }] }),
+        { object: 'Incident' },
+      );
+
+      expect(line).toMatchObject({
+        tool: 'probe',
+        sessionId: 's1',
+        outcome: 'ok',
+        argsChars: '{"object":"Incident"}'.length,
+        resultChars: '{"Subject":"Printer on fire"}'.length,
+        ivantiRequests: 0,
+      });
+      expect(JSON.stringify(line)).not.toContain('Printer');
+      expect(JSON.stringify(line)).not.toContain('Incident');
+    });
+
+    it('names the refusal a call ended in, which is what points at the description to fix', async () => {
+      const line = await run(async () => {
+        const { runTool } = await import('./shared/run-tool.js');
+        const { UnsupportedFilterError } = await import('../ivanti/odata/filter.js');
+        return runTool('probe', logger(), () => {
+          throw new UnsupportedFilterError({ kind: 'function', name: 'contains' } as never);
+        });
+      });
+
+      expect(line).toMatchObject({ outcome: 'UnsupportedFilterError' });
+    });
+
+    it('counts the Ivanti requests a call made', async () => {
+      const { countIvantiRequest } = await import('../usage/call-usage.js');
+
+      const line = await run(() => {
+        countIvantiRequest();
+        countIvantiRequest();
+        return { content: [] };
+      });
+
+      expect(line).toMatchObject({ ivantiRequests: 2 });
+    });
+
+    it('is written even when the handler throws', async () => {
+      const line = await run(() => {
+        throw new Error('boom');
+      });
+
+      expect(line).toMatchObject({ outcome: 'fault', resultChars: 0 });
+    });
+  });
 });
 
 const HAROLD = {

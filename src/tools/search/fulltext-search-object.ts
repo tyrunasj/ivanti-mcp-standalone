@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { COMPACT_ROW_FIELDS } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { buildQuery, DEFAULT_TOP, MAX_TOP, readTotal, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
@@ -87,7 +88,7 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
         );
 
         const payload = await transport.request<OdataRecord>(url);
-        const rows = readCollection<OdataRecord>(payload, url);
+        const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
 
         return jsonResult({

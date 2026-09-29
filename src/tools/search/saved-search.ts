@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { COMPACT_ROW_FIELDS } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { MAX_TOP } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
@@ -68,7 +69,7 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
         const url = `${transport.routes.savedSearch(entitySet, args.name)}?${query.toString()}`;
         const payload = await transport.request<OdataRecord>(url);
         // A saved search matching nothing answers 204 with an empty body.
-        const rows = readCollection<OdataRecord>(payload, url);
+        const rows = readRows<OdataRecord>(payload, url);
         const total = payload?.['@odata.count'];
 
         const requested = parseFieldList(args.fields);

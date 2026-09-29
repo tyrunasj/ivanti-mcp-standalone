@@ -3,7 +3,8 @@
 
 import { z } from 'zod';
 import { buildQuery, MAX_TOP, readTotal, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
@@ -192,7 +193,7 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
               top: 1,
             }),
           );
-          const base = readCollection<OdataRecord>(
+          const base = readRows<OdataRecord>(
             await transport.request<OdataRecord>(oneUrl),
             oneUrl,
           )[0];
@@ -248,7 +249,7 @@ export function createSearchKnowledgeTool(deps: IvantiToolDeps): ToolDefinition 
         );
 
         const payload = await transport.request<OdataRecord>(url);
-        const rows = readCollection<OdataRecord>(payload, url);
+        const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
         const limit = args.excerptChars ?? DEFAULT_EXCERPT;
 
