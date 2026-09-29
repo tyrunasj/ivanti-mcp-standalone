@@ -6,7 +6,8 @@ import { ALL_FIELDS, resolveRowFields } from '../../ivanti/odata/compact-fields.
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import { referencedFieldNames } from '../../ivanti/odata/filter.js';
 import { buildQuery, DEFAULT_TOP, MAX_TOP, readTotal, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { explainFieldError } from '../shared/explain-field-error.js';
 import { jsonResult } from '../shared/result.js';
@@ -138,7 +139,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
             });
             throw explainFieldError(error, entity, referenced) ?? error;
           });
-        const rows = readCollection<OdataRecord>(payload, url);
+        const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
         const skipped = args.skip ?? 0;
 

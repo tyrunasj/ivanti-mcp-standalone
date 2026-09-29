@@ -14,5 +14,5 @@
     "sourceMap": true,
     "noEmit": true
   },
-  "include": ["src", "vitest.config.ts", "eslint.config.js"]
+  "include": ["src", "scripts/**/*.ts", "vitest.config.ts", "eslint.config.js"]
 }

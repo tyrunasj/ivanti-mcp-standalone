@@ -18,6 +18,7 @@ import { registerTools, selectTools } from '../tools/register-tools.js';
 import { registerResources, selectResources } from '../resources/register-resources.js';
 import type { CallContext } from '../tools/tool-definition.js';
 import { buildInstructions } from './instructions.js';
+import { fingerprintManifest, type ManifestFingerprint } from '../tools/manifest-fingerprint.js';
 import { readPackageMetadata } from '../version.js';
 
 // package.json is the single source of truth for both, so a published image and the version it
@@ -31,6 +32,8 @@ export interface ServerFactory {
   toolNames: string[];
   /** URIs of the reference documents it exposes. Empty when no tenant is configured. */
   resourceUris: string[];
+  /** Which instructions this deployment sends, and what they cost per request. */
+  manifest: ManifestFingerprint;
   /**
    * A fresh server per connection — the SDK forbids one instance holding two transports — bound
    * to the identity that connection established.
@@ -126,9 +129,13 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
     resourceUris: resources.map((resource) => resource.uri),
   });
 
+  // Once, like the tools: it is a property of the deployment, not of a session.
+  const manifest = fingerprintManifest(tools, instructions);
+
   return {
     toolNames: tools.map((tool) => tool.name),
     resourceUris: resources.map((resource) => resource.uri),
+    manifest,
     create: (context: CallContext): McpServer => {
       const server = new McpServer(
         { name: SERVER_NAME, version: SERVER_VERSION },
@@ -157,9 +164,10 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
         { ...context, ...(impersonation === undefined ? {} : { impersonation }) },
         deps.logger,
         config.MCP_IDENTITY_IDLE_TTL_SECONDS * 1000,
+        manifest,
       );
       endOnInitialize(server, endConversation);
-      registerResources(server, resources, mayAnswer);
+      registerResources(server, resources, mayAnswer, deps.logger);
       return server;
     },
   };

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Logger } from '../../logger.js';
+import { countIvantiRequest } from '../../usage/call-usage.js';
 import { IvantiApiError, pathOf, scrubErrorBody } from './errors.js';
 
 export interface FetchResponse {
@@ -65,6 +66,8 @@ export async function exchange<T>(
 ): Promise<{ status: number; body: T }> {
   const { fetchImpl, logger, timeoutMs, secrets } = context;
   const started = Date.now();
+  // Counted when sent, not when answered: a timeout cost the call as much as a reply did.
+  countIvantiRequest();
 
   const line = (status: number, error?: string): Record<string, unknown> => ({
     method: init.method,

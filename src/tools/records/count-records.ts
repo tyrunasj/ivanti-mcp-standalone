@@ -4,7 +4,8 @@
 import { z } from 'zod';
 import { referencedFieldNames } from '../../ivanti/odata/filter.js';
 import { buildQuery, readTotal, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { explainFieldError } from '../shared/explain-field-error.js';
 import { jsonResult } from '../shared/result.js';
@@ -76,7 +77,7 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           .catch((error: unknown) => {
             throw explainFieldError(error, entity, referencedFieldNames({ filter: args.filter })) ?? error;
           });
-        const rows = readCollection<OdataRecord>(payload, url);
+        const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
 
         // No count and no rows is Ivanti's empty body for "nothing matched" — which is an exact

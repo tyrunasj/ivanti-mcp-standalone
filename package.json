@@ -18,6 +18,8 @@
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "budget": "vitest run src/tools/description-budget.test.ts --silent=false --reporter=default",
+    "manifest:size": "node --import tsx scripts/manifest-size.ts",
+    "usage:report": "node --import tsx scripts/usage-report.ts",
     "handbook:sync": "node --import tsx scripts/handbook-data.mjs --write",
     "handbook:check": "node --import tsx scripts/handbook-data.mjs --check",
     "version:sync": "node scripts/check-version.mjs --sync",

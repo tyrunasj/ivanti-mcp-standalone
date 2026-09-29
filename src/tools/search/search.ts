@@ -3,7 +3,8 @@
 
 import { z } from 'zod';
 import { buildQuery, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
@@ -96,7 +97,7 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
                 transport.routes.entitySet(entitySet),
                 buildQuery({ search: args.query, filter: scoped.filter, top: PER_OBJECT_TOP }),
               );
-              const rows = readCollection<OdataRecord>(
+              const rows = readRows<OdataRecord>(
                 await transport.request<OdataRecord>(url),
                 url,
               );

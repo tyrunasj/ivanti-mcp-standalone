@@ -4,7 +4,8 @@
 import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { assertOwnRecordById, missingRecordMessage } from '../shared/own-records.js';
 import { errorResult } from '../shared/result.js';
@@ -65,7 +66,7 @@ export function createDownloadAttachmentTool(deps: IvantiToolDeps): ToolDefiniti
           transport.routes.entitySet('attachments'),
           buildQuery({ filter: `RecId eq ${quoteOdataString(args.attachmentId)}`, top: 1 }),
         );
-        const row = readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
+        const row = readRows<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
 
         if (row === undefined) {
           // Same rule as get_attachment_details: to a scoped caller, an attachment that is not

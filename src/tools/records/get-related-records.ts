@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { suggestNames } from '../../ivanti/metadata/suggest-names.js';
 import { ALL_FIELDS, resolveRowFields } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
@@ -96,7 +97,7 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
         const payload = await transport.request<OdataRecord>(url);
         // Ivanti answers an empty relationship with `{"value": "No instances found."}` — a
         // string, not an array. `readCollection` turns that into no rows rather than nineteen.
-        const rows = readCollection<OdataRecord>(payload, url);
+        const rows = readRows<OdataRecord>(payload, url);
 
         const projection = resolveRowFields(parseFieldList(args.fields), args.fields);
         // Decided against the TARGET's rows: a journal, an attachment or a tenant's own object

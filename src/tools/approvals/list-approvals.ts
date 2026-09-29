@@ -3,7 +3,8 @@
 
 import { z } from 'zod';
 import { buildQuery, MAX_TOP, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import { toEntitySet } from '../../ivanti/metadata/entity-names.js';
 import { registersFormTools, type IvantiToolDeps } from '../shared/deps.js';
 import { resolveSubject } from '../shared/own-records.js';
@@ -143,7 +144,7 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
         );
 
         const payload = await transport.request<OdataRecord>(url);
-        const rows = readCollection<OdataRecord>(payload, url);
+        const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
 
         /**

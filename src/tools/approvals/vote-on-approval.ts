@@ -4,7 +4,8 @@
 import { z } from 'zod';
 import { executeAction, listQuickActions } from '../../ivanti/quick-actions/execute.js';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { runTool } from '../shared/run-tool.js';
@@ -101,7 +102,7 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
           transport.routes.entitySet(VOTES),
           buildQuery({ filter: `RecId eq ${quoteOdataString(args.approvalId)}`, top: 1 }),
         );
-        const vote = readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
+        const vote = readRows<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
 
         if (vote === undefined) {
           return errorResult(`No approval with id ${args.approvalId}. Check list_approvals.`);
@@ -180,7 +181,7 @@ export function createVoteOnApprovalTool(deps: IvantiToolDeps): ToolDefinition {
 
         // Ivanti's `saved` flag is not evidence — a rejected action can report true over a record
         // that did not change. Read both rows instead.
-        const after = readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
+        const after = readRows<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
         const recorded = after?.['Status'];
 
         const approvalRecId = vote['ParentLink_RecID'];

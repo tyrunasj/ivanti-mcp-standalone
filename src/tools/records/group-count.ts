@@ -3,7 +3,8 @@
 
 import { z } from 'zod';
 import { buildQuery, quoteOdataString, readTotal, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import { readPickLists } from '../../ivanti/session/pick-lists.js';
 import { toObjectId } from '../../ivanti/write/validated-write.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
@@ -144,7 +145,7 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
 
             try {
               const payload = await transport.request<OdataRecord>(url);
-              const rows = readCollection<OdataRecord>(payload, url);
+              const rows = readRows<OdataRecord>(payload, url);
               const total = readTotal(payload, rows.length);
               // No count and no rows is Ivanti's empty body: an exact zero.
               return total === undefined

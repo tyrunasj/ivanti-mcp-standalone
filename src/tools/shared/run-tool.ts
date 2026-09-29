@@ -10,6 +10,7 @@ import {
   pathOf,
 } from '../../ivanti/http/errors.js';
 import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
+import { noteOutcome } from '../../usage/call-usage.js';
 import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
 import {
   ValidatedValueError,
@@ -55,6 +56,16 @@ export async function runTool(
   try {
     return await run();
   } catch (error: unknown) {
+    // For the usage line: which refusal, by class — most of them never set `name`, and it is the
+    // refusals a model keeps hitting that point at the description that failed to warn it.
+    noteOutcome(
+      error instanceof IvantiApiError
+        ? `ivanti ${String(error.status)}`
+        : error instanceof Error
+          ? error.constructor.name
+          : 'fault',
+    );
+
     // Refused here, never sent: the caller's query was the problem, so this is a rejection
     // rather than a failure and does not belong in the error log.
     if (error instanceof UnsupportedFilterError) {
@@ -201,6 +212,7 @@ export async function runTool(
     }
 
     // Not Ivanti and not a refusal: a bug here. The error is logged whole, stack included.
+    noteOutcome('fault');
     logger.error('tool failed', { tool, error });
     return errorResult(error instanceof Error ? error.message : 'Unknown error');
   }

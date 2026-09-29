@@ -314,12 +314,17 @@ it needs a create form, which OData cannot see.
   | Level | Carries |
   |---|---|
   | `debug` | every Ivanti request with its query, Ivanti error bodies, refusals, MCP request lines |
-  | `info` | lifecycle, the `tool called` audit line, writes, identity changes |
+  | `info` | lifecycle, the `tool called` audit line, the `tool finished` usage line, writes, identity changes |
   | `warn` | running degraded — a lower tier, an unreachable tenant (status 0, 5xx) or a refused credential (401), a rejected origin or token, an MCP protocol error |
   | `error` | faults in this server, with the stack — an unexpected exception, an unhandled rejection, a write that did not store, an orphaned attachment |
 
   An Ivanti 4xx other than 401 is debug: the model already has the explanation, and the mistake
   was its own. A protocol error is warn rather than error because clients cause most of them.
+- **Every call ends in one `tool finished` line** — `outcome` (the refusal's class, `ivanti <status>`,
+  `fault`, or `ok`), sizes, a salted `argsHash`, `rowsRead`, `ivantiRequests`, `ms`, and the
+  `conversation`, `client` and `manifest` fingerprint it belongs to. Sizes and markers, never
+  content. The tally reaches `exchange()`, `readRows()` and `runTool` through `withCallUsage`, the
+  same async-context route the log fields take. [`usage.md`](./usage.md) is how to read it.
 - **Errors are passed as fields, not flattened into strings.** The logger writes an `Error` with its
   name, message and stack, and an `IvantiApiError` by its `toJSON` — path, never URL.
 

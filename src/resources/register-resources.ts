@@ -3,6 +3,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Config } from '../config/env-schema.js';
+import type { Logger } from '../logger.js';
 import type { ToolContext } from '../tools/register-tools.js';
 import { ENTITY_NAMING } from './entity-naming.js';
 import { FIELD_NAMES } from './field-names.js';
@@ -130,26 +131,30 @@ const WITHHELD =
  * `mayAnswer` is the tools' own gate, passed in rather than re-derived: a reference document is a
  * read like any other, and a deployment that refuses every tool until `act_as` should not hand out
  * its manual first. It is optional because a caller that registers no tools has no gate to apply.
+ *
+ * A read is logged with its size: the text is fixed, so `pnpm manifest:size` knows what each
+ * document costs, and this line says how often a conversation pays it.
  */
 export function registerResources(
   server: McpServer,
   resources: readonly ResourceDefinition[],
   mayAnswer: () => boolean = () => true,
+  logger?: Logger,
 ): string[] {
   for (const resource of resources) {
     server.registerResource(
       resource.name,
       resource.uri,
       { title: resource.title, description: resource.description, mimeType: 'text/markdown' },
-      (uri: URL) => ({
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: 'text/markdown',
-            text: mayAnswer() ? resource.text : WITHHELD,
-          },
-        ],
-      }),
+      (uri: URL) => {
+        const text = mayAnswer() ? resource.text : WITHHELD;
+        logger?.info('resource read', {
+          uri: resource.uri,
+          resultChars: text.length,
+          ...(text === WITHHELD ? { outcome: 'IdentityRequiredError' } : {}),
+        });
+        return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text }] };
+      },
     );
   }
 

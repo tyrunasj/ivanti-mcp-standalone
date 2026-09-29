@@ -27,6 +27,7 @@ What a deployment exposes is decided by independent axes, all fixed at startup:
 | [`docs/architecture.md`](docs/architecture.md) | Working on a tool, the identity gate, writes, the manifest or the Ivanti surface — how each part works, and why. |
 | [`docs/notes.md`](docs/notes.md) | Something behaves unexpectedly. **Add to it whenever you hit a trap**, rather than fixing it silently. |
 | [`docs/development.md`](docs/development.md) | Building, checking, or running against the live tenant. |
+| [`docs/usage.md`](docs/usage.md) | Tuning a description or the `instructions`: what they cost, and the failed turns they cause. |
 | [`docs/deployment.md`](docs/deployment.md) | The image, the chart, releasing, deploying. |
 | [`docs/configuration.md`](docs/configuration.md) | Configuring against a real IdP; symptom → cause table. `.env.example` is the reference. |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | The order the work was done in. |
@@ -86,6 +87,12 @@ written down so far has gone stale.
 
 Past a cap, move material into an `ivanti://reference/` resource. Descriptions carry what is
 dangerous not to know; resources carry what is expensive to repeat.
+
+The caps count description characters only; the argument schemas cost about as much again.
+**`pnpm manifest:size`** measures the whole manifest (`--compare` shows what an edit moved; CI
+posts the difference on every PR), and **`pnpm usage:report`** reads each call's size and
+refusals out of the server log. Both count characters — the server is vendor-agnostic, and
+tokenizers are not — see [`docs/usage.md`](docs/usage.md).
 
 ## Toolchain constraints
 

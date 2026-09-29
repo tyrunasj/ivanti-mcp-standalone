@@ -3,7 +3,8 @@
 
 import { z } from 'zod';
 import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
-import { readCollection, type OdataRecord } from '../../ivanti/odata/response.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { readRows } from '../shared/read-rows.js';
 import { registersLinkTools, type IvantiToolDeps } from '../shared/deps.js';
 import { assertRecordWritable, missingRecordMessage } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
@@ -47,7 +48,7 @@ export function createDeleteAttachmentTool(deps: IvantiToolDeps): ToolDefinition
             transport.routes.entitySet('attachments'),
             buildQuery({ filter: `RecId eq ${quoteOdataString(args.attachmentId)}`, top: 1 }),
           );
-          return readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
+          return readRows<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
         };
 
         const existing = await read();
