@@ -23,6 +23,7 @@ import { assertNullFilterTypes } from '../shared/null-filter.js';
 import { ignoredFieldNames, ignoredFieldsNote } from '../shared/ignored-fields.js';
 import { zeroNote } from '../shared/zero-note.js';
 import { transportFor } from '../shared/transport-for.js';
+import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
 export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -56,12 +57,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
     inputSchema: {
       object: z
         .string()
-        .describe(
-          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
-            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
-            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
-            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
-        ),
+        .describe(OBJECT_ARGUMENT),
       filter: z
         .string()
         .optional()

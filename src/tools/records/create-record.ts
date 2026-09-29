@@ -23,6 +23,7 @@ import { projectWritten } from '../shared/project-written.js';
 import { connectionFor } from '../shared/connection-for.js';
 import { assertKnownFields } from '../shared/known-fields.js';
 import { sessionStampedFields, sessionStampNote } from '../shared/session-stamp.js';
+import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
 export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -73,12 +74,7 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
     inputSchema: {
       object: z
         .string()
-        .describe(
-          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
-            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
-            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
-            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
-        ),
+        .describe(OBJECT_ARGUMENT),
       fields: z
         .record(z.string(), z.unknown())
         .describe('Field names to values, e.g. { "Subject": "Printer jam", "Status": "Logged" }.'),

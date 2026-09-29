@@ -11,6 +11,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { knownObjectNames } from '../shared/object-names.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type CallContext, type ToolDefinition } from '../tool-definition.js';
+import { OBJECT_ARGUMENT_IN_FULL } from '../shared/object-argument.js';
 
 /** `Edm.String` → `String`. The prefix is on every field of every entity and carries nothing. */
 function shortType(type: string): string {
@@ -89,12 +90,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
     inputSchema: {
       object: z
         .string()
-        .describe(
-          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
-            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
-            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
-            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
-        ),
+        .describe(OBJECT_ARGUMENT_IN_FULL),
       search: z
         .string()
         .optional()
