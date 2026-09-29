@@ -15,6 +15,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { connectionFor } from '../shared/connection-for.js';
 import { assertFieldName } from '../shared/order-by.js';
+import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
 /** Each bucket is its own round trip, so the fan-out is capped. */
 const MAX_BUCKETS = 25;
@@ -54,12 +55,7 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
     inputSchema: {
       object: z
         .string()
-        .describe(
-          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
-            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
-            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
-            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
-        ),
+        .describe(OBJECT_ARGUMENT),
       groupBy: z.string().describe('The field to count by, e.g. "Status".'),
       values: z
         .array(z.string())

@@ -173,6 +173,16 @@ Fixed by closing the shapes, not by accepting the alias: `strictInput` in `defin
 the handler and names the near miss. `suggestNames` is asked second, because it skips a
 case-insensitive match. A zero-argument tool stays open: clients send a dummy property to one.
 
+**A suggestion that ranks only by containment offers noise for a typo.** `suggestNames` matched a
+name that contains the guess, or is contained in it — so `Incidnet` was offered `ci` (two letters of
+it, and a real object) and never `incident`, which neither contains nor is contained by a
+transposition. A field typo in a filter (`Stauts`) got no suggestion at all. The refusal is the one
+lesson a model gets at the moment it is wrong, so a bad suggestion buys a second wrong call — and
+the short `object` description now leaves that lesson to the refusal. → `suggestNames` has a
+typo tier (Damerau-Levenshtein, one slip under five letters, two above), and a name found inside
+the guess must be at least half of it. The write path's private `orTypos` fallback, which the
+noise had been blocking, is gone. *(Measured live 2026-09-29.)*
+
 **Closing the shapes blinded an existing guard.** `description-budget.test.ts` enumerated
 `inputSchema` with `Object.entries`, which on a `ZodObject` yields zod's internals — it measured zero
 parameters and passed. `declaredArguments` reads either form. A test that enumerates a structure

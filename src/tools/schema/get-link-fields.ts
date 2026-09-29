@@ -12,6 +12,7 @@ import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { buildQuery, withQuery } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
+import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
 /** One page is enough to see which links this tenant actually uses, and cheap. */
 const SAMPLE_ROWS = 25;
@@ -41,12 +42,7 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
     inputSchema: {
       object: z
         .string()
-        .describe(
-          'Business Object, in any of the three forms Ivanti spells them — the AdminUI id, the ' +
-            'entity set, or the entity (`Incident#` / `Incidents` / `incident`, and the same ' +
-            'shape for a Business Object this tenant defined itself). Names are tenant-specific: ' +
-            'take them from list_business_objects rather than assuming the ones Ivanti ships.',
-        ),
+        .describe(OBJECT_ARGUMENT),
     },
     handler: (args) =>
       runTool('get_link_fields', deps.logger, async () => {
