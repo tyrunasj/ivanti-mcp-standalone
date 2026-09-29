@@ -2,13 +2,33 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Logger } from '../../logger.js';
-import { IvantiApiError, scrubErrorBody } from './errors.js';
-import { exchange, readText, type ExchangeContext, type FetchLike } from './exchange.js';
+import { IvantiApiError, ResponseTooLargeError, scrubErrorBody } from './errors.js';
+import {
+  exchange,
+  readText,
+  type ExchangeContext,
+  type FetchLike,
+  type FetchResponse,
+} from './exchange.js';
 import { createIvantiRoutes, type IvantiRoutes } from '../odata/url.js';
 
 export type { FetchLike } from './exchange.js';
 
+/** Reads: `IVANTI_TIMEOUT_MS`. */
 export const DEFAULT_TIMEOUT_MS = 10_000;
+
+/**
+ * Everything but a GET: `IVANTI_WRITE_TIMEOUT_MS`. Three times the read timeout because a create
+ * runs the tenant's workflow before it answers — measured past 10 s on workflow-heavy objects — and
+ * a write that times out may still have been applied, which is the costliest way to fail.
+ */
+export const DEFAULT_WRITE_TIMEOUT_MS = 30_000;
+
+/**
+ * The most `requestBinary` reads when the caller names no cap. Nothing a conversation can hold is
+ * anywhere near it; the cap is there so that a 2 GB attachment is refused rather than buffered.
+ */
+export const DEFAULT_MAX_BINARY_BYTES = 25 * 1024 * 1024;
 
 export interface TransportOptions {
   baseUrl: string;
@@ -17,7 +37,10 @@ export interface TransportOptions {
   apiKey: string;
   logger: Logger;
   fetchImpl?: FetchLike;
+  /** GETs. */
   timeoutMs?: number;
+  /** Everything else — creates, updates, deletes, uploads. */
+  writeTimeoutMs?: number;
   /**
    * Authenticate as an impersonated session instead of with the API key.
    *
@@ -56,8 +79,15 @@ export interface IvantiTransport {
    * `requestText` would decode whatever came back as UTF-8, which silently corrupts anything that
    * is not — a PNG read that way is not a PNG any more. So this reads the body as bytes and hands
    * back what Ivanti said it was.
+   *
+   * Never more than `maxBytes` (default `DEFAULT_MAX_BINARY_BYTES`): a declared `Content-Length`
+   * over it is refused before the body is read, and an undeclared one is read until it passes the
+   * cap and abandoned there. Either way the caller gets a `ResponseTooLargeError`.
    */
-  requestBinary: (url: string) => Promise<{ bytes: Uint8Array; contentType: string }>;
+  requestBinary: (
+    url: string,
+    options?: { maxBytes?: number },
+  ) => Promise<{ bytes: Uint8Array; contentType: string }>;
   /**
    * The same surface, authenticating as an impersonated session.
    *
@@ -83,6 +113,7 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     logger,
     fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    writeTimeoutMs = DEFAULT_WRITE_TIMEOUT_MS,
     sid,
   } = options;
 
@@ -90,6 +121,7 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     fetchImpl,
     logger,
     timeoutMs,
+    writeTimeoutMs,
     secrets: sid === undefined ? [apiKey] : [apiKey, sid],
   };
 
@@ -174,7 +206,10 @@ export function createTransport(options: TransportOptions): IvantiTransport {
       return parse<T>(text, url, 'POST');
     },
 
-    async requestBinary(url: string): Promise<{ bytes: Uint8Array; contentType: string }> {
+    async requestBinary(
+      url: string,
+      { maxBytes = DEFAULT_MAX_BINARY_BYTES }: { maxBytes?: number } = {},
+    ): Promise<{ bytes: Uint8Array; contentType: string }> {
       const { body } = await exchange(
         url,
         // The same credential as every other call here. This method once built its own headers,
@@ -182,19 +217,11 @@ export function createTransport(options: TransportOptions): IvantiTransport {
         // impersonated person as the service account.
         { method: 'GET', headers: { ...credential, Accept: '*/*' } },
         context,
-        async (response) => {
-          if (response.arrayBuffer === undefined) {
-            throw new IvantiApiError(
-              { status: 200, method: 'GET', url },
-              'This transport cannot read a file body',
-            );
-          }
-          return {
-            bytes: new Uint8Array(await response.arrayBuffer()),
-            // What Ivanti says it is. Sniffing would be guessing about somebody's file.
-            contentType: response.headers?.get('content-type') ?? 'application/octet-stream',
-          };
-        },
+        async (response) => ({
+          bytes: await readCapped(response, url, maxBytes),
+          // What Ivanti says it is. Sniffing would be guessing about somebody's file.
+          contentType: response.headers?.get('content-type') ?? 'application/octet-stream',
+        }),
       );
       return body;
     },
@@ -207,4 +234,59 @@ export function createTransport(options: TransportOptions): IvantiTransport {
         .text;
     },
   };
+}
+
+/**
+ * A file body, never more than `maxBytes` of it.
+ *
+ * `arrayBuffer()` reads the whole of whatever arrives before anyone can look at its size, so an
+ * attachment of any size used to be held in memory — and again as base64 — only to find out it was
+ * too big to return. The declared length refuses the obvious case for free; the stream refuses the
+ * rest, including a body that decompresses to far more than its `Content-Length` said.
+ */
+async function readCapped(
+  response: FetchResponse,
+  url: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const declared = Number(response.headers?.get('content-length') ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    // Released rather than left for the connection to drain.
+    await response.body?.cancel().catch(() => undefined);
+    throw new ResponseTooLargeError(url, maxBytes, declared);
+  }
+
+  if (response.body !== undefined && response.body !== null) {
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new ResponseTooLargeError(url, maxBytes);
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  }
+
+  // A fixture with no stream. Bounded after the fact, which still bounds what is handed back.
+  if (response.arrayBuffer === undefined) {
+    throw new IvantiApiError(
+      { status: 200, method: 'GET', url },
+      'This transport cannot read a file body',
+    );
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > maxBytes) throw new ResponseTooLargeError(url, maxBytes, bytes.byteLength);
+  return bytes;
 }

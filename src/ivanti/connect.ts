@@ -30,7 +30,15 @@ export interface ConnectOptions {
   impersonation?: { configUrl: string; apiKey: string };
   logger: Logger;
   fetchImpl?: FetchLike & ProbeFetch;
+  /** A GET: `IVANTI_TIMEOUT_MS`. */
   timeoutMs?: number;
+  /**
+   * Everything else: `IVANTI_WRITE_TIMEOUT_MS`. Also the whole of the ASMX session and
+   * CentralConfig, whose calls are POSTs whether they read or write, or open and close sessions —
+   * the method cannot tell a read there from a quick action, so neither gets cut off at a read's
+   * timeout.
+   */
+  writeTimeoutMs?: number;
 }
 
 export interface IvantiConnection {
@@ -101,11 +109,15 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     logger,
     fetchImpl = globalThis.fetch,
     timeoutMs,
+    writeTimeoutMs,
     maxTier,
     impersonation,
   } = options;
 
-  const probe = await probeBasePath(baseUrl, apiKey, fetchImpl, timeoutMs);
+  // The session surfaces keep their own default unless told otherwise; see `writeTimeoutMs`.
+  const sessionTimeoutMs = writeTimeoutMs ?? timeoutMs;
+
+  const probe = await probeBasePath(baseUrl, apiKey, fetchImpl, timeoutMs, logger);
 
   // Every attempt, not just the winner: a tenant that answered `/HEAT` only on the third CSDL form
   // is worth knowing about before its first `$metadata` read misbehaves.
@@ -113,6 +125,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     attempted: probe.attempted.map((attempt) => ({
       path: new URL(attempt.url).pathname,
       status: attempt.status,
+      ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
     })),
   });
 
@@ -130,6 +143,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     logger,
     fetchImpl,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(writeTimeoutMs === undefined ? {} : { writeTimeoutMs }),
   });
 
   const session = createSession({
@@ -138,7 +152,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     apiKey,
     logger,
     fetchImpl,
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(sessionTimeoutMs === undefined ? {} : { timeoutMs: sessionTimeoutMs }),
   });
 
   const admin = createAdminCatalog(session, logger);
@@ -157,7 +171,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
           apiKey: impersonation.apiKey,
           logger,
           fetchImpl,
-          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+          ...(sessionTimeoutMs === undefined ? {} : { timeoutMs: sessionTimeoutMs }),
         });
 
   const capability = await probeCapability(session, admin, logger, maxTier, centralConfig);

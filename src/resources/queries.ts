@@ -95,8 +95,10 @@ A get-by-key for a record that does not exist answers **400 ISM_4000 "Invalid ke
 status and the same code as a malformed field name. "Not found" and "you typed the field name
 wrong" are indistinguishable from the status alone.
 
-**Zero rows means the records do not exist.** After \`IncidentNumber eq 11150\` returns nothing, do
-not go hunting through neighbouring numbers: it is an answer, not a near miss.
+**Zero rows from a filter means no such records** — unless the answer carries \`scopedTo\`. Then
+it means none *that person can see*: someone else's record answers zero too, so say you cannot
+see it, not that it does not exist. Either way, after \`IncidentNumber eq 11150\` returns nothing,
+do not go hunting through neighbouring numbers: it is an answer, not a near miss.
 
 ## Never read success from a 200
 

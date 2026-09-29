@@ -95,6 +95,61 @@ describe('search', () => {
 
     expect(body(await search.handler({ query: 'orphan' })).results).toEqual([]);
   });
+
+  /**
+   * Ten hits an object and twenty-five in all, cut with nothing saying so: a list of ten reads as
+   * "the matches". Ivanti's count is asked for and reported per object.
+   */
+  it('reports how much each object matched, and that the answer was cut', async () => {
+    const hits = (prefix: string) =>
+      Array.from({ length: 10 }, (_, i) => ({ RecId: `${prefix}${String(i)}`, Subject: 'Printer' }));
+    const { search, urls } = tools({
+      incidents: { value: hits('i'), '@odata.count': 48 },
+      servicereqs: { value: hits('s'), '@odata.count': 10 },
+      changes: { value: hits('c'), '@odata.count': 12 },
+    });
+
+    const result = body(await search.handler({ query: 'printer' }));
+
+    expect(urls.every((url) => url.includes('$count=true'))).toBe(true);
+    expect(result.results).toHaveLength(25);
+    expect(result.perObject).toEqual([
+      { object: 'incidents', matched: 48, shown: 10 },
+      { object: 'servicereqs', matched: 10, shown: 10 },
+      // The overall cap took five of these, and that is said too.
+      { object: 'changes', matched: 12, shown: 5 },
+    ]);
+    expect(result.truncated).toBe(true);
+    expect(String(result.truncatedNote)).toContain('NOT ALL THE MATCHES');
+  });
+
+  it('says nothing was cut when nothing was', async () => {
+    const { search } = tools({
+      incidents: { value: [{ RecId: 'i1', Subject: 'Printer' }], '@odata.count': 1 },
+    });
+
+    const result = body(await search.handler({ query: 'printer' }));
+
+    expect(result.truncated).toBe(false);
+    expect(result).not.toHaveProperty('truncatedNote');
+  });
+
+  it('marks a count Ivanti did not send as the rows alone', async () => {
+    const { search } = tools({ incidents: { value: [{ RecId: 'i1', Subject: 'Printer' }] } });
+
+    const perObject = body(await search.handler({ query: 'printer' })).perObject as unknown as {
+      object: string;
+      matchedIsExact?: boolean;
+    }[];
+
+    expect(perObject.find((entry) => entry.object === 'incidents')?.matchedIsExact).toBe(false);
+    // Ivanti's empty body is its way of saying "nothing matched" — a real zero, not a floor.
+    expect(perObject.find((entry) => entry.object === 'changes')).toEqual({
+      object: 'changes',
+      matched: 0,
+      shown: 0,
+    });
+  });
 });
 
 describe('fetch', () => {
@@ -126,5 +181,41 @@ describe('fetch', () => {
     const result = await fetchTool.handler({ id: 'incidents:gone' });
 
     expect(result.isError).toBe(true);
+  });
+
+  /**
+   * The object half of an id is the caller's text, and the route interpolates an entity set raw:
+   * this id passed an open gate and sent an authenticated GET to `/api/rest/X('1')`.
+   */
+  it.each([
+    ['../../rest/X:1'],
+    ['incidents/../../rest/X:1'],
+    ["incidents:i1')/x"],
+  ])('refuses %s without sending anything', async (id) => {
+    const { fetch: fetchTool, urls } = tools({ "incidents('i1')": { RecId: 'i1' } });
+
+    const result = await fetchTool.handler({ id });
+
+    expect(result.isError).toBe(true);
+    expect(urls).toEqual([]);
+  });
+
+  it('resolves the object before building a URL from it', async () => {
+    // A well-formed name that is not an object is refused by the catalog, with suggestions,
+    // rather than becoming a path segment.
+    const { fetch: fetchTool, urls } = tools({});
+
+    const result = await fetchTool.handler({ id: 'incidentz:abc' });
+
+    expect(result.isError).toBe(true);
+    expect(urls).toEqual([]);
+  });
+
+  it('reads the catalog’s entity set, whatever spelling the id used', async () => {
+    const { fetch: fetchTool, urls } = tools({ "incidents('i1')": { RecId: 'i1', Subject: 'x' } });
+
+    await fetchTool.handler({ id: 'Incident:i1' });
+
+    expect(urls[0]).toContain("/businessobject/incidents('i1')");
   });
 });

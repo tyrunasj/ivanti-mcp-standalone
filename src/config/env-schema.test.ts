@@ -49,6 +49,19 @@ describe('envSchema', () => {
       envSchema.safeParse({ MCP_PUBLIC_URL: 'mcp.example.com' }).success,
     ).toBe(false);
   });
+
+  it('leaves the per-subject session limit unset, and takes only a positive whole number', () => {
+    expect(envSchema.parse({}).MCP_MAX_SESSIONS_PER_SUBJECT).toBeUndefined();
+    expect(envSchema.parse({ MCP_MAX_SESSIONS_PER_SUBJECT: '3' }).MCP_MAX_SESSIONS_PER_SUBJECT).toBe(3);
+    expect(envSchema.safeParse({ MCP_MAX_SESSIONS_PER_SUBJECT: '0' }).success).toBe(false);
+    expect(envSchema.safeParse({ MCP_MAX_SESSIONS_PER_SUBJECT: '1.5' }).success).toBe(false);
+  });
+
+  it('does not require impersonation unless told to', () => {
+    expect(envSchema.parse({}).IVANTI_IMPERSONATION_REQUIRED).toBe(false);
+    expect(envSchema.parse({ IVANTI_IMPERSONATION_REQUIRED: 'true' }).IVANTI_IMPERSONATION_REQUIRED).toBe(true);
+    expect(envSchema.safeParse({ IVANTI_IMPERSONATION_REQUIRED: 'maybe' }).success).toBe(false);
+  });
 });
 
 describe('ENDUSER_BUSINESS_OBJECTS', () => {

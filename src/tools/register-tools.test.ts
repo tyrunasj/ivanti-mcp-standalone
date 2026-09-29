@@ -7,7 +7,13 @@ import { configFixture } from '../config/config.fixture.js';
 import { connectionFixture } from '../ivanti/connection.fixture.js';
 import { createLogger, type Logger } from '../logger.js';
 import { ANONYMOUS, assertedIdentity, verifiedIdentity, type CallerIdentity } from '../auth/identity.js';
-import { createImpersonationSlot, type ImpersonationSlot } from '../auth/impersonation.js';
+import {
+  createImpersonationSlot,
+  type ImpersonationSlot,
+  type SessionOpener,
+} from '../auth/impersonation.js';
+import { IvantiApiError } from '../ivanti/http/errors.js';
+import type { ImpersonatedSession } from '../ivanti/session/impersonated-session.js';
 import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
 import { registerTools, selectTools } from './register-tools.js';
 import type { ToolDefinition } from './tool-definition.js';
@@ -372,7 +378,7 @@ const SIGNED_IN = verifiedIdentity({
   subject: 'opaque-pairwise-id',
   issuer: 'https://idp',
   scopes: [],
-  claims: { email: 'HSanders@example.com' },
+  claims: { email: 'HSanders@example.com', email_verified: true },
 });
 
 /**
@@ -615,5 +621,365 @@ describe('a signed-in conversation', () => {
     await handle.endConversation();
 
     expect((await call('get_version')).isError).toBeUndefined();
+  });
+
+  // A directory 5xx or a timeout was cached with the attempt and replayed on every call for the
+  // rest of the conversation — one bad second, and the signed-in person could do nothing.
+  it('tries again after a failed attempt rather than replaying it', async () => {
+    const { connection } = connectionFixture({ entities: { employee: {} } });
+    const find = vi
+      .fn()
+      .mockRejectedValueOnce(new IvantiApiError({ status: 503, method: 'GET', url: 'https://t/x' }))
+      .mockResolvedValue([HAROLD_CANDIDATE]);
+    (connection.people as unknown as { directory: unknown }).directory = { find };
+    const { call } = serve(selectTools(config(), { ...context, ivanti: connection }), {
+      identity: SIGNED_IN,
+    });
+
+    const failed = await call('get_version');
+    expect(failed.isError).toBe(true);
+    expect(JSON.stringify(failed.content)).toContain('calling `act_as` tries again');
+
+    expect((await call('get_version')).isError).toBeUndefined();
+    expect(find).toHaveBeenCalledTimes(2);
+  });
+
+  // A question is not a failure: it stands until the person answers it.
+  it('keeps asking the same question rather than looking the person up again', async () => {
+    const { connection } = connectionFixture({ entities: { employee: {} } });
+    const find = vi.fn(() => Promise.resolve([{ ...HAROLD_CANDIDATE, matchedOn: 'name' }]));
+    (connection.people as unknown as { directory: unknown }).directory = { find };
+    const { call } = serve(selectTools(config(), { ...context, ivanti: connection }), {
+      identity: verifiedIdentity({
+        subject: 's',
+        issuer: 'https://idp',
+        scopes: [],
+        claims: { preferred_username: 'Harold Sanders' },
+      }),
+    });
+
+    expect(JSON.stringify((await call('get_version')).content)).toContain('confirm');
+    expect(JSON.stringify((await call('get_version')).content)).toContain('confirm');
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** What the directory answers for Harold, as `act_as` receives it. */
+const HAROLD_CANDIDATE = {
+  recId: 'e1',
+  category: 'employee',
+  displayName: 'Harold Sanders',
+  loginId: 'HSanders',
+  primaryEmail: 'HSanders@example.com',
+  matchedOn: 'LoginID',
+  status: 'Active',
+};
+
+/** A tenant whose directory knows exactly the people named, by login. */
+function directoryOf(
+  people: Record<string, typeof HAROLD_CANDIDATE>,
+  options: { impersonation?: ImpersonationSlot; logger?: Logger; extra?: ToolDefinition[] } = {},
+) {
+  const { connection } = connectionFixture({ entities: { employee: {}, incident: {} } });
+  (connection.people as unknown as { directory: unknown }).directory = {
+    find: (claim: string) => Promise.resolve(people[claim] === undefined ? [] : [people[claim]]),
+  };
+  return serve([...selectTools(config(), { ...context, ivanti: connection }), ...(options.extra ?? [])], {
+    ...(options.impersonation === undefined ? {} : { impersonation: options.impersonation }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  });
+}
+
+/**
+ * A tool that answers with the login of the session it ran on — or, on the sessions named, is
+ * refused by Ivanti as unauthenticated, the way a request on a dead session is.
+ */
+function probeTool(options: { readOnly: boolean; refusedOn?: ImpersonatedSession[] }) {
+  const runs: (string | undefined)[] = [];
+  const tool: ToolDefinition = {
+    name: 'probe',
+    config: {
+      title: 'Probe',
+      description: 'Reports its session.',
+      inputSchema: {},
+      annotations: { readOnlyHint: options.readOnly },
+    },
+    handler: async (_args, call) => {
+      const { runTool } = await import('./shared/run-tool.js');
+      return runTool('probe', logger(), () => {
+        const held = call?.impersonation?.session();
+        runs.push(held?.sid);
+        if (held !== undefined && options.refusedOn?.includes(held) === true) {
+          throw new IvantiApiError({ status: 401, method: 'GET', url: 'https://t/HEAT/api/odata/x' });
+        }
+        return Promise.resolve({ content: [{ type: 'text' as const, text: held?.sid ?? 'service account' }] });
+      });
+    },
+  };
+  return { tool, runs };
+}
+
+const sessionAs = (sid: string, overrides: Partial<ImpersonatedSession> = {}): ImpersonatedSession =>
+  impersonatedSessionFixture({ sid, loginId: 'HSanders', ...overrides });
+
+/**
+ * The Ivanti session a conversation holds as its person, across the life of the conversation.
+ */
+describe('the person\'s Ivanti session', () => {
+  /**
+   * A conversation that ends while `act_as` is still opening a session. With nobody pinned yet,
+   * ending it released nothing; the handshake then landed in the next conversation's slot, and
+   * every `act_as` there for anyone else was refused — naming the first person — until a restart.
+   */
+  it('is given back when the conversation ends mid-handshake, and the next person gets in', async () => {
+    const landings: ((session: ImpersonatedSession) => void)[] = [];
+    const impersonation = createImpersonationSlot(
+      () => new Promise<ImpersonatedSession>((resolve) => landings.push(resolve)),
+    );
+    const { call, handle } = directoryOf(
+      { HSanders: HAROLD_CANDIDATE, ACope: { ...HAROLD_CANDIDATE, recId: 'e2', displayName: 'Anna Cope', loginId: 'ACope' } },
+      { impersonation },
+    );
+
+    const first = call('act_as', { person: 'HSanders' });
+    await vi.waitFor(() => {
+      expect(landings).toHaveLength(1);
+    });
+    // Not awaited first: giving back an in-flight handshake waits for it to land.
+    const ended = handle.endConversation();
+    landings[0]?.(sessionAs('tenant#HAROLD#1'));
+    await ended;
+    expect((await first).isError).toBe(true);
+
+    const next = call('act_as', { person: 'ACope' });
+    await vi.waitFor(() => {
+      expect(landings).toHaveLength(2);
+    });
+    landings[1]?.(impersonatedSessionFixture({ sid: 'tenant#ANNA#1', loginId: 'ACope' }));
+
+    expect((await next).isError).toBeUndefined();
+    expect(impersonation.session()?.loginId).toBe('ACope');
+  });
+
+  it('is re-opened when Ivanti refuses it, and a read is retried on the new one', async () => {
+    const dead = sessionAs('tenant#DEAD#1');
+    const fresh = sessionAs('tenant#FRESH#1');
+    const opened = [dead, fresh];
+    const open = vi.fn(() => Promise.resolve(opened.shift() ?? fresh));
+    const probe = probeTool({ readOnly: true, refusedOn: [dead] });
+    const { call } = directoryOf({ HSanders: HAROLD_CANDIDATE }, { impersonation: createImpersonationSlot(open), extra: [probe.tool] });
+
+    await call('act_as', { person: 'HSanders' });
+    const result = await call('probe');
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]?.text).toBe('tenant#FRESH#1');
+    expect(probe.runs).toEqual(['tenant#DEAD#1', 'tenant#FRESH#1']);
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  // A write refused partway may already have done part of its work; repeating it would do it twice.
+  it('is re-opened for a write too, but the write is not repeated', async () => {
+    const dead = sessionAs('tenant#DEAD#1');
+    const fresh = sessionAs('tenant#FRESH#1');
+    const opened = [dead, fresh];
+    const impersonation = createImpersonationSlot(() => Promise.resolve(opened.shift() ?? fresh));
+    const probe = probeTool({ readOnly: false, refusedOn: [dead] });
+    const { call } = directoryOf({ HSanders: HAROLD_CANDIDATE }, { impersonation, extra: [probe.tool] });
+
+    await call('act_as', { person: 'HSanders' });
+    const result = await call('probe');
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('was not repeated');
+    expect(probe.runs).toEqual(['tenant#DEAD#1']);
+    expect(impersonation.session()).toBe(fresh);
+  });
+
+  it('refuses rather than answering as the service account when it cannot be re-opened', async () => {
+    const dead = sessionAs('tenant#DEAD#1');
+    const open = vi
+      .fn()
+      .mockResolvedValueOnce(dead)
+      .mockRejectedValue(new Error('Ivanti has no enabled user named HSanders.'));
+    const probe = probeTool({ readOnly: true, refusedOn: [dead] });
+    const { call } = directoryOf(
+      { HSanders: HAROLD_CANDIDATE },
+      { impersonation: createImpersonationSlot(open as SessionOpener), extra: [probe.tool] },
+    );
+
+    await call('act_as', { person: 'HSanders' });
+    const refused = await call('probe');
+    const again = await call('probe');
+
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0]?.text).toContain('does not answer as its own account');
+    expect(refused.content[0]?.text).toContain('no enabled user');
+    // The next call tried again, and still never ran on the service account.
+    expect(again.isError).toBe(true);
+    expect(probe.runs).toEqual(['tenant#DEAD#1']);
+    expect(open).toHaveBeenCalledTimes(3);
+  });
+
+  it('is re-opened before the call once it is past the expiry CentralConfig gave it', async () => {
+    vi.useFakeTimers();
+    try {
+      const expiring = sessionAs('tenant#OLD#1', {
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      });
+      const fresh = sessionAs('tenant#NEW#1');
+      const opened = [expiring, fresh];
+      const probe = probeTool({ readOnly: true });
+      const { call } = directoryOf(
+        { HSanders: HAROLD_CANDIDATE },
+        { impersonation: createImpersonationSlot(() => Promise.resolve(opened.shift() ?? fresh)), extra: [probe.tool] },
+      );
+
+      await call('act_as', { person: 'HSanders' });
+      vi.advanceTimersByTime(10 * 60_000);
+      await call('probe');
+
+      expect(probe.runs).toEqual(['tenant#NEW#1']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // RemoveSession ends nothing on Ivanti's side and can take its whole timeout to say so.
+  it('is given back after a quiet spell without holding up the call that noticed', async () => {
+    const impersonation = createImpersonationSlot(() =>
+      Promise.resolve(sessionAs('tenant#A#1', { release: () => new Promise<void>(() => undefined) })),
+    );
+    const { call } = serve(
+      selectTools(config(), {
+        ...context,
+        ivanti: connectionFixture({ entities: { employee: {} }, responses: { $filter: { value: [HAROLD] } } })
+          .connection,
+      }),
+      { idleMs: 1, impersonation },
+    );
+    await call('act_as', { person: 'HSanders' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const answered = await Promise.race([
+      call('get_version').then(() => 'answered'),
+      new Promise((resolve) => setTimeout(() => { resolve('still waiting'); }, 200)),
+    ]);
+
+    expect(answered).toBe('answered');
+    expect(impersonation.session()).toBeUndefined();
+  });
+});
+
+describe('a call the conversation outlived', () => {
+  const slowTool = (readOnly: boolean) => {
+    let finish!: () => void;
+    const done = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const tool: ToolDefinition = {
+      name: 'probe',
+      config: { title: 'Probe', description: 'Slow.', inputSchema: {}, annotations: { readOnlyHint: readOnly } },
+      handler: async () => {
+        await done;
+        return { content: [{ type: 'text', text: 'done' }] };
+      },
+    };
+    return { tool, finish };
+  };
+
+  const outlive = async (readOnly: boolean): Promise<string> => {
+    const slow = slowTool(readOnly);
+    const { call, handle } = directoryOf({ HSanders: HAROLD_CANDIDATE }, { extra: [slow.tool] });
+    await call('act_as', { person: 'HSanders' });
+
+    const pending = call('probe');
+    await handle.endConversation();
+    slow.finish();
+    return (await pending).content[0]?.text ?? '';
+  };
+
+  it('tells the model to retry a read', async () => {
+    expect(await outlive(true)).toContain('then retry');
+  });
+
+  // The write reached Ivanti whatever became of its result; "retry" would do it twice.
+  it('tells the model to check before repeating a write', async () => {
+    const text = await outlive(false);
+
+    expect(text).toContain('may already have been made');
+    expect(text).not.toContain('then retry');
+  });
+
+  // Ending the conversation empties its slot, and an empty slot means "the service account" to
+  // everything that routes a request — so the rest of a running write went out as this server.
+  it('keeps running on the person\'s session, never the service account', async () => {
+    let finish!: () => void;
+    const done = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const seen: (string | undefined)[] = [];
+    const tool: ToolDefinition = {
+      name: 'probe',
+      config: { title: 'Probe', description: 'Slow.', inputSchema: {}, annotations: { readOnlyHint: false } },
+      handler: async (_args, call) => {
+        await done;
+        seen.push(call?.impersonation?.session()?.sid);
+        return { content: [] };
+      },
+    };
+    const impersonation = createImpersonationSlot(() => Promise.resolve(sessionAs('tenant#HAROLD#1')));
+    const { call, handle } = directoryOf({ HSanders: HAROLD_CANDIDATE }, { impersonation, extra: [tool] });
+    await call('act_as', { person: 'HSanders' });
+
+    const pending = call('probe');
+    await handle.endConversation();
+    finish();
+    await pending;
+
+    expect(impersonation.session()).toBeUndefined();
+    expect(seen).toEqual(['tenant#HAROLD#1']);
+  });
+});
+
+/**
+ * The audit line for a write says which record it was aimed at — by id, never by value. Without
+ * it a `delete_record` line said who deleted something and never what.
+ */
+describe('the audit line for a write', () => {
+  const audited = async (tool: string, args: Record<string, unknown>) => {
+    const lines: { message: string; fields?: Record<string, unknown> }[] = [];
+    const log: Logger = {
+      ...logger(),
+      info: (message: string, fields?: Record<string, unknown>) => lines.push({ message, fields }),
+    };
+    const { call } = directoryOf({ HSanders: HAROLD_CANDIDATE }, { logger: log });
+    await call('act_as', { person: 'HSanders' });
+    await call(tool, args);
+    return lines.filter((line) => line.message === 'tool called' && line.fields?.['tool'] === tool);
+  };
+
+  it('names the record delete_record was aimed at', async () => {
+    const [line] = await audited('delete_record', { object: 'Incidents', recordId: 'A1B2C3' });
+
+    expect(line?.fields?.['targets']).toEqual({ object: 'Incidents', recordId: 'A1B2C3' });
+  });
+
+  it('names the record update_record changed, and none of the values it wrote', async () => {
+    const lines = await audited('update_record', {
+      object: 'Incidents',
+      recordId: 'A1B2C3',
+      fields: { Subject: 'Printer on fire', Symptom: 'smoke from tray 2' },
+    });
+
+    expect(lines[0]?.fields?.['targets']).toEqual({ object: 'Incidents', recordId: 'A1B2C3' });
+    expect(JSON.stringify(lines)).not.toContain('Printer on fire');
+    expect(JSON.stringify(lines)).not.toContain('Subject');
+  });
+
+  it('names nothing for a read', async () => {
+    const [line] = await audited('get_record', { object: 'Incidents', recordId: 'A1B2C3' });
+
+    expect(line?.fields).not.toHaveProperty('targets');
   });
 });

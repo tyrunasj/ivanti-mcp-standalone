@@ -8,7 +8,9 @@ import {
   isIvantiNotFound,
   isIvantiPromptRefusal,
   pathOf,
+  ResponseTooLargeError,
 } from '../../ivanti/http/errors.js';
+import { isReadMethod } from '../../ivanti/http/exchange.js';
 import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
 import { noteOutcome } from '../../usage/call-usage.js';
 import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
@@ -175,32 +177,45 @@ export async function runTool(
       return errorResult(error.message);
     }
 
+    // Ivanti answered, with more than the caller agreed to hold. Nothing failed.
+    if (error instanceof ResponseTooLargeError) {
+      logger.debug('tool refused a response too large to read', { tool });
+      return errorResult(error.message);
+    }
+
     if (error instanceof IvantiApiError) {
       // Unreachable, down, or no longer accepting our credential: nothing the model sends can fix
       // any of those, so they are the operator's to see at info. 401 belongs here because it means
       // the key or the session stopped working. No body: Ivanti echoes what was submitted, and the
-      // body is already on the debug `ivanti request failed` line.
+      // body is already on the debug `ivanti request failed` line. The code is not a body — it
+      // is `ENOTFOUND` or `CERT_HAS_EXPIRED`, the one thing that says which of those it was.
       if (error.status === 0 || error.status >= 500 || error.status === 401) {
         logger.warn('ivanti unavailable', {
           tool,
           status: error.status,
           method: error.method,
           path: pathOf(error.url),
+          ...(error.code === undefined ? {} : { code: error.code }),
         });
       } else {
         // A refusal of what the model asked for, and the model is told why below.
         logger.debug('ivanti refused the request', { tool, status: error.status });
       }
 
+      if (isUnanswered(error)) return errorResult(noAnswer(error));
+
       // The transition, not the request. Saying "does not exist" here — which the bare ISM_4000
       // match used to do — sends a caller hunting for a field name that was never wrong.
+      //
+      // Names no tool: quick actions are not registered in `enduser` without an allowlist, nor on
+      // the odata tier, and advice to call a tool that is not there is a dead end.
       if (isIvantiPromptRefusal(error)) {
         return errorResult(
           'Ivanti refused this transition with a prompt the API cannot answer. THE GATE IS ' +
             'USUALLY ON THIS VALUE, NOT ON THE FIELD — measured, the same field on the same ' +
-            'record accepted two neighbouring values seconds later, so try those first. A quick ' +
-            'action may perform the transition (list_quick_actions), but a tenant can gate a ' +
-            'status that has no action behind it, in which case it can only be changed in the ' +
+            'record accepted two neighbouring values seconds later, so try those first. Where ' +
+            'quick actions are available, one may perform the transition, but a tenant can gate ' +
+            'a status that has no action behind it, in which case it can only be changed in the ' +
             `Ivanti web client — do not keep hunting for an action that may not exist.\n${error.body}`,
         );
       }
@@ -216,4 +231,33 @@ export async function runTool(
     logger.error('tool failed', { tool, error });
     return errorResult(error instanceof Error ? error.message : 'Unknown error');
   }
+}
+
+/**
+ * Nothing came back — which is not the same as no.
+ *
+ * Status 0 (a timeout, a reset, a dropped connection) and a gateway's 502 or 504 all mean the
+ * request may well have reached Ivanti and nothing returned to say what became of it. Reported as
+ * "Ivanti refused the request (0)", a create that ran past the timeout read as a refusal; the
+ * model tried again and filed the ticket twice. For a write the only safe next step is to look.
+ */
+const isUnanswered = (error: IvantiApiError): boolean =>
+  error.status === 0 || error.status === 502 || error.status === 504;
+
+function noAnswer(error: IvantiApiError): string {
+  const why =
+    error.status === 0 ? error.body : `${String(error.status)} from a gateway in front of Ivanti`;
+  if (isReadMethod(error.method)) {
+    return (
+      `Ivanti did not answer (${why}). This is not a refusal, and nothing about the request was ` +
+      'wrong — Ivanti was slow or unreachable. Trying once more is safe; if it fails the same ' +
+      'way, say that Ivanti is not responding rather than changing the request.'
+    );
+  }
+  return (
+    `Ivanti did not answer this ${error.method} (${why}), so whether it was applied is unknown. ` +
+    'THIS IS NOT A REFUSAL, AND IT MAY HAVE TAKEN EFFECT. Before trying again, check: read back ' +
+    'the record it would have changed, or search for the one it would have created. Retrying ' +
+    'without looking can do it twice.'
+  );
 }

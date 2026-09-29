@@ -130,6 +130,10 @@ export interface SessionCaller {
  * The reply carries the new `ActiveRole`, so the role is **read back rather than assumed** without
  * a second call — `AuthenticateTenantAPIKey` already set the precedent that a requested role is a
  * request, and silently answers with a different one.
+ *
+ * @throws RoleNotAppliedError when the reply names no role. That was once read as "the role asked
+ * for", which reported a session as holding a role Ivanti never confirmed — and a session with no
+ * role reads zero of everything, so the next answer would have been "you have no tickets".
  */
 export async function selectRole(caller: SessionCaller, role: string): Promise<string> {
   const status = await caller.call<{ ActiveRole?: string | null }>(
@@ -139,7 +143,25 @@ export async function selectRole(caller: SessionCaller, role: string): Promise<s
     { sRole: role },
   );
   const effective = status.ActiveRole;
-  return effective === undefined || effective === null || effective === '' ? role : effective;
+  if (effective === undefined || effective === null || effective === '') {
+    throw new RoleNotAppliedError(role);
+  }
+  return effective;
+}
+
+/** `SelectRole` answered, but with no active role — so none can be assumed to be in force. */
+export class RoleNotAppliedError extends Error {
+  readonly role: string;
+
+  constructor(role: string) {
+    super(
+      `Ivanti was asked to select the role ${role} and reported no active role afterwards, so ` +
+        'the session cannot be trusted to hold any — and one with no role reads nothing, which ' +
+        'would look like an empty answer rather than a failure.',
+    );
+    this.name = 'RoleNotAppliedError';
+    this.role = role;
+  }
 }
 
 /**

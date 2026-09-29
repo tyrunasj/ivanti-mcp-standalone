@@ -10,15 +10,24 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# HTTP sessions are held in memory, one server per Mcp-Session-Id. A second replica
-# answers half of every conversation's requests with "no such session", so this is
-# refused above 1 unless sessionAffinity.enabled is set — see the chart README.
+# ONE. Refused above 1. HTTP sessions are held in memory, one server per
+# Mcp-Session-Id, and the pod that answers `initialize` MINTS that id — so the
+# request that creates a session carries nothing a load balancer could hash to
+# find that pod again. The `upstream-hash-by` affinity this chart used to offer
+# hashed an empty header onto one pod and every later request onto another; it
+# could not work, and setting sessionAffinity.enabled is now refused too.
+# 0 is allowed, to park a release.
+#
+# The cost of one replica: a rollout — an upgrade, a key rotation, a node drain —
+# ends every open session. Clients reconnect with a new one.
 replicaCount: 1
-sessionAffinity:
-  enabled: false
-  # nginx: hash upstreams on the session header so a conversation keeps its pod.
-  ingressAnnotations:
-    nginx.ingress.kubernetes.io/upstream-hash-by: "$http_mcp_session_id"
+
+# Pods read their secrets ONCE, at startup, and with secrets.existingSecret the
+# chart cannot see the Secret change — so rotating a key does not roll the pod.
+# Change this value (a date, the secret's version) in the same commit as the
+# rotation and the Deployment rolls declaratively; or run
+# `kubectl rollout restart deploy/<release>`. See docs/deployment.md, "Rotating a key".
+rolloutToken: ""
 
 server:
   # REQUIRED. The externally visible URL, matched verbatim against the OAuth token
@@ -31,6 +40,8 @@ server:
   authMode: bearer      # none | bearer | oauth
   port: 3000
   maxSessions: 100
+  # MCP_MAX_SESSIONS_PER_SUBJECT — optional; see .env.example. Empty = unset.
+  maxSessionsPerSubject: ""
   sessionIdleTtlSeconds: 1800
   logLevel: info        # debug logs every Ivanti query, which names people; diagnose, then revert
 
@@ -55,6 +66,13 @@ ivanti:
   # full mode only: pin the role an impersonated session opens under. Refused
   # when the person does not hold it, never silently ignored.
   impersonationRole: ""
+  # IVANTI_IMPERSONATION_REQUIRED — see .env.example. Only meaningful with
+  # configUrl set; false leaves the server default.
+  impersonationRequired: false
+  # IVANTI_TIMEOUT_MS / IVANTI_WRITE_TIMEOUT_MS, in milliseconds. Empty = the
+  # server defaults (10000 and 30000).
+  timeoutMs: ""
+  writeTimeoutMs: ""
 
 oauth:
   issuer: ""
@@ -90,6 +108,8 @@ service:
   port: 3000
   annotations: {}
 
+# LoadBalancer and NodePort are refused with authMode=none, as an ingress is:
+# each publishes the tool surface beyond the cluster with nothing in front of it.
 ingress:
   enabled: false
   className: ""
@@ -99,9 +119,22 @@ ingress:
   #   paths: [{ path: /, pathType: Prefix }]
   tls: []
 
-# Measured: 96 MB resident with nothing connected, plus ~134 KB per concurrent
-# session — so the default ceiling of 100 sessions costs about 21 MB, and 1000
-# would reach ~242 MB. Idle memory dominates until roughly 700 sessions.
+# Admits traffic to the pod from `from` only. `auto` turns it on exactly when
+# authMode is none, where it is the only thing between the cluster and the tool
+# surface. Empty `from` = pods in the release's own namespace. With an ingress,
+# add the controller's namespace. `kubectl port-forward` and the kubelet's probes
+# are not subject to it. Inert unless the CNI enforces NetworkPolicy (k3s,
+# Calico and Cilium do; flannel alone does not).
+networkPolicy:
+  enabled: auto         # auto | true | false
+  from: []
+  # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+  # - podSelector: { matchLabels: { app: my-agent } }
+
+# Measured (docs/handbook.html, "How much memory it needs"): 96 MB resident with
+# nothing connected; 117 MB with 100 sessions held (+21 MB, ~215 KB each) and
+# 242 MB with 1,000 (+146 MB, ~150 KB each) — the per-session cost falls as the
+# shared tool definitions amortise. Idle memory dominates until ~700 sessions.
 resources:
   requests: { cpu: 100m, memory: 192Mi }
   limits: { memory: 512Mi }

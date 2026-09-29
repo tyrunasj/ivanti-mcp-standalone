@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
-import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
+import {
+  createLocalJWKSet,
+  createRemoteJWKSet,
+  errors,
+  jwtVerify,
+  type JWTPayload,
+  type JWTVerifyGetKey,
+} from 'jose';
 import type { Logger } from '../../logger.js';
 
 export interface VerifiedIdentity {
@@ -73,10 +80,92 @@ export function extractScopes(claims: JWTPayload): string[] {
   return [...scopes];
 }
 
-export function createRemoteKeyResolver(jwksUri: string): JWTVerifyGetKey {
-  // Caches the key set and refetches on an unknown `kid`, which is what makes signing-key
-  // rotation at the IdP a non-event.
-  return createRemoteJWKSet(new URL(jwksUri));
+export interface RemoteKeyResolverOptions {
+  /** Where an outage, and the recovery from it, are reported. */
+  logger?: Logger;
+}
+
+/** The first wait after the key set could not be refreshed, doubled per failure up to the cap. */
+export const JWKS_RETRY_MS = 30_000;
+export const JWKS_RETRY_MAX_MS = 5 * 60_000;
+
+/**
+ * The IdP's signing keys, kept usable through an outage.
+ *
+ * jose caches the key set and refetches on an unknown `kid`, which is what makes signing-key
+ * rotation at the IdP a non-event — keep that. What it does not do is survive the IdP going away:
+ * once its copy is older than `cacheMaxAge` (ten minutes) EVERY request awaits a reload, and a
+ * failed reload throws even though the keys it already holds would verify the token. So a
+ * ten-minute IdP outage became a 503 for every request, and every request started its own fetch.
+ *
+ * Two things change that, and nothing else does:
+ *
+ * - **A failed refresh falls back to the last good key set.** A key the IdP retired during the
+ *   outage stays trusted until it can be asked again — the same trade a JWKS cache always makes,
+ *   extended for as long as the IdP is unreachable.
+ * - **Failures back off.** While one is recent the IdP is not asked at all, so an outage costs one
+ *   fetch per interval rather than one per request.
+ *
+ * A token naming a key the last good set does not have is still refused as unreachable (503), not
+ * as a bad token: it may be signed by a key the IdP rotated in while it was down, and a 401 would
+ * start the re-authentication loop `isUnreachable` exists to prevent.
+ */
+export function createRemoteKeyResolver(
+  jwksUri: string,
+  options: RemoteKeyResolverOptions = {},
+): JWTVerifyGetKey {
+  const { logger } = options;
+  const remote = createRemoteJWKSet(new URL(jwksUri));
+
+  let failures = 0;
+  let retryAt = 0;
+  let lastFailure: unknown;
+  // Built from jose's own last good copy the first time an outage needs it, and dropped once the
+  // IdP answers again so the next outage starts from whatever that answer was.
+  let fallback: JWTVerifyGetKey | undefined;
+
+  const fromLastGood: JWTVerifyGetKey = async (header, token) => {
+    const keys = remote.jwks();
+    // Never fetched successfully, so there is nothing to fall back to.
+    if (keys === undefined) throw lastFailure;
+    fallback ??= createLocalJWKSet(keys);
+    try {
+      return await fallback(header, token);
+    } catch (error: unknown) {
+      if (error instanceof errors.JWKSNoMatchingKey) throw lastFailure;
+      throw error;
+    }
+  };
+
+  return async (header, token) => {
+    // Inside the backoff window: answer from what is held, without asking the IdP again.
+    if (failures > 0 && Date.now() < retryAt) return fromLastGood(header, token);
+
+    try {
+      const key = await remote(header, token);
+      if (failures > 0) {
+        logger?.info('the IdP signing keys are reachable again', { after: failures });
+        failures = 0;
+        fallback = undefined;
+      }
+      return key;
+    } catch (error: unknown) {
+      if (!isUnreachable(error)) throw error;
+
+      failures += 1;
+      lastFailure = error;
+      const wait = Math.min(JWKS_RETRY_MS * 2 ** (failures - 1), JWKS_RETRY_MAX_MS);
+      retryAt = Date.now() + wait;
+      // Once per failed attempt, which the backoff makes once per interval rather than per request.
+      logger?.warn('the IdP signing keys could not be refreshed; verifying with the last good set', {
+        reason: error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+        failures,
+        retryInMs: wait,
+        haveKeys: remote.jwks() !== undefined,
+      });
+      return fromLastGood(header, token);
+    }
+  };
 }
 
 /**
@@ -104,6 +193,9 @@ export function looksLikeJwt(token: string): boolean {
 function isUnreachable(error: unknown): boolean {
   const code = (error as { code?: unknown }).code;
   if (code === 'ERR_JWKS_TIMEOUT' || code === 'ERR_JOSE_GENERIC') return true;
+  // The IdP answered 200 with something that is not a key set — a proxy's error page in JSON, a
+  // half-deployed endpoint. That is the IdP's fault, not the token's, for the same reason.
+  if (code === 'ERR_JWKS_INVALID') return true;
   if (error instanceof TypeError) return true;
   const name = (error as { name?: unknown }).name;
   return name === 'JWKSTimeout' || name === 'JOSEError';

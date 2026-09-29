@@ -78,7 +78,11 @@ it needs a create form, which OData cannot see.
 - **`src/ivanti/http/transport.ts` is the `rest_api_key` surface** — OData, REST, `$metadata`. The
   ASMX surface has its own credential and lifecycle; keeping them apart stops a caller reaching
   for the wrong one. Both send through `exchange()`, which is what they share: the timeout, the
-  error shape, the scrubbing and the request log.
+  error shape, the scrubbing and the request log. The timeout is chosen by method —
+  `IVANTI_TIMEOUT_MS` for a GET, `IVANTI_WRITE_TIMEOUT_MS` for anything else, ASMX and the
+  impersonation handshake included, because both are POSTs end to end. A write that gets no answer
+  is told to the model as *possibly applied*, never as refused: a timeout on a create is the
+  commonest way to file a ticket twice.
 - **Every collection read goes through `readCollection()`.** "No rows" has three encodings: a
   filter matching nothing answers 200 with an empty body, an empty navigation property answers
   `{"value": "No instances found."}` — a string with `.length === 19` — and only rows arrive as an
@@ -139,13 +143,19 @@ it needs a create form, which OData cannot see.
   requests add `AlternateContactLink`, changes use `RequestorLink`. `customer-link.ts` samples rows
   to see which `*_Category` holds a person, and reads its spelling there (`Employee`, where CSDL
   says `employee`).
-- **Own records: two shapes, one guard.** A filtering tool gets the constraint folded in (the
-  caller's filter parenthesised first); a tool naming one record reads it and refuses. The refusal
+- **Own records: three shapes, one guard.** A filtering tool gets the constraint folded in — the
+  caller's filter parenthesised first, and checked for balance *before* it is wrapped, because
+  `A) or (B` wrapped is `(A) or (B) and mine`, which balances. A tool naming one record reads it and
+  refuses. Related rows are checked twice: the parent, then each row — the caller's own where the
+  target has a person link, else only rows whose `ParentLink_RecID` is the parent, else refused;
+  the journal is refused in `enduser` in favour of `list_notes`. The refusal
   — *"No such record is available to you."* — is the same for missing and someone else's, or
   sequential numbers become an enumeration oracle. `own-records-guard.test.ts` makes every tool
   declare whether it may answer without an identity.
 - **Every call is audited in `registerTools`:** tool, session, provenance, and the subject only
-  when an issuer vouched for it. Arguments are never logged.
+  when an issuer vouched for it. Argument values are never logged; a write's line adds `targets` —
+  the object, the relationship and every `…Id` argument — so "who deleted incident X" has an
+  answer.
 
 ## Audience modes and allowlists
 
@@ -173,11 +183,18 @@ it needs a create form, which OData cannot see.
 
 - **Every write resolves, then verifies.** `resolveValidatedWrite` turns a picklist value into the
   value *plus its option's RecId* — a value written alone can be stored as nothing — and refuses
-  one that is not on the list. `confirmWrite` reads the record back before success is reported.
+  one that is not on the list. `confirmWrite` reads the record back before success is reported —
+  every written scalar, not only the validated ones, compared after normalising dates, numbers,
+  booleans, case, spacing and HTML entities. A free field that did not take fails the write like a
+  validated one. Ivanti's own stamps (`LastModBy`, `CreatedBy` and their times) go in
+  `ignoredByIvanti`; rich text and anything the read does not return go in `notConfirmed`.
   The form, not `$metadata`, is the authority on what is validated (Task's CSDL declares none; its
   form declares twenty).
-- **Field names are checked before the write** by `assertKnownFields`, against the schema already
-  fetched. A tenant *label* gets the field it labels (`Description` → write `Symptom`); anything
+- **Field names are checked before the write** by `knownFields`, against the schema already
+  fetched, and every written name is settled to the schema's spelling before anything else reads
+  it — the pick-list resolver is case-sensitive, so `status` once skipped it and the read-back
+  both. Two spellings of one field are refused. In `enduser`, the customer-link pair, the bare
+  link and `CreatedBy` are never a write's to set. A tenant *label* gets the field it labels (`Description` → write `Symptom`); anything
   else gets the nearest fields, by containment then edit distance (`Sympton`). It never refuses on
   an empty schema — the object name is the real error there.
 - **A field has three names**, resolved in order: the form's label, the object's display name, the
@@ -194,7 +211,10 @@ it needs a create form, which OData cannot see.
   owned by the person it was raised for, in their team; `create_record` names every field stamped
   this way (`session-stamp.ts`) but does not correct it. `CreatedBy` accepts an override and keeps
   it; `LastModBy` does not. With the ConfigDB pair, `act_as` opens Ivanti's own session and every
-  write carries the person's name because Ivanti filled it.
+  write carries the person's name because Ivanti filled it. That session is re-opened once for the
+  same person on a 401 or past its `SessionKeyExpire` — a read is retried, a write is reported as
+  not repeated — and never falls back to the service account. `IVANTI_IMPERSONATION_REQUIRED`
+  makes a failed startup probe fatal instead of a warning.
 - **A closed record is read-only, and only this server enforces it.** Ivanti sets `ReadOnly: true`
   and then accepts a PATCH. `assertRecordWritable` guards every write to an existing record.
   `IsInFinalState` does not work — it is false on closed records.
@@ -206,14 +226,15 @@ it needs a create form, which OData cannot see.
   `GridParams`; `preview_quick_action` refuses where the role has no form. `run_quick_action`
   probes again itself and is the one tool both destructive and non-idempotent. Failure is in
   `validationErrors[recId].fieldErrors[field].fieldMessages[]`, not `status`.
-- **Unlinking checks the link first.** Ivanti accepts an unlink of nothing and, on a Contains
-  relationship, severs the target from its real parent. (`link_records` has no such check yet and
-  reports a no-op as a link — see `notes.md`.)
+- **Linking and unlinking check the link first.** Ivanti accepts an unlink of nothing and, on a
+  Contains relationship, severs the target from its real parent. `link_records` reads the target's
+  `ParentLink_RecID` on a Contains relationship and refuses to move a child off another parent,
+  answers `alreadyLinked` for a no-op, and reads the child back after linking.
 - **An attachment contains the pointer to its ticket.** `IncidentContainsAttachment` is a view over
   the attachment's `ParentLink` pair, so unlinking one orphans the file. Attach with the upload;
   detach with `delete_attachment`. Uploading is two halves and Ivanti does one — the bytes land with
-  a null parent, and a nonexistent parent is accepted — so the parent is read first and linked
-  after. A delete answers 204 for an id that never existed, so existence is checked on both sides.
+  a null parent, and a nonexistent parent is accepted — so the parent is read first, linked after
+  (`ParentLink_Category` as the AdminUI id, `Incident#`), and the row read back. A delete answers 204 for an id that never existed, so existence is checked on both sides.
   `upload_attachment` takes base64 capped at 2 MB, because the bytes cross the context twice.
 - **A validated field's values live on a create form**, reached workspace → layout → view → form
   (cached per object), then `GetFormValidationListData`. Rows arrive as columns: the value is at the
@@ -236,7 +257,10 @@ it needs a create form, which OData cannot see.
 - **Approvals are read by `list_approvals` and cast by `vote_on_approval`, only on the vote row.**
   `list_approvals` reads `frs_approvalvotetracking` rows whose `Owner` is the pinned person's login.
   `vote_on_approval` runs `Approve Vote` / `Deny Vote` on such a row and refuses any row the pinned
-  person does not own — that check is the whole safety argument. Never "Approve My Vote" on the
+  person does not own — that check is the whole safety argument. `Owner_Valid`, when present, alone
+  decides whose row it is (`vote-owner.ts`): `Owner` holds a display name on some rows, and two
+  people share one. `list_approvals` drops the other person's rows the same way. A vote is read
+  back against the decision made, and a failed vote takes its `Reason` off again. Never "Approve My Vote" on the
   approval: "my" is the session, and an admin key's override sibling bypasses the real approver.
   Without impersonation `VotedBy` records the service account; with it, the person. A raw status
   update is not a vote — the workflow never runs.
@@ -307,9 +331,14 @@ it needs a create form, which OData cannot see.
   connect one to two transports — while `registerTool` stores config by reference, so every zod
   schema exists once.
 - **HTTP sessions are per client and in memory.** Each `initialize` gets its own transport and
-  server. `SessionStore` caps them (`MCP_MAX_SESSIONS`, 503 beyond) and sweeps idle ones
+  server. `SessionStore` caps them (`MCP_MAX_SESSIONS`) and sweeps idle ones
   (`MCP_SESSION_IDLE_TTL_SECONDS`) — required, because `onsessionclosed` fires only on an explicit
-  DELETE, which clients rarely send. Replicas would need sticky routing by `Mcp-Session-Id`.
+  DELETE, which clients rarely send. At the cap, `initialize` closes the least recently used
+  session that has been quiet for 60 s with nothing in flight (an open SSE stream counts); 503 only
+  when none qualifies, with a `Retry-After` saying when one could. Slots are reserved at admission,
+  so concurrent initializes cannot overshoot. Under oauth, `MCP_MAX_SESSIONS_PER_SUBJECT` closes
+  the subject's own oldest session. **One replica**: `initialize` carries no session id, so no
+  hash can route a session back to the pod that minted it.
 
 ## Logging
 

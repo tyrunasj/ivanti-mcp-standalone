@@ -7,6 +7,7 @@ import {
   parseNamedRoles,
   parseUserRoles,
   readRoles,
+  RoleNotAppliedError,
   selectRole,
   type IvantiRole,
   type RoleChoiceOptions,
@@ -254,9 +255,17 @@ describe('selectRole', () => {
     expect(await selectRole({ call: call as never }, 'Admin')).toBe('SelfService');
   });
 
-  it('falls back to the requested role when Ivanti names none', async () => {
-    const call = vi.fn().mockResolvedValue({ ActiveRole: null });
+  // Taking silence for the role asked for reported a session as holding a role Ivanti never
+  // confirmed — and one with no role reads zero of everything, which looks like an empty answer.
+  it.each([
+    ['null', { ActiveRole: null }],
+    ['empty', { ActiveRole: '' }],
+    ['absent', {}],
+  ])('refuses when Ivanti names no role afterwards (%s)', async (_label, reply) => {
+    const call = vi.fn().mockResolvedValue(reply);
 
-    expect(await selectRole({ call: call as never }, 'Admin')).toBe('Admin');
+    await expect(selectRole({ call: call as never }, 'Admin')).rejects.toBeInstanceOf(
+      RoleNotAppliedError,
+    );
   });
 });

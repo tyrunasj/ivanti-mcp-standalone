@@ -44,8 +44,15 @@ survive moving machines. As a service: copy `deploy/systemd/ivanti-mcp.service` 
 `/etc/systemd/system/`, with configuration in `/etc/ivanti-mcp/env` (`0640`, `root:ivanti-mcp`). The
 unit runs unprivileged, read-only, with no capabilities and a syscall filter.
 
-- **Set `STDIO_TRANSPORT_ON=false` for a service** — systemd hands it a stdin, and stdio would wait
-  on it forever.
+- **Set `STDIO_TRANSPORT_ON=false` for a service** — a service's stdin is `/dev/null`, so the stdio
+  transport reads EOF at once: beside HTTP that is noise in the journal, and on its own it is a
+  service nothing can talk to.
+- **Prefer `LoadCredential=` for the keys.** The unit carries it commented out:
+  `LoadCredential=ivanti-api-key:/etc/ivanti-mcp/ivanti-api-key` with
+  `Environment=IVANTI_API_KEY_FILE=%d/ivanti-api-key`. systemd copies the file into a private
+  in-memory directory only this service can read, so the source stays `root:root 0600` and the key
+  is never in an environment `/proc` can show. Remove the inline `IVANTI_API_KEY` from the env file
+  when you enable it — both forms is exit 78. Needs systemd 248+.
 - **`MemoryDenyWriteExecute` is deliberately not set** — Node's JIT needs writable-then-executable
   pages, and the failure looks like a segfault.
 - **`RestartPreventExitStatus=78`** — a configuration error will still be one in five seconds.
@@ -56,11 +63,18 @@ From source: `pnpm install --frozen-lockfile && pnpm build && pnpm start`.
 
 ```bash
 docker run -d --name ivanti-mcp --restart unless-stopped \
-  --env-file .env -p 3000:3000 \
+  --env-file .env -e MCP_BIND=0.0.0.0 -p 127.0.0.1:3000:3000 \
   -v "$PWD/secrets:/run/secrets:ro" \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   tyrunas/ivanti-mcp:$VERSION
 ```
+
+**The `-p` address decides who reaches it, not `MCP_BIND`.** Inside the container the server must
+listen on `0.0.0.0`; a bare `-p 3000:3000` then publishes it on every host interface, and Docker
+writes its own iptables rules ahead of ufw and firewalld — the host firewall does not narrow it.
+Publish on `127.0.0.1` and put a TLS proxy in front, or publish wider only with `bearer` or `oauth`.
+`docker/compose.yaml` publishes on `127.0.0.1` unless `MCP_PUBLISH_ADDR` (compose interpolation, not
+a server setting) says otherwise.
 
 Multi-arch (`amd64`, `arm64`), distroless, uid 65532, no shell and no package manager. **~55 MB to
 pull**, of which 52.6 MB is the distroless Node base; the ~235 MB `docker images` prints is the
@@ -68,16 +82,21 @@ uncompressed size. Images are signed keylessly with cosign:
 
 ```bash
 cosign verify tyrunas/ivanti-mcp:$VERSION \
-  --certificate-identity-regexp='^https://github.com/tyrunasj/ivanti-mcp-standalone/' \
+  --certificate-identity='https://github.com/tyrunasj/ivanti-mcp-standalone/.github/workflows/release.yml@refs/heads/main' \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com
 ```
 
+The identity is exact on purpose. The old `--certificate-identity-regexp='^https://github.com/<repo>/'`
+accepted a signature from **any** workflow in the repository, on **any** branch — including one
+nobody reviewed.
+
 Tags: `1.2.3`, `1.2`, `1` and `latest` for a release; a prerelease publishes its exact version only.
-Every `main` build also pushes `main` and `sha-<short>`. Pin a digest in production.
+CI builds every commit for both architectures and pushes nothing. Pin a digest in production.
 
 Three things that bite, all recorded in `notes.md`:
 
-- **`MCP_BIND=0.0.0.0` inside a container** — its loopback is its own.
+- **`MCP_BIND=0.0.0.0` inside a container** — its loopback is its own. Exposure is then the `-p`
+  address, above.
 - **A mounted secret keeps its host ownership**, and the image runs as 65532: a mode-600 file you
   own is unreadable inside, and the exit-78 `EACCES` reads like a missing file.
 - **The tenant hostname must resolve inside the container** — split-horizon DNS has handed one a LAN
@@ -98,6 +117,9 @@ Three stages: build → production dependencies → distroless runtime. Alpine i
 builds from source and is for working on the server; to run a published build with compose, the
 Handbook's configurator emits one pinned to the image.
 
+- **Base images are pinned by digest**, the tag kept beside it, and pnpm by `ARG PNPM_VERSION`,
+  which `pnpm check:docker` holds equal to `packageManager` and fails on any unpinned `FROM`.
+  Dependabot proposes new digests weekly (below).
 - **Dependencies install with `--node-linker=hoisted`**, because pnpm's symlinked `node_modules`
   does not survive a `COPY` between stages.
 - **The dependency stage prunes `*.d.ts`, `*.md` and `*.map`** (10 MB of 28) — nothing a running
@@ -107,7 +129,8 @@ Handbook's configurator emits one pinned to the image.
   start without it.
 - **The health check is a Node script**, since there is no shell or curl. It exits 0 when HTTP is
   off: reporting a stdio deployment unhealthy for running as configured would be worse than not
-  checking.
+  checking. It reads `HTTP_TRANSPORT_ON` exactly as the server's `z.stringbool()` does — `y` and
+  `enabled` too; it once accepted fewer, and `HTTP_TRANSPORT_ON=y` ran unpolled.
 - Verified on Docker Desktop on macOS (arm64) and Docker 29.1.3 on Ubuntu 26.04 (x86_64).
 
 ## 3. Kubernetes
@@ -131,23 +154,57 @@ the failure to `helm install`:
 |---|---|
 | no `server.publicUrl`, or one with a trailing slash | compared verbatim against the token audience |
 | no `server.trustedOrigins` | origin validation stops DNS rebinding |
-| `replicaCount > 1` without `sessionAffinity.enabled` | sessions are in memory — below |
+| `replicaCount > 1`, or `sessionAffinity.enabled` | sessions are in memory — below |
 | `mode=enduser` with an empty allowlist | fail-closed, but almost certainly not meant |
+| any `server.enduser.*` under `mode=full` | a gate that gates nothing; the server refuses `ENDUSER_*` there too |
 | `authMode=oauth` with no issuer | discovery happens at boot |
-| `authMode=none` with an ingress | publishes the tool surface unauthenticated |
+| `http://` for `ivanti.baseUrl`, `ivanti.configUrl`, `oauth.issuer` or `oauth.jwksUri`, except loopback | the server refuses them: anyone on the path reads the key, or swaps the keys tokens are verified against |
+| `secrets.bearerToken` under 32 characters | the server refuses it |
+| `authMode=none` with an ingress, a `LoadBalancer` or a `NodePort` | publishes the tool surface unauthenticated |
 
-- **One replica by default.** Sessions live in memory, one `McpServer` per `Mcp-Session-Id`; with
-  two pods about half of each conversation lands on one that has never seen it, which looks like
-  intermittent client bugs. More needs consistent hashing on that header:
-  `--set replicaCount=3 --set sessionAffinity.enabled=true` adds
-  `nginx.ingress.kubernetes.io/upstream-hash-by: "$http_mcp_session_id"` — confirm your ingress
-  honours it.
+`node scripts/check-chart.mjs` lints the chart and renders the defaults and every guard — a refusal
+that renders fails it, and so does a valid configuration that does not. It is in the shared check
+list, so CI and the release gate both run it.
+
+- **One replica, and a rollout ends every open session.** Sessions live in memory, one `McpServer`
+  per `Mcp-Session-Id`, and the pod that answers `initialize` *mints* that id — so the request that
+  opens a session carries nothing a load balancer can route back by. The `sessionAffinity` option
+  this chart used to offer hashed `$http_mcp_session_id`: `initialize` (no header) went to one pod,
+  every later request to wherever its new id hashed, and a second pod answered part of every
+  conversation with "unknown session". It could not work and is now refused. An upgrade, a key
+  rotation or a node drain drops every conversation's session; clients reconnect with a new one.
+  More than one replica needs a shared session store, which does not exist.
+- **`authMode=none` gets a NetworkPolicy** (`networkPolicy.enabled: auto`): only pods in the release
+  namespace reach the port, or the peers in `networkPolicy.from`. `kubectl port-forward` and the
+  kubelet's probes are not subject to it, and it is inert on a CNI that does not enforce policy
+  (k3s, Calico and Cilium do; flannel alone does not). `true` turns it on under any mode — with an
+  ingress, add the controller's namespace to `from`.
 - **Secrets:** `secrets.existingSecret` with keys `ivanti-api-key` and, for bearer auth,
   `bearer-token`, mounted at `/run/secrets` (`0400`) with `fsGroup: 65532` so the image's user can
-  read them. `secrets.create=true` is for development — it puts the values in Helm history.
+  read them. `secrets.create=true` is for development — it puts the values in Helm history. They
+  are read once, at startup: see *Rotating a key*.
 - **Probes:** `/health` is unauthenticated and always 200, so liveness and readiness are plain
   `httpGet`. The startup probe allows two minutes, because boot probes the tenant and opens the
   ASMX session.
+
+## Rotating a key
+
+Every secret — the Ivanti API key, the bearer token, the ConfigDB key — is read **once, at
+startup**. Changing it where it lives does nothing until the process restarts, and nothing restarts
+it for you. Rotate without an outage by overlapping: issue the new Ivanti key, deploy and restart
+on it, confirm the startup log reaches the tenant, *then* revoke the old one. A bearer token has no
+overlap — every client holding the old one fails once the server restarts, so change them together.
+
+| Shape | Replace the secret | Then |
+|---|---|---|
+| Kubernetes, `existingSecret` | update the Secret (your secret manager, or `kubectl create secret generic … --dry-run=client -o yaml \| kubectl apply -f -`) | `kubectl rollout restart deploy/<release>` — or change `rolloutToken` in the values, which rolls it declaratively (the GitOps path) |
+| Kubernetes, `secrets.create` | change the value in the values file | `helm upgrade`; the `checksum/config` annotation rolls the pod |
+| systemd | the env file, or the `LoadCredential=` source file | `sudo systemctl restart ivanti-mcp` |
+| compose | `secrets/…`, or `.env` | `docker compose up -d --force-recreate` — `restart` re-reads neither `env_file` nor a replaced secret file |
+| `docker run` | the mounted file, or `.env` | `docker rm -f ivanti-mcp`, then the same `docker run` |
+
+A restart ends every open session, in every shape; clients reconnect with a new one, and the person
+is established again — by the token under `oauth`, by `act_as` otherwise.
 
 ## Releasing
 
@@ -164,12 +221,23 @@ the three disagree. **The tag is an output of the release** — pushing one by h
 # Actions → deploy-ivanti-mcp   (k3s-home-lab)     moves targetRevision; ArgoCD syncs
 ```
 
-The **Release** workflow (`workflow_dispatch` only) reads `package.json`, refuses a version already
-released, runs the same checks as CI, publishes, and **creates the tag last**, at the commit it built
-and signed — so a run that dies halfway retries by pressing the button again instead of leaving an
-orphan tag. Every `docker/metadata-action` tag carries an explicit `value=`: its semver patterns read
-`github.ref_name`, which on a manual run is the branch, and the image would publish as `main`. A
-prerelease (`0.3.0-rc.1`) publishes its exact version only.
+The **Release** workflow (`workflow_dispatch` only, **on `main` only** — any other ref fails at the
+first step) reads `package.json`, refuses a version already released, runs the same checks as CI,
+publishes, and **creates the tag last**, at the commit it built and signed — so a run that dies
+halfway retries by pressing the button again instead of leaving an orphan tag.
+
+It is **two jobs**. *Gate* runs the checks — every devDependency, installed and executed — with
+`contents: read` and nothing else, and builds the tarball. *Publish* holds the write token, the OIDC
+token that signs as `release.yml@refs/heads/main`, and the Docker Hub credentials, installs no npm
+package, and downloads the gate's tarball rather than rebuilding it. One job used to do both, which
+put the signing identity within reach of any package in the dependency tree. No checkout in either
+job keeps its credentials.
+
+Every `docker/metadata-action` tag carries an explicit `value=`: its semver patterns read
+`github.ref_name`, which on a manual run is the branch, and the image would publish as `main`. Its
+labels restate the Dockerfile's (title, url, `LicenseRef-SYNERGY-Commercial`), because the action's
+defaults overwrite them — the licence label used to read `UNLICENSED`. A prerelease (`0.3.0-rc.1`)
+publishes its exact version only.
 
 | Artifact | Version from |
 |---|---|
@@ -180,8 +248,16 @@ prerelease (`0.3.0-rc.1`) publishes its exact version only.
 
 **CI and Release share one check list**, `.github/actions/checks`. It used to be written twice, and
 the release ran a subset that skipped `check:examples` and `check:licenses` — which validate two
-files the tarball ships. It is a composite action, not a reusable workflow, because the release
-needs the `dist/` the checks leave behind. Every check runs even after one fails.
+files the tarball ships. It is a composite action, not a reusable workflow, because the gate
+packages the `dist/` the checks leave behind. Every check runs even after one fails. It includes
+the chart's lint and guard renders.
+
+**The supply chain moves only by pull request.** Every third-party action is pinned by commit SHA
+(the version in a comment beside it), the base images by digest, npm packages by the lockfile.
+`.github/dependabot.yml` proposes updates weekly — npm, the Dockerfile's images and the actions,
+grouped, with a cooldown of a few days after a version is published — and each goes through
+`Checks` and `Image` like any other change. A new Node or TypeScript major, and anything that
+moves `@modelcontextprotocol/sdk`, arrives on its own.
 
 **One step is CI's alone: the manifest size.** On a pull request, `ci.yml` measures the manifest
 of the base branch and of the PR (`pnpm manifest:size`) and writes the difference to the run's

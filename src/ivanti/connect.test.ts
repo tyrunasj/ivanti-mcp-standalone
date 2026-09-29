@@ -107,6 +107,69 @@ describe('connectIvanti', () => {
     ).rejects.toThrow(/refused the API key: 401[\s\S]*IVANTI_API_KEY/);
   });
 
+  /**
+   * `IVANTI_WRITE_TIMEOUT_MS` is only worth having if it reaches what a write goes through: the
+   * transport, and the ASMX session, which POSTs everything — quick actions included.
+   */
+  describe('the two timeouts', () => {
+    /** A tenant whose session handshake and records each take 40 ms; `$metadata` is instant. */
+    const slowTenant = () =>
+      vi.fn(
+        (url: string, init: { signal?: AbortSignal }) =>
+          new Promise<{ ok: boolean; status: number; text: () => Promise<string> }>(
+            (resolve, reject) => {
+              if (url.includes('$metadata')) {
+                resolve({ ok: true, status: 200, text: () => Promise.resolve(CSDL) });
+                return;
+              }
+              const body = url.includes('AuthenticateTenantAPIKey')
+                ? { d: 'sid' }
+                : url.includes('businessobject/Incidents')
+                  ? { RecId: 'A' }
+                  : { d: { SessionCsrfToken: 'csrf', ActiveRole: 'ServiceDeskAnalyst' } };
+              const timer = setTimeout(() => {
+                resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(body)) });
+              }, 40);
+              init.signal?.addEventListener('abort', () => {
+                clearTimeout(timer);
+                reject(init.signal?.reason as Error);
+              });
+            },
+          ),
+      );
+
+    const connect = (writeTimeoutMs: number) =>
+      connectIvanti({
+        baseUrl: 'https://t',
+        apiKey: 'k',
+        logger: testLogger().logger,
+        fetchImpl: slowTenant(),
+        timeoutMs: 10,
+        writeTimeoutMs,
+      });
+
+    it('gives writes and the session the write timeout, and reads the read timeout', async () => {
+      const connection = await connect(1_000);
+      const url = connection.transport.routes.entitySet('Incidents');
+
+      // The handshake is POSTs, and 40 ms is past the read timeout: it opened on the write one.
+      expect(connection.capability.tier).not.toBe('odata');
+      await expect(connection.transport.request(url, { method: 'POST', body: {} })).resolves.toEqual({
+        RecId: 'A',
+      });
+      await expect(connection.transport.request(url)).rejects.toMatchObject({ status: 0 });
+    });
+
+    it('holds a write to the write timeout it was given', async () => {
+      const connection = await connect(20);
+      const url = connection.transport.routes.entitySet('Incidents');
+
+      await expect(
+        connection.transport.request(url, { method: 'POST', body: {} }),
+      ).rejects.toMatchObject({ status: 0, code: 'TimeoutError' });
+    });
+  });
+
   it('degrades to the OData tier when the session handshake fails', async () => {
     // The realistic case: a key whose role cannot open an ASMX session. Reads still work, so
     // refusing to start would punish exactly the customers who cannot issue an admin key.

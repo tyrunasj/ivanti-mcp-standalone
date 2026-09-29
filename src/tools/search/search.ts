@@ -2,7 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
-import { buildQuery, withQuery } from '../../ivanti/odata/query.js';
+import { buildQuery, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
@@ -95,15 +95,18 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
               const scoped = await scopeToOwnRecords(deps, context, resolved);
               const url = withQuery(
                 transport.routes.entitySet(entitySet),
-                buildQuery({ search: args.query, filter: scoped.filter, top: PER_OBJECT_TOP }),
+                buildQuery({
+                  search: args.query,
+                  filter: scoped.filter,
+                  top: PER_OBJECT_TOP,
+                  count: true,
+                }),
               );
-              const rows = readRows<OdataRecord>(
-                await transport.request<OdataRecord>(url),
-                url,
-              );
+              const payload = await transport.request<OdataRecord>(url);
+              const rows = readRows<OdataRecord>(payload, url);
 
               // A row without a RecId cannot be fetched back, so it is not a result.
-              return rows.flatMap((row) => {
+              const hits = rows.flatMap((row) => {
                 const recId = recordRecId(row);
                 return recId === undefined
                   ? []
@@ -115,22 +118,49 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
                       },
                     ];
               });
+              // No count and no rows is Ivanti's empty body for "nothing matched": an exact zero.
+              const total =
+                readTotal(payload, rows.length) ??
+                (rows.length === 0 ? { total: 0, exact: true } : undefined);
+              return { object, hits, total };
             } catch (error: unknown) {
               // One object the key cannot read must not empty the whole answer.
               skipped.push({
                 object,
                 reason: error instanceof Error ? error.message : 'failed',
               });
-              return [];
+              return undefined;
             }
           }),
         );
 
-        const results = found.flat().slice(0, MAX_RESULTS);
+        const answered = found.filter((entry) => entry !== undefined);
+        const results = answered.flatMap((entry) => entry.hits).slice(0, MAX_RESULTS);
         // An object that could not be read was not searched. Reporting it under both keys said
         // two contradictory things at once, and the reassuring one is the one that gets believed.
         const failed = new Set(skipped.map((entry) => entry.object));
         const searched = objects.filter((object) => !failed.has(object));
+
+        /**
+         * How much each object matched, against how much of it is shown.
+         *
+         * The hits were cut to ten an object and twenty-five in all with nothing saying so, and a
+         * list of ten reads as "these are the matches" — where `printer` matched 48 incidents on
+         * the tenant measured. Ivanti counts a `$search` for the asking, so each object reports
+         * its count; where none came back, the rows are all that is known, and it says so.
+         */
+        let offset = 0;
+        const perObject = answered.map((entry) => {
+          const shown = Math.max(0, Math.min(entry.hits.length, MAX_RESULTS - offset));
+          offset += entry.hits.length;
+          return {
+            object: entry.object,
+            matched: entry.total?.total ?? entry.hits.length,
+            ...(entry.total === undefined || !entry.total.exact ? { matchedIsExact: false } : {}),
+            shown,
+          };
+        });
+        const truncated = perObject.some((entry) => entry.matched > entry.shown);
 
         /**
          * That this answer is one person's, said in the payload.
@@ -149,6 +179,18 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
           ...(scopedTo === undefined ? {} : { scopedTo }),
           results,
           searched,
+          perObject,
+          truncated,
+          ...(truncated
+            ? {
+                truncatedNote:
+                  `THESE ARE NOT ALL THE MATCHES: each object returns at most ` +
+                  `${String(PER_OBJECT_TOP)} and the answer at most ${String(MAX_RESULTS)}. ` +
+                  '`perObject` has how many each one matched — report that as the count, not the ' +
+                  'length of `results`. To read the rest, use list_records with the same `search` ' +
+                  'on that object, which pages with `skip`.',
+              }
+            : {}),
           ...(skipped.length > 0 ? { skipped } : {}),
           ...(results.length === 0
             ? {

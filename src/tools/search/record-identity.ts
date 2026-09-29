@@ -76,10 +76,25 @@ export function encodeRecordId(entitySet: string, recId: string): string {
   return `${entitySet}:${recId}`;
 }
 
+/** An entity set is a name — `incidents`, `task__assignments` — and nothing path-like. */
+const ENTITY_SET = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** A RecId is 32 hex characters in practice; anything outside this set is not one of ours. */
+const REC_ID = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The two halves of an id, or undefined for anything `encodeRecordId` could not have produced.
+ *
+ * Strict because the object half ends up in a URL: `../../rest/X:1` split cleanly into an
+ * "entity set" of `../../rest/X`, and the route builder interpolates that segment raw.
+ */
 export function decodeRecordId(id: string): { entitySet: string; recId: string } | undefined {
   const separator = id.lastIndexOf(':');
   if (separator <= 0 || separator === id.length - 1) return undefined;
-  return { entitySet: id.slice(0, separator), recId: id.slice(separator + 1) };
+  const entitySet = id.slice(0, separator);
+  const recId = id.slice(separator + 1);
+  if (!ENTITY_SET.test(entitySet) || !REC_ID.test(recId)) return undefined;
+  return { entitySet, recId };
 }
 
 /** A record's own key, when it has one. RecId is always a string in practice, never a number. */

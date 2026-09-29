@@ -4,8 +4,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, entityFixture, field } from '../connection.fixture.js';
 import type { Logger } from '../../logger.js';
+import { formFixture } from '../session/form.fixture.js';
 import {
   confirmWrite,
+  readBackReport,
   resolveValidatedWrite,
   toObjectId,
   ValidatedValueError,
@@ -208,36 +210,76 @@ describe('resolveValidatedWrite', () => {
     expect(resolved.companions).toEqual({});
     expect(resolved.confirm).toEqual({ Status: 'Active' });
   });
+
+  // `status` skipped resolution entirely while `Status` was resolved: the form and CSDL were both
+  // looked up by exact name, and a bogus value then went out unchecked.
+  it('resolves a validated field whatever case it was written in', async () => {
+    const { connection, logger: log } = setup();
+
+    const refused = resolveValidatedWrite({
+      connection,
+      logger: log,
+      entity: INCIDENT,
+      entitySet: 'incidents',
+      fields: { status: 'Bogus' },
+    });
+    const resolved = await resolveValidatedWrite({
+      connection,
+      logger: log,
+      entity: INCIDENT,
+      entitySet: 'incidents',
+      fields: { status: 'active' },
+    });
+
+    await expect(refused).rejects.toThrow(ValidatedValueError);
+    expect(resolved.companions).toEqual({ Status_Valid: 'rec-active' });
+    expect(resolved.confirm).toEqual({ status: 'Active' });
+  });
 });
 
 describe('confirmWrite', () => {
-  const stored = (record: Record<string, unknown>) =>
-    connectionFixture({ responses: { "incidents('abc')": record } }).connection;
+  const stored = (record: Record<string, unknown> | undefined) =>
+    connectionFixture({ responses: record === undefined ? {} : { "incidents('abc')": record } });
+
+  /** What `resolveValidatedWrite` hands over. `values` holds what it resolved against a live list. */
+  const resolved = (
+    confirm: Record<string, unknown> = {},
+    companions: Record<string, unknown> = {},
+    values: Record<string, unknown> = confirm,
+  ) => ({ confirm, companions, values });
+
+  const confirmOn = (
+    record: Record<string, unknown> | undefined,
+    options: Partial<Parameters<typeof confirmWrite>[0]> = {},
+  ) =>
+    confirmWrite({
+      connection: stored(record).connection,
+      entitySet: 'incidents',
+      recId: 'abc',
+      resolved: resolved(),
+      ...options,
+    });
 
   it('passes when the record holds what was intended', async () => {
     await expect(
-      confirmWrite(stored({ Status: 'Active', Status_Valid: 'rec-active' }), 'incidents', 'abc', {
-        Status: 'Active',
-      }, { Status_Valid: 'rec-active' }),
-    ).resolves.toBeUndefined();
+      confirmOn(
+        { Status: 'Active', Status_Valid: 'rec-active' },
+        { resolved: resolved({ Status: 'Active' }, { Status_Valid: 'rec-active' }) },
+      ),
+    ).resolves.toMatchObject({ ignoredByIvanti: {}, notConfirmed: [] });
   });
 
   it('refuses to call a write done when the value did not take', async () => {
-    const failure = confirmWrite(stored({ Status: 'Logged' }), 'incidents', 'abc', {
-      Status: 'Active',
-    });
+    const failure = confirmOn({ Status: 'Logged' }, { resolved: resolved({ Status: 'Active' }) });
 
     await expect(failure).rejects.toThrow(WriteNotStoredError);
     await expect(failure).rejects.toThrow(/wrote 'Active', stored 'Logged'/);
   });
 
   it('catches a right-looking value over the wrong identifier', async () => {
-    const failure = confirmWrite(
-      stored({ Status: 'Active', Status_Valid: 'rec-of-another-object' }),
-      'incidents',
-      'abc',
-      { Status: 'Active' },
-      { Status_Valid: 'rec-active' },
+    const failure = confirmOn(
+      { Status: 'Active', Status_Valid: 'rec-of-another-object' },
+      { resolved: resolved({ Status: 'Active' }, { Status_Valid: 'rec-active' }) },
     );
 
     await expect(failure).rejects.toThrow(/identifier 'rec-active' expected/);
@@ -245,13 +287,164 @@ describe('confirmWrite', () => {
 
   it('does not treat a companion the record never echoes as wrong', async () => {
     await expect(
-      confirmWrite(stored({ Status: 'Active' }), 'incidents', 'abc', { Status: 'Active' }, {
-        Status_Valid: 'rec-active',
-      }),
-    ).resolves.toBeUndefined();
+      confirmOn(
+        { Status: 'Active' },
+        { resolved: resolved({ Status: 'Active' }, { Status_Valid: 'rec-active' }) },
+      ),
+    ).resolves.toMatchObject({ notConfirmed: [] });
   });
 
-  it('checks nothing when there was nothing validated to check', async () => {
-    await expect(confirmWrite(stored({}), 'incidents', 'abc', {})).resolves.toBeUndefined();
+  it('reads nothing when nothing was written', async () => {
+    const { connection, urls } = stored({});
+
+    await expect(
+      confirmWrite({ connection, entitySet: 'incidents', recId: 'abc', resolved: resolved() }),
+    ).resolves.toEqual({ ignoredByIvanti: {}, notConfirmed: [] });
+    expect(urls).toHaveLength(0);
+  });
+
+  describe('a free field', () => {
+    // The descriptions promise a write Ivanti accepted but did not store is reported, and Ivanti
+    // drops a free field as readily as a listed one. Only the validated ones used to be read back.
+    it('is read back, and one that did not take fails the write', async () => {
+      const failure = confirmOn({ Subject: 'Old subject' }, { written: { Subject: 'New subject' } });
+
+      await expect(failure).rejects.toThrow(WriteNotStoredError);
+      await expect(failure).rejects.toThrow(/Subject: wrote 'New subject', stored 'Old subject'/);
+      await expect(failure).rejects.toThrow(/not from a list, so the value was legal/);
+      await expect(failure).rejects.toThrow(/do not repeat the whole write/);
+    });
+
+    it('fails when a value meant to clear it did not', async () => {
+      await expect(confirmOn({ Owner: 'HSanders' }, { written: { Owner: null } })).rejects.toThrow(
+        /Owner: wrote '', stored 'HSanders'/,
+      );
+    });
+
+    // Each of these TOOK — it is only stored in Ivanti's own rendering.
+    it.each([
+      ['a zoned date, stored in UTC', 'Edm.DateTimeOffset', '2026-10-01T12:00:00+02:00', '2026-10-01T10:00:00Z'],
+      ['a date that lost its milliseconds', 'Edm.DateTimeOffset', '2026-10-01T10:00:00.400Z', '2026-10-01T10:00:00Z'],
+      ['a zone-less time, read in the tenant zone', 'Edm.DateTimeOffset', '2026-10-01T12:00:00', '2026-10-01T10:00:00Z'],
+      ['a date alone, stored at local midnight', 'Edm.DateTimeOffset', '2026-10-01', '2026-09-30T22:00:00Z'],
+      ['a number sent as text', 'Edm.Int32', '5', 5],
+      ['a decimal with trailing zeros', 'Edm.Decimal', 2.5, '2.50'],
+      ['a flag sent as text', 'Edm.Boolean', 'true', true],
+      ['false, which a nullable flag keeps as null', 'Edm.Boolean', false, null],
+      ['text with its whitespace and case moved', 'Edm.String', 'Printer  jam\r\non floor 2 ', 'printer jam\non floor 2'],
+    ])('passes %s', async (_label, type, wrote, holds) => {
+      const entity = entityFixture('incident', { fields: [field('Due', { type })] });
+
+      await expect(
+        confirmOn({ Due: holds }, { written: { Due: wrote }, entity }),
+      ).resolves.toMatchObject({ notConfirmed: [] });
+    });
+
+    it.each([
+      ['a date a day out', 'Edm.DateTimeOffset', '2026-10-01T10:00:00Z', '2026-10-02T10:00:00Z'],
+      ['a zone-less date that stayed on the old day', 'Edm.DateTimeOffset', '2026-10-01', '2026-09-20T00:00:00Z'],
+      ['a different number', 'Edm.Int32', 5, 4],
+      ['a flag that stayed off', 'Edm.Boolean', true, false],
+      ['text cut short', 'Edm.String', 'Printer jam on floor 2', 'Printer jam on fl'],
+    ])('fails %s', async (_label, type, wrote, holds) => {
+      const entity = entityFixture('incident', { fields: [field('Due', { type })] });
+
+      await expect(confirmOn({ Due: holds }, { written: { Due: wrote }, entity })).rejects.toThrow(
+        WriteNotStoredError,
+      );
+    });
+
+    // Measured: `LastModBy` is re-stamped by the engine even when sent. Reported, never a failure.
+    it('reports a field Ivanti stamps itself as ignored, not as a failure', async () => {
+      const readBack = await confirmOn(
+        { Subject: 'x', LastModBy: 'svc-account' },
+        { written: { Subject: 'x', LastModBy: 'jdoe' } },
+      );
+
+      expect(readBack.ignoredByIvanti).toEqual({ LastModBy: 'svc-account' });
+      expect(readBackReport(readBack)).toMatchObject({ ignoredByIvanti: { LastModBy: 'svc-account' } });
+    });
+
+    it('does not compare rich text, and says so rather than failing it', async () => {
+      const readBack = await confirmOn(
+        { Resolution: '<p>Rebooted the <b>printer</b></p>' },
+        { written: { Resolution: 'Rebooted the printer' } },
+      );
+
+      expect(readBack.notConfirmed).toEqual([expect.stringContaining('Resolution — rich text')]);
+    });
+
+    it('still fails rich text that stored as nothing at all', async () => {
+      await expect(
+        confirmOn({ Resolution: null }, { written: { Resolution: '<p>Rebooted</p>' } }),
+      ).rejects.toThrow(WriteNotStoredError);
+    });
+
+    it('does not compare a structured value', async () => {
+      const readBack = await confirmOn({ Blob: 'x' }, { written: { Blob: { nested: true } } });
+
+      expect(readBack.notConfirmed).toEqual(['Blob — a structured value, which is not compared']);
+    });
+
+    it('says which fields it could not see, rather than passing them silently', async () => {
+      const notReturned = await confirmOn({ Subject: 'x' }, { written: { Subject: 'x', Hidden: 'y' } });
+      const unreadable = await confirmOn(undefined, { written: { Subject: 'x' } });
+
+      expect(notReturned.notConfirmed).toEqual(['Hidden — the read-back does not return this field']);
+      expect(unreadable.notConfirmed).toEqual(['Subject — the record could not be read back']);
+      expect(readBackReport(unreadable)).toEqual({ notConfirmed: unreadable.notConfirmed });
+    });
+
+    it('matches the stored field whatever case the write used', async () => {
+      await expect(confirmOn({ Subject: 'Old' }, { written: { subject: 'New' } })).rejects.toThrow(
+        /subject: wrote 'New', stored 'Old'/,
+      );
+    });
+
+    it('returns the record it read, so a tool can show what stored', async () => {
+      const readBack = await confirmOn({ RecId: 'abc', Subject: 'x' }, { written: { Subject: 'x' } });
+
+      expect(readBack.stored).toEqual({ RecId: 'abc', Subject: 'x' });
+      expect(readBackReport(readBack)).toEqual({});
+    });
+  });
+
+  /**
+   * The advice used to be one sentence — "a stale option list" — for every kind of failure, and it
+   * is wrong for most of them. Measured: an incident's Priority is on the picklist and computed
+   * from Urgency × Impact, so a legal value from a fresh list is overwritten, and refreshing the
+   * list sends the caller round the same failure again.
+   */
+  describe('what it tells the caller to do', () => {
+    const form = formFixture({
+      validatedFields: { Priority: {}, Urgency: {}, Impact: {} },
+      readOnlyFields: ['Priority'],
+    });
+
+    it('calls a field under a read-only rule computed, and names the likely inputs', async () => {
+      const failure = confirmOn(
+        { Priority: '1', Urgency: 'High', Impact: 'High' },
+        { resolved: resolved({ Priority: '2', Urgency: 'High', Impact: 'High' }), form },
+      );
+
+      await expect(failure).rejects.toThrow(/Priority is governed by a read-only rule/);
+      await expect(failure).rejects.toThrow(/COMPUTES/);
+      await expect(failure).rejects.toThrow(/this write also set Urgency, Impact/);
+      await expect(failure).rejects.not.toThrow(/stale option list/);
+    });
+
+    it('does not call a list stale that was read for this very write', async () => {
+      const failure = confirmOn({ Urgency: 'Low' }, { resolved: resolved({ Urgency: 'High' }), form });
+
+      await expect(failure).rejects.toThrow(/was on the option list read for this write/);
+      await expect(failure).rejects.not.toThrow(/usually a stale option list/);
+    });
+
+    it('keeps the stale-list advice where no list was read', async () => {
+      // No form: the value went out as sent, and nothing checked it against a list.
+      const failure = confirmOn({ Status: 'Logged' }, { resolved: resolved({ Status: 'Active' }, {}, {}) });
+
+      await expect(failure).rejects.toThrow(/usually a stale option list/);
+    });
   });
 });

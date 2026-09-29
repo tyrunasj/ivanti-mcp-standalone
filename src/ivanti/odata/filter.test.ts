@@ -6,6 +6,7 @@ import {
   assertSupportedFilter,
   findUnsupportedFilter,
   maskStringLiterals,
+  referencedFieldNames,
 } from './filter.js';
 
 describe('maskStringLiterals', () => {
@@ -73,6 +74,76 @@ describe('findUnsupportedFilter — no false positives from string contents', ()
 
   it('ignores the word datetime inside a quoted value', () => {
     expect(findUnsupportedFilter("Subject eq 'datetime''s are hard'")).toBeUndefined();
+  });
+});
+
+/**
+ * The own-records scope is `(<caller's filter>) and <mine>`, so a caller's filter that closes the
+ * wrapper early escapes it: this exact filter, in `enduser`, read everyone's active tickets.
+ */
+describe('findUnsupportedFilter — refuses a filter whose structure is not what it reads as', () => {
+  it('refuses a `)` that closes a group never opened — the scope escape', () => {
+    expect(findUnsupportedFilter("Status eq 'Active') or (Status ne 'x'")).toEqual({
+      kind: 'unbalanced-parentheses',
+      detail: 'closes-unopened',
+    });
+  });
+
+  it('refuses one that dips below zero even when the count evens out', () => {
+    // Balanced by count, and still an escape: `) or (` closes the wrapper and reopens a group.
+    expect(findUnsupportedFilter("A eq 1) or (B eq 2")?.kind).toBe('unbalanced-parentheses');
+    expect(findUnsupportedFilter("A eq 1)) or ((B eq 2")?.kind).toBe('unbalanced-parentheses');
+  });
+
+  it('refuses a `(` that is never closed', () => {
+    expect(findUnsupportedFilter("(Status eq 'Active' or Priority eq 1")).toEqual({
+      kind: 'unbalanced-parentheses',
+      detail: 'left-open',
+    });
+  });
+
+  it('refuses a quoted value that is never closed', () => {
+    // An open quote swallows the rest of the filter — including, once scoped, the constraint.
+    expect(findUnsupportedFilter("Subject eq 'x")).toEqual({ kind: 'unterminated-string' });
+    expect(findUnsupportedFilter("Name eq 'O'Brien'")).toEqual({ kind: 'unterminated-string' });
+  });
+
+  it('does not count a parenthesis inside a value', () => {
+    expect(findUnsupportedFilter("Subject eq ')' or Subject eq '(('")).toBeUndefined();
+    expect(findUnsupportedFilter("Name eq 'O''Brien (x'")).toBeUndefined();
+  });
+
+  it('explains each refusal in words a caller can act on', () => {
+    expect(() => assertSupportedFilter("A eq 1) or (B eq 2")).toThrow(/never opened/);
+    expect(() => assertSupportedFilter("(A eq 1")).toThrow(/never closed/);
+    expect(() => assertSupportedFilter("A eq 'x")).toThrow(/O''Brien/);
+  });
+});
+
+describe('referencedFieldNames', () => {
+  it('names the fields, and not the letters inside a bare date', () => {
+    // `T00` and `Z` used to be offered as fields that do not exist, beside the one that was wrong.
+    expect(
+      referencedFieldNames({
+        filter: 'CreatedDateTime gt 2026-01-01T00:00:00Z and LastModDateTime lt 2026-02-01T08:30:00.5+02:00',
+      }),
+    ).toEqual(['CreatedDateTime', 'LastModDateTime']);
+  });
+
+  it('ignores number literals and their type suffixes', () => {
+    expect(referencedFieldNames({ filter: 'Cost gt 12.5M and Weight lt 1e5 and Qty eq 100L' })).toEqual(
+      ['Cost', 'Weight', 'Qty'],
+    );
+  });
+
+  it('keeps a field name that ends in digits', () => {
+    expect(referencedFieldNames({ filter: 'Field2 eq 3' })).toEqual(['Field2']);
+  });
+
+  it('still strips quoted values and typed literals', () => {
+    expect(
+      referencedFieldNames({ filter: "Status eq 'Owner' and Created gt datetime'2026-01-01'" }),
+    ).toEqual(['Status', 'Created']);
   });
 });
 

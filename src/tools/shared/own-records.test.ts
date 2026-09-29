@@ -10,6 +10,7 @@ import {
   NotYourRecordError,
   UnscopableObjectError,
   assertOwnRecord,
+  assertOwnRecordById,
   assertRecordWritable,
   hideMissingRecord,
   missingRecordMessage,
@@ -18,6 +19,7 @@ import {
 } from './own-records.js';
 import { IdentityRequiredError } from '../../auth/identity-pin.js';
 import { IvantiApiError } from '../../ivanti/http/errors.js';
+import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
 import { resolveObject } from './resolve-object.js';
 import { createSessionPin } from '../../auth/identity-pin.js';
 import { ANONYMOUS } from '../../auth/identity.js';
@@ -103,6 +105,85 @@ describe('scopeToOwnRecords', () => {
     await expect(scopeToOwnRecords(deps, pinned(), resolved)).rejects.toThrow(
       UnscopableObjectError,
     );
+  });
+
+  /**
+   * The wrapper is only a constraint while the caller's parentheses close what they open. This
+   * filter, wrapped, is `(A) or (B) and mine` — which balances, so the check on what is SENT
+   * passed it, and it returned everyone's active tickets.
+   */
+  it('refuses a filter that would close the wrapper early, before wrapping it', async () => {
+    const { deps } = setup();
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    await expect(
+      scopeToOwnRecords(deps, pinned(), resolved, "Status eq 'Active') or (Status ne 'x'"),
+    ).rejects.toThrow(UnsupportedFilterError);
+    await expect(
+      scopeToOwnRecords(deps, pinned(), resolved, "Subject eq 'x"),
+    ).rejects.toThrow(UnsupportedFilterError);
+  });
+
+  it('holds a full-mode filter to the same structure, since callers compose it too', async () => {
+    const { deps } = setup(false);
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    await expect(
+      scopeToOwnRecords(deps, anonymous(), resolved, 'A eq 1) or (B eq 2'),
+    ).rejects.toThrow(UnsupportedFilterError);
+  });
+});
+
+/**
+ * The check a tool makes when it has a RecId rather than a record. Only Ivanti's not-found answer
+ * means "not there"; anything else is a failure to evaluate the guard, and must say so rather than
+ * tell a person their own ticket is not theirs.
+ */
+describe('assertOwnRecordById', () => {
+  function byId(answer: unknown) {
+    const { connection } = connectionFixture({
+      entities: {
+        incident: { fields: [field('RecId'), field('ProfileLink_RecID'), field('ProfileLink_Category')] },
+        employee: {},
+      },
+      responses: {
+        "incidents('i1')": answer,
+        incidents: { value: [{ RecId: 'i1', ProfileLink_RecID: 'E1', ProfileLink_Category: 'Employee' }] },
+        employees: { value: [] },
+      },
+    });
+    return { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: true, actions: OPEN_ACTIONS };
+  }
+
+  it('reads Ivanti’s not-found answer as "not yours"', async () => {
+    const deps = byId(
+      new IvantiApiError({ status: 400, method: 'GET', url: 'x', body: 'ISM_4000: Invalid key' }, 'Invalid key'),
+    );
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    await expect(assertOwnRecordById(deps, pinned(), resolved, 'i1')).rejects.toThrow(
+      NotYourRecordError,
+    );
+  });
+
+  it.each([
+    ['a 500 from the tenant', new IvantiApiError({ status: 500, method: 'GET', url: 'x' }, 'boom')],
+    ['the transport timing out', new IvantiApiError({ status: 0, method: 'GET', url: 'x' }, 'did not complete')],
+  ])('passes %s through rather than calling the record someone else’s', async (_label, failure) => {
+    const deps = byId(failure);
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    const refusal = assertOwnRecordById(deps, pinned(), resolved, 'i1');
+
+    await expect(refusal).rejects.toThrow(IvantiApiError);
+    await expect(refusal).rejects.not.toThrow(NotYourRecordError);
+  });
+
+  it('accepts the caller’s own record', async () => {
+    const deps = byId({ RecId: 'i1', ProfileLink_RecID: 'E1' });
+    const resolved = await resolveObject(deps, 'Incidents');
+
+    await expect(assertOwnRecordById(deps, pinned(), resolved, 'i1')).resolves.toBeUndefined();
   });
 });
 

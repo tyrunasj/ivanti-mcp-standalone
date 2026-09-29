@@ -22,15 +22,22 @@ rather than quietly narrowing what an end user may do.
 {{- end }}
 {{- if eq .Values.server.authMode "none" }}
 
-⚠  AUTH_MODE=none. Anything that can reach the Service gets the whole tool
-   surface. Put authentication in front of it, or use a NetworkPolicy.
+⚠  AUTH_MODE=none. Anything that can reach the pod gets the whole tool surface,
+   on the service account's key.
+{{- if eq (include "ivanti-mcp.networkPolicyEnabled" .) "true" }}
+   A NetworkPolicy admits {{ if .Values.networkPolicy.from }}only the peers in networkPolicy.from{{ else }}only pods in namespace {{ .Release.Namespace }}{{ end }} —
+   provided your CNI enforces NetworkPolicy (k3s, Calico and Cilium do; flannel
+   alone does not). kubectl port-forward is not subject to it.
+{{- else }}
+   networkPolicy.enabled=false: every pod in the cluster can reach it. Put
+   authentication in front of it, or turn the NetworkPolicy back on.
 {{- end }}
-{{- if gt (int .Values.replicaCount) 1 }}
+{{- end }}
 
-⚠  {{ .Values.replicaCount }} replicas with in-memory sessions. Confirm your ingress really
-   honours the Mcp-Session-Id hash — if it does not, conversations will break
-   intermittently and look like client bugs.
-{{- end }}
+Keys are read once, at startup. After rotating one in the Secret, roll the pod:
+  kubectl --namespace {{ .Release.Namespace }} rollout restart deploy/{{ include "ivanti-mcp.fullname" . }}
+or change rolloutToken in your values. A rollout ends every open session, since
+sessions live in this one pod's memory; clients reconnect with a new one.
 
 One release is one tenant and one audience. Another tenant, or the other
 audience, is another release.

@@ -113,9 +113,8 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
         // speaking in labels: `customer` is what the form calls `ProfileLink`, and a caller told
         // to say "Customer" then cannot find the field that is called that. A folded link answers
         // to any of its three names, so a search for `_RecID` still finds it.
-        const rows = fieldRows(visibleFields(entity), form).filter(
-          (row) => search === undefined || rowMatches(row, search),
-        );
+        const allRows = fieldRows(visibleFields(entity), form);
+        const rows = allRows.filter((row) => search === undefined || rowMatches(row, search));
         // Fields, not rows: a link row stands for three, and `totalFieldCount` counts fields.
         const fieldCount = rows.reduce((sum, row) => sum + row.covers.length, 0);
 
@@ -127,8 +126,12 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
          * this credential cannot read forms at all. Without the note both read as "the field has
          * no other name", and the second case would have the caller quietly reporting technical
          * names to people on a deployment where better ones exist behind a session.
+         *
+         * Counted over EVERY field, not the ones `search` kept: the note is a claim about the
+         * object, and a search that happened to match only unlabelled fields made it say "no field
+         * on this object carries a label" about an object whose form labels dozens.
          */
-        const labelled = rows.filter((row) => row.label !== undefined).length;
+        const labelled = allRows.filter((row) => row.label !== undefined).length;
         const labelsNote = registersFormTools(deps)
           ? labelled === 0
             ? 'No field on this object carries a label this role can see, so its technical names ' +

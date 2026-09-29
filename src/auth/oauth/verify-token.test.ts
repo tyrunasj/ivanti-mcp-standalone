@@ -1,9 +1,25 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
-import { SignJWT, generateKeyPair, type CryptoKey, type JWTVerifyGetKey } from 'jose';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { createTokenVerifier, extractScopes, looksLikeJwt } from './verify-token.js';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import {
+  SignJWT,
+  exportJWK,
+  generateKeyPair,
+  type CryptoKey,
+  type JWK,
+  type JWTVerifyGetKey,
+} from 'jose';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { Logger } from '../../logger.js';
+import {
+  JWKS_RETRY_MS,
+  createRemoteKeyResolver,
+  createTokenVerifier,
+  extractScopes,
+  looksLikeJwt,
+} from './verify-token.js';
 
 const ISSUER = 'https://id.example.com';
 const AUDIENCE = '259254020357488642'; // Zitadel shape: a project id, not a URL.
@@ -271,6 +287,169 @@ describe('challenge-safe descriptions', () => {
 
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.status).toBe(401);
+  });
+});
+
+/**
+ * The IdP's key set through an outage, against a real endpoint that can be taken down.
+ *
+ * jose trusts its copy for ten minutes; after that EVERY request awaited a reload, and a failed
+ * reload threw even though the keys already held would verify the token. So an IdP outage became
+ * a 503 for every request ten minutes in, and every one of them started its own fetch.
+ */
+describe('the remote key set', () => {
+  const TEN_MINUTES = 10 * 60_000;
+  let now = Date.now();
+  let closers: (() => Promise<void>)[] = [];
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await Promise.all(closers.map((close) => close()));
+    closers = [];
+  });
+
+  /** Only the clock is fake: the endpoint, fetch and jose's own timeout run for real. */
+  const later = (ms: number): void => {
+    now += ms;
+    vi.setSystemTime(now);
+  };
+
+  const keyPair = async (kid: string): Promise<{ privateKey: CryptoKey; jwk: JWK }> => {
+    const pair = await generateKeyPair('RS256');
+    return { privateKey: pair.privateKey, jwk: { ...(await exportJWK(pair.publicKey)), kid, alg: 'RS256', use: 'sig' } };
+  };
+
+  const sign = (key: CryptoKey, kid: string): Promise<string> =>
+    new SignJWT({})
+      .setProtectedHeader({ alg: 'RS256', kid })
+      .setIssuer(ISSUER)
+      .setAudience(AUDIENCE)
+      .setSubject('user-123')
+      .setIssuedAt()
+      .setExpirationTime('2h')
+      .sign(key);
+
+  /** A JWKS endpoint on loopback that answers, fails with 503, and counts every fetch. */
+  const endpoint = async (keys: JWK[]) => {
+    const state = { up: true, keys, fetches: 0 };
+    const server = createServer((_request, response) => {
+      state.fetches += 1;
+      if (!state.up) {
+        response.writeHead(503).end('down');
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ keys: state.keys }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    closers.push(() => new Promise((resolve) => server.close(() => { resolve(); })));
+    const { port } = server.address() as AddressInfo;
+    return { state, url: `http://127.0.0.1:${String(port)}/keys` };
+  };
+
+  const recording = () => {
+    const lines: { level: string; message: string }[] = [];
+    const keep = (level: string) => (message: string): void => {
+      lines.push({ level, message });
+    };
+    const log: Logger = { debug: keep('debug'), info: keep('info'), warn: keep('warn'), error: keep('error') };
+    return { log, lines };
+  };
+
+  const setup = async () => {
+    now = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    const k1 = await keyPair('k1');
+    const k2 = await keyPair('k2');
+    const idp = await endpoint([k1.jwk]);
+    const { log, lines } = recording();
+    const verify = createTokenVerifier({
+      issuer: ISSUER,
+      audience: [AUDIENCE],
+      keyResolver: createRemoteKeyResolver(idp.url, { logger: log }),
+      logger: log,
+    });
+    return { k1, k2, idp, verify, lines };
+  };
+
+  it('keeps verifying with the last good keys once the IdP goes down', async () => {
+    const { k1, idp, verify } = await setup();
+    const token = await sign(k1.privateKey, 'k1');
+    expect((await verify(token)).ok).toBe(true);
+
+    idp.state.up = false;
+    later(TEN_MINUTES + 1_000);
+
+    expect(await verify(token)).toMatchObject({ ok: true });
+  });
+
+  it('asks the IdP once per backoff interval during an outage, not once per request', async () => {
+    const { k1, idp, verify, lines } = await setup();
+    const token = await sign(k1.privateKey, 'k1');
+    await verify(token);
+
+    idp.state.up = false;
+    later(TEN_MINUTES + 1_000);
+    for (let request = 0; request < 5; request += 1) expect((await verify(token)).ok).toBe(true);
+
+    // The initial fetch, then the one refresh that failed — and nothing for the four after it.
+    expect(idp.state.fetches).toBe(2);
+    expect(lines.filter((line) => line.level === 'warn')).toHaveLength(1);
+
+    later(JWKS_RETRY_MS + 1);
+    await verify(token);
+    expect(idp.state.fetches).toBe(3);
+  });
+
+  it('takes the fresh key set as soon as the IdP answers again', async () => {
+    const { k1, k2, idp, verify, lines } = await setup();
+    await verify(await sign(k1.privateKey, 'k1'));
+
+    idp.state.up = false;
+    later(TEN_MINUTES + 1_000);
+    await verify(await sign(k1.privateKey, 'k1'));
+
+    idp.state.up = true;
+    idp.state.keys = [k2.jwk];
+    later(JWKS_RETRY_MS + 1);
+
+    expect((await verify(await sign(k2.privateKey, 'k2'))).ok).toBe(true);
+    expect(lines.map((line) => line.message)).toContain('the IdP signing keys are reachable again');
+  });
+
+  // What makes key rotation a non-event, and must survive the change.
+  it('still refetches when a token names a key it has not seen', async () => {
+    const { k1, k2, idp, verify } = await setup();
+    await verify(await sign(k1.privateKey, 'k1'));
+
+    idp.state.keys = [k1.jwk, k2.jwk];
+    later(31_000);
+
+    expect((await verify(await sign(k2.privateKey, 'k2'))).ok).toBe(true);
+    expect(idp.state.fetches).toBe(2);
+  });
+
+  // It may be signed by a key rotated in while the IdP was down; 401 would start the loop.
+  it('answers 503, not 401, for an unseen key while the IdP is down', async () => {
+    const { k1, k2, idp, verify } = await setup();
+    await verify(await sign(k1.privateKey, 'k1'));
+
+    idp.state.up = false;
+    later(TEN_MINUTES + 1_000);
+    await verify(await sign(k1.privateKey, 'k1'));
+
+    const result = await verify(await sign(k2.privateKey, 'k2'));
+    expect(result.ok === false && result.status).toBe(503);
+  });
+
+  it('answers 503 when it never had keys, and backs off there too', async () => {
+    const { k1, idp, verify } = await setup();
+    idp.state.up = false;
+    const token = await sign(k1.privateKey, 'k1');
+
+    expect(await verify(token)).toMatchObject({ ok: false, status: 503 });
+    expect(await verify(token)).toMatchObject({ ok: false, status: 503 });
+    expect(idp.state.fetches).toBe(1);
   });
 });
 

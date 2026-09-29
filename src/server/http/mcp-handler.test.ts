@@ -8,7 +8,7 @@ import { ANONYMOUS, verifiedIdentity } from '../../auth/identity.js';
 import type { Logger } from '../../logger.js';
 import type { AuthorizationResult } from './authorize-request.js';
 import { createMcpHandler, type McpSession } from './mcp-handler.js';
-import { SessionManager } from './session-manager.js';
+import { EVICTION_FLOOR_MS, SessionManager } from './session-manager.js';
 
 const silentLogger = (): Logger => ({
   debug: vi.fn(),
@@ -53,7 +53,12 @@ const request = (
   body?: unknown,
 ): IncomingMessage => {
   const stream = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]);
-  return Object.assign(stream, { method, headers, url: '/mcp' }) as unknown as IncomingMessage;
+  return Object.assign(stream, {
+    method,
+    headers,
+    url: '/mcp',
+    socket: { remoteAddress: '203.0.113.7' },
+  }) as unknown as IncomingMessage;
 };
 
 interface FakeResponse extends ServerResponse {
@@ -160,9 +165,138 @@ describe('createMcpHandler', () => {
     await handler(request('POST', {}, INITIALIZE), res, authorized);
 
     // 503 rather than 429: the cap is global, so this client sent nothing wrong and its
-    // backing off frees nothing. Retry-After is what makes it actionable.
+    // backing off frees nothing. Retry-After is what makes it actionable — and it is when the
+    // one session, used just now, could first be closed for a newcomer: the eviction floor.
     expect(res.status).toBe(503);
-    expect(res.headers['Retry-After']).toBe('30');
+    expect(res.headers['Retry-After']).toBe(String(EVICTION_FLOOR_MS / 1000));
+  });
+
+  /**
+   * `admit()` used to count registered sessions only, and a session registers when its
+   * `initialize` has run. Two initializes arriving together were both admitted against the one
+   * free slot; the second then failed to register mid-handshake and was answered 404 "Session not
+   * found" — which reads as a bug, not as a full server.
+   */
+  it('holds the slot from admission, so a concurrent initialize is refused rather than half-opened', async () => {
+    const logger = silentLogger();
+    const sessions = new SessionManager<FakeSession>({ maxSessions: 1, idleTtlMs: 60_000, logger });
+    let connected: () => void = () => undefined;
+    const slow = new Promise<void>((resolve) => {
+      connected = resolve;
+    });
+    let admitted = 0;
+    const handler = createMcpHandler<FakeSession>({
+      sessions,
+      logger,
+      createSession: (_identity, slot) => {
+        admitted += 1;
+        const session = fakeSession('first');
+        session.connect = () => slow;
+        // What the real transport does from `onsessioninitialized`.
+        session.transport.handleRequest = () => {
+          slot.commit('first', session);
+          return Promise.resolve();
+        };
+        return session;
+      },
+    });
+
+    const first = handler(request('POST', {}, INITIALIZE), response(), authorized);
+    // The first is admitted and parked in connect(), not yet registered.
+    await vi.waitFor(() => {
+      expect(admitted).toBe(1);
+    });
+    expect(sessions.size).toBe(0);
+    const second = response();
+    await handler(request('POST', {}, INITIALIZE), second, authorized);
+    connected();
+    await first;
+
+    expect(second.status).toBe(503);
+    expect(sessions.get('first')).toBeDefined();
+  });
+
+  it('gives the slot back, and closes the session, when an initialize never registers', async () => {
+    const { handler, sessions, created } = setup(1);
+
+    // The fake transport never fires `onsessioninitialized` — as when the SDK refuses the request.
+    await handler(request('POST', {}, INITIALIZE), response(), authorized);
+
+    expect(created[0]?.close).toHaveBeenCalled();
+    expect(sessions.admit().admitted).toBe(true);
+  });
+
+  it('records who connected when a session opens', async () => {
+    const info = vi.fn();
+    const logger = { ...silentLogger(), info };
+    const sessions = new SessionManager<FakeSession>({ maxSessions: 5, idleTtlMs: 60_000, logger });
+    const handler = createMcpHandler<FakeSession>({
+      sessions,
+      logger,
+      createSession: (_identity, slot) => {
+        const session = fakeSession('s1');
+        session.transport.handleRequest = () => {
+          slot.commit('s1', session);
+          return Promise.resolve();
+        };
+        return session;
+      },
+    });
+
+    await handler(
+      request('POST', { 'user-agent': 'claude-code/2.1' }, INITIALIZE),
+      response(),
+      authorized,
+    );
+
+    expect(info).toHaveBeenCalledWith(
+      'session opened',
+      expect.objectContaining({ remoteAddress: '203.0.113.7', userAgent: 'claude-code/2.1' }),
+    );
+  });
+
+  /**
+   * The SSE stream a client holds open for its whole life is a request in flight: a client with
+   * one attached is alive, however long ago it last sent anything, and closing it to admit a
+   * newcomer would only trade one person's conversation for another's.
+   */
+  it('never evicts a session while it is answering, however quiet it has been', async () => {
+    let clock = 1_000_000;
+    const logger = silentLogger();
+    const sessions = new SessionManager<FakeSession>({
+      maxSessions: 1,
+      idleTtlMs: 3_600_000,
+      logger,
+      now: () => clock,
+    });
+    const attached = fakeSession('attached');
+    let detach: () => void = () => undefined;
+    attached.transport.handleRequest = () =>
+      new Promise<void>((resolve) => {
+        detach = resolve;
+      });
+    sessions.register('attached', attached);
+    const handler = createMcpHandler<FakeSession>({
+      sessions,
+      logger,
+      createSession: () => fakeSession('newcomer'),
+    });
+
+    const stream = handler(request('GET', { 'mcp-session-id': 'attached' }), response(), authorized);
+    clock += 10 * EVICTION_FLOOR_MS;
+    const refused = response();
+    await handler(request('POST', {}, INITIALIZE), refused, authorized);
+
+    expect(refused.status).toBe(503);
+    expect(attached.close).not.toHaveBeenCalled();
+
+    // Once the stream ends the session is quiet from THAT moment, not from when it opened.
+    detach();
+    await stream;
+    clock += EVICTION_FLOOR_MS;
+    await handler(request('POST', {}, INITIALIZE), response(), authorized);
+
+    expect(attached.close).toHaveBeenCalled();
   });
 
   it('rejects a malformed body before touching a session', async () => {
@@ -172,6 +306,7 @@ describe('createMcpHandler', () => {
       method: 'POST',
       headers: {},
       url: '/mcp',
+      socket: { remoteAddress: '203.0.113.7' },
     }) as unknown as IncomingMessage;
 
     await handler(bad, res, authorized);

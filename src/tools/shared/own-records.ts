@@ -8,6 +8,7 @@ import type { CallContext } from '../tool-definition.js';
 import type { IvantiToolDeps } from './deps.js';
 import type { ResolvedObject } from './resolve-object.js';
 import { isIvantiNotFound } from '../../ivanti/http/errors.js';
+import { assertSupportedFilter } from '../../ivanti/odata/filter.js';
 import { transportFor } from './transport-for.js';
 
 /**
@@ -24,11 +25,16 @@ import { transportFor } from './transport-for.js';
 export class UnscopableObjectError extends Error {
   readonly object: string;
 
-  constructor(object: string) {
+  /** `via` names the relationship, when the object was reached through one rather than named. */
+  constructor(object: string, via?: string) {
     super(
-      `I cannot tell which ${object} records belong to you: this object has no field linking a ` +
-        'record to a person, so there is no safe way to show only yours. Refusing rather than ' +
-        'showing everyone\'s.',
+      via === undefined
+        ? `I cannot tell which ${object} records belong to you: this object has no field ` +
+            'linking a record to a person, so there is no safe way to show only yours. Refusing ' +
+            'rather than showing everyone\'s.'
+        : `I cannot tell which of the ${object} records ${via} reaches are yours: they carry no ` +
+            'field linking them to a person, and they do not name this record as their parent, ' +
+            'so nothing ties them to you. Refusing rather than showing all of them.',
     );
     this.name = 'UnscopableObjectError';
     this.object = object;
@@ -79,6 +85,10 @@ async function customerField(
  *
  * The caller's filter is parenthesised before the constraint is added: `A or B` and `A or B and
  * mine` are different questions, and only one of them is the one that was asked.
+ *
+ * The parentheses only hold if the caller's own do, so the caller's filter is checked HERE, on
+ * its own, before it is wrapped. `buildQuery` checks what is sent, and by then it is too late:
+ * `A) or (B` wrapped is `(A) or (B) and mine`, which balances — and returns everyone's A.
  */
 export async function scopeToOwnRecords(
   deps: IvantiToolDeps,
@@ -86,9 +96,15 @@ export async function scopeToOwnRecords(
   resolved: ResolvedObject,
   filter?: string,
 ): Promise<ScopedRead> {
-  if (!deps.ownRecordsOnly) return filter === undefined ? {} : { filter };
+  if (!deps.ownRecordsOnly) {
+    // Composed with other clauses by some callers (`group_count` adds its bucket), so the same
+    // rule applies unscoped: the grouping a caller wrote must be the one that is read.
+    assertSupportedFilter(filter);
+    return filter === undefined ? {} : { filter };
+  }
 
   const person = requirePerson(context);
+  assertSupportedFilter(filter);
   const field = await customerField(deps, resolved);
   const mine = `${field} eq ${quoteOdataString(person.recId)}`;
 
@@ -238,11 +254,95 @@ export async function assertOwnRecordById(
   const record = await transport
     .request<OdataRecord>(url)
     // Ivanti reports a missing record as 400 "Invalid key", and this must not distinguish
-    // "gone" from "not yours" any more than the message does.
-    .catch(() => undefined);
+    // "gone" from "not yours" any more than the message does. But ONLY that dialect: a bare
+    // catch also turned a 500, a proxy's 502 and the transport's own timeout into "No such record
+    // is available to you" — a person told their own ticket is not theirs, and an outage reported
+    // as a fact about the record. The same fix `assertRecordWritable` already got.
+    .catch((error: unknown) => {
+      if (isIvantiNotFound(error)) return undefined;
+      throw error;
+    });
 
   if (record === undefined) throw new NotYourRecordError();
   await assertOwnRecord(deps, context, resolved, record);
+}
+
+/**
+ * Which rows on the far side of a relationship a scoped caller may see.
+ *
+ * Checking the parent is not enough. The parent being theirs says nothing about what a
+ * relationship reaches: from their own ticket, a relationship to other tickets, requests or
+ * changes lands on records filed by other people, and a navigation property cannot be filtered,
+ * so every row came back. The rule is decided from the TARGET, before anything is read, and
+ * applied to each row:
+ *
+ * 1. **The target belongs to people** — it has the person link `scopeToOwnRecords` would use.
+ *    Then a row is shown only when it is the caller's, exactly as a list of that object would be.
+ * 2. **Otherwise, the target is a child of the parent** — it carries `ParentLink_RecID`, the field
+ *    Ivanti's tasks, attachments and journals name their parent in — and a row is shown only when
+ *    that field names THIS record. A row that hangs off the caller's own record is part of it.
+ *    The relationship's name is no evidence either way: `…Contains…` and `…Associates…` are
+ *    labels, and the row's own parent field is the fact.
+ * 3. **Neither** — a CI, a team, a catalogue entry — nothing ties a row to the caller, so the
+ *    traversal is refused, the way `list_records` refuses an object it cannot scope.
+ *
+ * `ParentLink_RecID` is a fixed name, and a tenant's own object may spell its parent otherwise.
+ * That is safe in the direction that matters: such an object falls to rule 3 and is refused.
+ *
+ * Undefined in `full` mode, where every row is the answer.
+ */
+export interface RelatedRowScope {
+  /** Whether one related row may be shown. */
+  keep: (row: OdataRecord) => boolean;
+  /** Who the rows were narrowed to, so the answer can say. */
+  scopedTo: string;
+  /** Why a row is kept: it is the caller's own, or it hangs off their record. */
+  rule: 'owner' | 'child';
+}
+
+/** Ivanti's field for "the record this one hangs off", compared case-insensitively. */
+const PARENT_LINK_FIELD = 'parentlink_recid';
+
+/** RecIds are compared case-insensitively: Ivanti stores both casings. */
+function sameRecId(value: unknown, recId: string): boolean {
+  return typeof value === 'string' && value.toUpperCase() === recId.toUpperCase();
+}
+
+export async function scopeRelatedRows(
+  deps: IvantiToolDeps,
+  context: CallContext,
+  target: ResolvedObject,
+  parentRecId: string,
+  relationship: string,
+): Promise<RelatedRowScope | undefined> {
+  if (!deps.ownRecordsOnly) return undefined;
+
+  const person = requirePerson(context);
+
+  const link = await deps.connection.people.customerLinks.forEntity(
+    target.entity,
+    target.entitySet,
+  );
+  if (link !== undefined) {
+    return {
+      keep: (row) => sameRecId(row[link.recIdField], person.recId),
+      scopedTo: person.displayName,
+      rule: 'owner',
+    };
+  }
+
+  const parentField = target.entity.fields.find(
+    (field) => field.name.toLowerCase() === PARENT_LINK_FIELD,
+  )?.name;
+  if (parentField !== undefined) {
+    return {
+      keep: (row) => sameRecId(row[parentField], parentRecId),
+      scopedTo: person.displayName,
+      rule: 'child',
+    };
+  }
+
+  throw new UnscopableObjectError(target.entity.name, relationship);
 }
 
 /**

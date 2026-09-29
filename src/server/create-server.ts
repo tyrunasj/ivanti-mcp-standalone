@@ -27,6 +27,20 @@ const { name: SERVER_NAME, version: SERVER_VERSION } = readPackageMetadata();
 
 export { SERVER_NAME, SERVER_VERSION };
 
+/**
+ * One connection's server, and the way to end it that waits for what ending it starts.
+ *
+ * `McpServer.close()` alone is not that. The SDK runs `onclose` synchronously and awaits nothing
+ * it starts, so the release `releaseOnClose` begins was still in flight when `close()` resolved —
+ * and a shutdown that awaited it exited ahead of the request handing the person's Ivanti session
+ * back.
+ */
+export interface McpConnection {
+  server: McpServer;
+  /** Closes the transport, then resolves once any Ivanti session it held has been released. */
+  close: () => Promise<void>;
+}
+
 export interface ServerFactory {
   /** Names of the tools every server produced by this factory exposes. */
   toolNames: string[];
@@ -38,7 +52,7 @@ export interface ServerFactory {
    * A fresh server per connection — the SDK forbids one instance holding two transports — bound
    * to the identity that connection established.
    */
-  create: (context: CallContext) => McpServer;
+  create: (context: CallContext) => McpConnection;
 }
 
 /**
@@ -61,13 +75,18 @@ export interface ServerFactoryDeps {
  * Exported so the guarantee can be tested on the path that actually runs, rather than on a
  * reconstruction of it. It chains rather than replaces: `onclose` may already carry the SDK's own
  * teardown, and dropping that to add this would trade one leak for another.
+ *
+ * Returns the release the last close started, because `onclose` cannot: the SDK calls it and
+ * moves on, so whoever must not exit before the release leaves — shutdown — awaits this instead.
  */
-export function releaseOnClose(server: McpServer, slot: ImpersonationSlot): void {
+export function releaseOnClose(server: McpServer, slot: ImpersonationSlot): () => Promise<void> {
+  let releasing: Promise<void> = Promise.resolve();
   const previous = server.server.onclose;
   server.server.onclose = (): void => {
-    void slot.release();
+    releasing = slot.release();
     previous?.call(server.server);
   };
+  return () => releasing;
 }
 
 /**
@@ -107,6 +126,8 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
             ...(config.IVANTI_IMPERSONATION_ROLE === undefined
               ? {}
               : { pinnedRole: config.IVANTI_IMPERSONATION_ROLE }),
+            // The handshake is POSTs end to end, so it gets the write budget.
+            timeoutMs: config.IVANTI_WRITE_TIMEOUT_MS,
             logger: deps.logger,
           })
       : undefined;
@@ -126,6 +147,7 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
   const instructions = buildInstructions({
     capability: deps.ivanti?.capability,
     mode: config.MCP_MODE,
+    ...(config.AUTH_MODE === undefined ? {} : { authMode: config.AUTH_MODE }),
     resourceUris: resources.map((resource) => resource.uri),
   });
 
@@ -136,7 +158,7 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
     toolNames: tools.map((tool) => tool.name),
     resourceUris: resources.map((resource) => resource.uri),
     manifest,
-    create: (context: CallContext): McpServer => {
+    create: (context: CallContext): McpConnection => {
       const server = new McpServer(
         { name: SERVER_NAME, version: SERVER_VERSION },
         // Said once, at connect time, rather than repeated in every tool description.
@@ -153,7 +175,10 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
       // Per connection, like the pin — and released here rather than anywhere else, so the thing
       // that creates an Ivanti session is the thing that gives it back.
       const impersonation = opener === undefined ? undefined : createImpersonationSlot(opener);
-      if (impersonation !== undefined) releaseOnClose(server, impersonation);
+      const released =
+        impersonation === undefined
+          ? (): Promise<void> => Promise.resolve()
+          : releaseOnClose(server, impersonation);
 
       // Its own knob: on stdio this is the only thing that ends a conversation, and how long a
       // person's records stay reachable is not the same question as how long a dead HTTP session
@@ -168,7 +193,13 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
       );
       endOnInitialize(server, endConversation);
       registerResources(server, resources, mayAnswer, deps.logger);
-      return server;
+      return {
+        server,
+        close: async (): Promise<void> => {
+          await server.close();
+          await released();
+        },
+      };
     },
   };
 }

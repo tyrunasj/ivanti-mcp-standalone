@@ -40,6 +40,31 @@ function isMetadata(value: unknown): value is AuthorizationServerMetadata {
   return typeof record.issuer === 'string' && typeof record.jwks_uri === 'string';
 }
 
+/** A development IdP on this machine, where there is no network for anyone to sit on. */
+function isLoopback(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '[::1]' || /^127(\.\d{1,3}){3}$/.test(hostname);
+}
+
+/**
+ * Why a discovered key-set URL cannot be trusted, if it cannot.
+ *
+ * The keys are what every token is checked against, so whoever can answer that URL can sign in as
+ * anyone. Over plain HTTP that is anyone on the path — and a discovered URL is not something an
+ * operator ever looked at, which is why the configured pair is checked at startup and this one
+ * has to be checked here.
+ */
+function jwksUriProblem(jwksUri: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(jwksUri);
+  } catch {
+    return 'is not an absolute URL';
+  }
+  if (url.protocol === 'https:') return undefined;
+  if (url.protocol === 'http:' && isLoopback(url.hostname)) return undefined;
+  return `uses ${url.protocol.replace(/:$/, '')}, not https`;
+}
+
 /**
  * Resolves the authorization server's metadata, rejecting any document whose `issuer` does not
  * match the one we asked for. That check is the mitigation for a metadata document served from
@@ -69,6 +94,18 @@ export async function discoverAuthorizationServer(
       throw new Error(
         `Authorization server metadata at ${url} declares issuer "${body.issuer}", ` +
           `which does not match the configured OAUTH_ISSUER "${issuer}".`,
+      );
+    }
+
+    // Refused rather than skipped: the next candidate is the same issuer's document, and falling
+    // through to it would make the check depend on the order the provider happens to answer in.
+    const problem = jwksUriProblem(body.jwks_uri);
+    if (problem !== undefined) {
+      throw new Error(
+        `Authorization server metadata at ${url} names the signing keys at "${body.jwks_uri}", ` +
+          `which ${problem}. Keys fetched without TLS can be replaced by anyone on the path, and ` +
+          'every token is verified against them. Fix the provider, or set OAUTH_JWKS_URI to the ' +
+          'https address of its keys.',
       );
     }
 

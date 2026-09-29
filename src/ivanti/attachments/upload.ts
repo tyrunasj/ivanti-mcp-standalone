@@ -3,7 +3,8 @@
 
 import type { IvantiTransport } from '../http/transport.js';
 import { IvantiApiError } from '../http/errors.js';
-import type { OdataRecord } from '../odata/response.js';
+import { buildQuery, quoteOdataString, withQuery } from '../odata/query.js';
+import { readCollection, type OdataRecord } from '../odata/response.js';
 import { tenantCategorySpelling } from '../parent-link.js';
 
 /**
@@ -29,10 +30,27 @@ interface UploadReply {
 
 const REC_ID = /^[0-9A-F]{32}$/i;
 
+/** What the attachment row says after the link, read back rather than assumed. */
+export interface StoredAttachment {
+  /** The record it hangs off, as Ivanti stored the link. */
+  parentRecId: string;
+  parentCategory: string;
+  name?: string;
+  sizeBytes?: number;
+  createdBy?: string;
+  lastModBy?: string;
+}
+
 export interface UploadedAttachment {
   attachmentId: string;
   filename: string;
   sizeBytes: number;
+  stored: StoredAttachment;
+  /**
+   * The linking request failed — typically a timeout — and the read-back found the link in place
+   * anyway. The reason, so the caller can say why the answer took the long way round.
+   */
+  linkReplyLost?: string;
 }
 
 export interface AttachmentUploadRequest {
@@ -42,7 +60,10 @@ export interface AttachmentUploadRequest {
   /** The AdminUI form Ivanti wants here: `Incident#`. */
   parentObjectType: string;
   parentRecId: string;
-  /** The object name, as CSDL spells it. The tenant's own casing is looked up from its rows. */
+  /**
+   * The object name, as CSDL spells it. Used only to find the tenant's own casing on its rows;
+   * the link itself is written in the AdminUI form — see `linkCategory`.
+   */
   parentCategory: string;
   filename: string;
   bytes: Uint8Array;
@@ -107,10 +128,6 @@ export class ParentNotFoundError extends Error {
 }
 
 /**
- * The attachment exists but points at nothing, and only the caller can decide what to do about
- * it. Carries the id so it can be deleted rather than left to be found by accident.
- */
-/**
  * The tenant does not accept this file *extension* — nothing to do with the bytes.
  *
  * Ivanti keeps a per-tenant allowlist and decides from the filename, so the same content uploads
@@ -132,18 +149,95 @@ export class AttachmentTypeRefusedError extends Error {
   }
 }
 
+/**
+ * The attachment exists but points at nothing, and only the caller can decide what to do about
+ * it. Carries the id so it can be dealt with rather than left to be found by accident.
+ *
+ * The message states what happened and nothing about what to do next: what the caller *can* do
+ * depends on the deployment — `delete_attachment` refuses a file on no record in `enduser`,
+ * because nothing then shows whose it is — so the tool, which knows the mode, says the rest.
+ */
 export class OrphanedAttachmentError extends Error {
   readonly attachmentId: string;
 
   constructor(attachmentId: string, filename: string, cause: string) {
     super(
-      `'${filename}' was uploaded to Ivanti but could not be attached to the record: ${cause}. ` +
-        'The file now exists on no record. Delete it with delete_attachment, or attach it ' +
-        `again — its id is ${attachmentId}.`,
+      `'${filename}' was uploaded to Ivanti but is not attached to the record: ${cause}. The ` +
+        `file now exists on no record; its id is ${attachmentId}.`,
     );
     this.name = 'OrphanedAttachmentError';
     this.attachmentId = attachmentId;
   }
+}
+
+/**
+ * The file was uploaded, and whether it is on the record cannot be told: the read that would
+ * settle it failed. Neither a success nor an orphan, and reporting it as either would be a guess.
+ */
+export class AttachmentLinkUnconfirmedError extends Error {
+  readonly attachmentId: string;
+
+  constructor(attachmentId: string, filename: string, link: string, readBack: string) {
+    super(
+      `'${filename}' was uploaded to Ivanti (id ${attachmentId}) and ${link}, but reading the ` +
+        `file back ${readBack}, so whether it is on the record is NOT KNOWN.`,
+    );
+    this.name = 'AttachmentLinkUnconfirmedError';
+    this.attachmentId = attachmentId;
+  }
+}
+
+/**
+ * The category the link PATCH carries: the AdminUI id, `Incident#`, in the tenant's casing.
+ *
+ * Not the rows' own spelling. `docs/notes.md` records the measurement (2026-09-12): the linking
+ * PATCH fails with *"Role Admin does not have rights to update following fields"* when
+ * `ParentLink_Category` is `Incident`, and succeeds with `Incident#` — and only with that spelling
+ * does a `CreatedBy` in the same PATCH stick. This wrote the rows' spelling (`Incident`) until
+ * then; the read-back after the PATCH is what shows which one a tenant took.
+ *
+ * The casing is still copied from the rows where one matches, because CSDL is lowercase and the
+ * measured value was not. An object whose rows use some other form keeps the AdminUI id the
+ * upload itself was sent with.
+ */
+export function linkCategory(objectType: string, spelled: string): string {
+  const bare = objectType.replace(/#$/, '');
+  return bare.toLowerCase() === spelled.toLowerCase() ? `${spelled}#` : objectType;
+}
+
+async function readAttachment(
+  transport: IvantiTransport,
+  attachmentId: string,
+): Promise<OdataRecord | undefined> {
+  const url = withQuery(
+    transport.routes.entitySet('attachments'),
+    buildQuery({ filter: `RecId eq ${quoteOdataString(attachmentId)}`, top: 1 }),
+  );
+  return readCollection<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
+}
+
+const text = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+
+/** The row's link, when it points at this parent — both halves, or it is not a link. */
+function linkedTo(row: OdataRecord, parentRecId: string): StoredAttachment | undefined {
+  const recId = text(row['ParentLink_RecID']);
+  const category = text(row['ParentLink_Category']);
+  if (recId === undefined || category === undefined) return undefined;
+  if (recId.toLowerCase() !== parentRecId.toLowerCase()) return undefined;
+
+  const size = row['AttachmentSize'];
+  const name = text(row['ATTACHNAME']);
+  const createdBy = text(row['CreatedBy']);
+  const lastModBy = text(row['LastModBy']);
+  return {
+    parentRecId: recId,
+    parentCategory: category,
+    ...(name === undefined ? {} : { name }),
+    ...(typeof size === 'number' ? { sizeBytes: size } : {}),
+    ...(createdBy === undefined ? {} : { createdBy }),
+    ...(lastModBy === undefined ? {} : { lastModBy }),
+  };
 }
 
 export async function uploadAttachment(
@@ -198,7 +292,11 @@ export async function uploadAttachment(
   }
 
   // The half Ivanti does not do. Without it the file is uploaded and unreachable.
-  const category = await tenantCategorySpelling(transport, 'attachments', request.parentCategory);
+  const category = linkCategory(
+    request.parentObjectType,
+    await tenantCategorySpelling(transport, 'attachments', request.parentCategory),
+  );
+  let linkFailure: string | undefined;
   try {
     await transport.request(transport.routes.record('attachments', attachmentId), {
       method: 'PATCH',
@@ -214,13 +312,50 @@ export async function uploadAttachment(
     });
   } catch (error: unknown) {
     // try/catch rather than `.catch`: this has to hold whether the transport rejects or throws
-    // on the way in, and the difference is invisible from here.
+    // on the way in, and the difference is invisible from here. Not yet an orphan: a timeout
+    // says nothing about whether Ivanti applied the PATCH, so the read below decides.
+    linkFailure = error instanceof Error ? error.message : 'unknown error';
+  }
+
+  // Read back, whatever the PATCH answered. A 200 is not a link — Ivanti accepts writes it then
+  // ignores — and a failed or timed-out PATCH is not an orphan until the row says so.
+  const attempt =
+    linkFailure === undefined
+      ? 'Ivanti accepted the link to the record'
+      : `the request linking it to the record failed (${linkFailure})`;
+  let row: OdataRecord | undefined;
+  try {
+    row = await readAttachment(transport, attachmentId);
+  } catch (error: unknown) {
+    throw new AttachmentLinkUnconfirmedError(
+      attachmentId,
+      filename,
+      attempt,
+      `failed (${error instanceof Error ? error.message : 'unknown error'})`,
+    );
+  }
+  if (row === undefined) {
+    throw new AttachmentLinkUnconfirmedError(attachmentId, filename, attempt, 'found no such file');
+  }
+
+  const stored = linkedTo(row, parentRecId);
+  if (stored === undefined) {
+    const elsewhere = text(row['ParentLink_RecID']);
     throw new OrphanedAttachmentError(
       attachmentId,
       filename,
-      error instanceof Error ? error.message : 'unknown error',
+      linkFailure ??
+        (elsewhere === undefined
+          ? 'Ivanti accepted the link, and reading the file back shows it on no record'
+          : `Ivanti accepted the link, and reading the file back shows it on ${elsewhere} instead`),
     );
   }
 
-  return { attachmentId, filename, sizeBytes: bytes.byteLength };
+  return {
+    attachmentId,
+    filename,
+    sizeBytes: bytes.byteLength,
+    stored,
+    ...(linkFailure === undefined ? {} : { linkReplyLost: linkFailure }),
+  };
 }

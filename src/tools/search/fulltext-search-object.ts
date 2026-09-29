@@ -2,8 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
-import { COMPACT_ROW_FIELDS } from '../../ivanti/odata/compact-fields.js';
-import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
+import { projectRows } from '../../ivanti/odata/projection.js';
 import { buildQuery, DEFAULT_TOP, MAX_TOP, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
@@ -15,6 +14,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { assertOrderBy } from '../shared/order-by.js';
 import { QUERY_WORDS, noHitsNote } from './query-words.js';
+import { rowFields } from './row-fields.js';
 import { transportFor } from '../shared/transport-for.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
@@ -87,6 +87,10 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
         const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
 
+        // `"*"` used to reach the projection as a field name, and every hit came back as its
+        // RecId alone — see `rowFields`.
+        const shown = rowFields(rows, args.fields, resolved.entity);
+
         return jsonResult({
           object: entitySet,
           ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
@@ -96,7 +100,8 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
           // In the payload, not only in the description: across a long session the manifest
           // scrolls out of attention and an empty `rows` reads as a clean negative.
           ...(rows.length === 0 ? { note: noHitsNote(args.query) } : {}),
-          rows: projectRows(rows, parseFieldList(args.fields) ?? COMPACT_ROW_FIELDS),
+          ...(shown.note === undefined ? {} : { fields: shown.note }),
+          rows: projectRows(rows, shown.fields),
         });
       }),
   });

@@ -173,7 +173,7 @@ describe('act_as', () => {
       subject: 'opaque-pairwise-id',
       issuer: 'https://idp',
       scopes: [],
-      claims: { email: 'HSanders@saasitdemo.com' },
+      claims: { email: 'HSanders@saasitdemo.com', email_verified: true },
     });
 
     it('looks up the token’s claim and ignores the name it was handed', async () => {
@@ -201,7 +201,7 @@ describe('act_as', () => {
           subject: 's',
           issuer: 'https://idp',
           scopes: [],
-          claims: { email: 'Harold Sanders' },
+          claims: { preferred_username: 'Harold Sanders' },
         }),
       );
 
@@ -255,6 +255,89 @@ describe('act_as', () => {
   });
 });
 
+/**
+ * Two directory records that share a login or an address — a leaver's old record beside the one
+ * they use now, a contact created twice. Nothing the person could type told them apart, and on an
+ * unverified conversation a RecId given back from the list was searched for as a login and found
+ * nobody, so the conversation could not get past the question at all.
+ */
+describe('records that share a login', () => {
+  const HAROLD_AGAIN = { ...HAROLD, RecId: 'e7', Department: 'Finance' };
+
+  /** A directory that matches only the login it was asked for — never a RecId. */
+  function directory(rows: Record<string, unknown>[]) {
+    const { connection } = connectionFixture({ entities: { employee: {} } });
+    const find = vi.fn((claim: string) =>
+      Promise.resolve(
+        claim.toLowerCase() === 'hsanders'
+          ? rows.map((row) => ({
+              recId: String(row['RecId']),
+              category: 'employee',
+              displayName: String(row['DisplayName']),
+              loginId: String(row['LoginID']),
+              primaryEmail: String(row['PrimaryEmail']),
+              status: String(row['Status']),
+              matchedOn: 'LoginID' as const,
+            }))
+          : [],
+      ),
+    );
+    (connection.people as unknown as { directory: unknown }).directory = { find };
+    const tool = createActAsTool({
+      connection,
+      gate: OPEN_GATE,
+      logger: logger(),
+      ownRecordsOnly: true,
+      actions: OPEN_ACTIONS,
+    });
+    return { tool, find };
+  }
+
+  it('acts for the one still active when the others are marked terminated', async () => {
+    const { tool } = directory([{ ...HAROLD, RecId: 'e0', Status: 'Terminated' }, HAROLD]);
+    const context = ctx();
+
+    const result = await tool.handler({ person: 'HSanders' }, context);
+
+    expect(body(result)['pinned']).toBe(true);
+    expect(context.pin?.person()?.recId).toBe('e1');
+  });
+
+  it('still asks when more than one of them is active', async () => {
+    const { tool } = directory([HAROLD, HAROLD_AGAIN]);
+    const context = ctx();
+
+    const result = body(await tool.handler({ person: 'HSanders' }, context));
+
+    expect(result['pinned']).toBe(false);
+    // The login would single out neither, so the question has to say what will.
+    expect(String(result['next'])).toContain('recId');
+  });
+
+  it('lets the answer name a RecId from the list it was shown', async () => {
+    const { tool } = directory([HAROLD, HAROLD_AGAIN]);
+    const context = ctx();
+
+    await tool.handler({ person: 'HSanders' }, context);
+    const chosen = await tool.handler({ person: 'e7' }, context);
+
+    expect(body(chosen)['pinned']).toBe(true);
+    expect(context.pin?.person()?.recId).toBe('e7');
+  });
+
+  // Only a RecId it offered: anything else is a new claim, looked up like any other.
+  it('does not treat a RecId it never offered as a choice', async () => {
+    const { tool, find } = directory([HAROLD, HAROLD_AGAIN]);
+    const context = ctx();
+
+    const result = await tool.handler({ person: 'e7' }, context);
+
+    expect(result.isError).toBe(true);
+    expect(find).toHaveBeenCalledWith('e7');
+    expect(context.pin?.person()).toBeUndefined();
+  });
+});
+
 describe('act_as when the deployment can impersonate', () => {
   const session = (overrides: Partial<ImpersonatedSession> = {}): ImpersonatedSession =>
     impersonatedSessionFixture({
@@ -272,6 +355,24 @@ describe('act_as when the deployment can impersonate', () => {
     identity: ANONYMOUS,
     pin: createSessionPin(ANONYMOUS),
     impersonation: createImpersonationSlot(open),
+  });
+
+  // Asking again for the same person handed back the cached session however dead it was.
+  it('opens a new session when asked again after Ivanti refused the one it held', async () => {
+    const dead = session({ sid: 'tenant#DEAD#1' });
+    const fresh = session({ sid: 'tenant#FRESH#1', role: 'SelfServiceMobile' });
+    const opened = [dead, fresh];
+    const open = vi.fn(() => Promise.resolve(opened.shift() ?? fresh));
+    const tool = setup({ $filter: { value: [HAROLD] } });
+    const context = impersonatingCtx(open);
+
+    await tool.handler({ person: 'HSanders' }, context);
+    context.impersonation?.discard(dead);
+    const again = await tool.handler({ person: 'HSanders' }, context);
+
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(context.impersonation?.session()).toBe(fresh);
+    expect(body(again)['role']).toBe('SelfServiceMobile');
   });
 
   it('opens an Ivanti session as the person it pinned', async () => {
@@ -384,7 +485,7 @@ describe('a failed impersonation must not bind the conversation', () => {
       subject: 'ann-marie',
       issuer: 'https://id.example',
       scopes: [],
-      claims: { email: 'Ann Marie' },
+      claims: { preferred_username: 'Ann Marie' },
     };
 
     it.each([

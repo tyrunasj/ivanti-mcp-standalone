@@ -9,10 +9,15 @@ import type { AuthorizationResult } from './authorize-request.js';
 import { describeRpc } from './describe-rpc.js';
 import { readJsonBody } from './read-body.js';
 import { sendRpcError } from './respond.js';
-import type { ClosableSession, SessionManager } from './session-manager.js';
+import type {
+  ClientDetails,
+  ClosableSession,
+  SessionManager,
+  SessionSlot,
+} from './session-manager.js';
 
-/** Matches the session sweep interval: that is when capacity actually frees up. */
-const RETRY_AFTER_SECONDS = 30;
+/** Enough to tell two clients apart in a log line; the header is the caller's to make any length. */
+const MAX_USER_AGENT_CHARS = 200;
 
 /** The slice of a session this handler needs — narrow enough to fake in a test. */
 export interface McpSession extends ClosableSession {
@@ -32,8 +37,11 @@ export interface McpSession extends ClosableSession {
 export interface McpHandlerDeps<S extends McpSession> {
   sessions: SessionManager<S>;
   logger: Logger;
-  /** Builds a session for this identity; registration happens through the transport's callbacks. */
-  createSession: (identity: CallerIdentity) => S;
+  /**
+   * Builds a session for this identity. It registers itself by committing `slot` from the
+   * transport's `onsessioninitialized`, since the id does not exist before then.
+   */
+  createSession: (identity: CallerIdentity, slot: SessionSlot<S>) => S;
   /**
    * Which token claim names the person, for matching against Ivanti. Absent means the default
    * probe order — `email`, then `preferred_username`, then `upn`.
@@ -86,6 +94,36 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
   };
 
   /**
+   * The socket's peer, never `X-Forwarded-For`: this server reads no forwarding header (design
+   * §7), so behind a proxy this is the proxy — which is still the true answer to "who connected".
+   */
+  const clientOf = (request: IncomingMessage): ClientDetails => {
+    const userAgent = request.headers['user-agent'];
+    return {
+      ...(request.socket.remoteAddress === undefined
+        ? {}
+        : { remoteAddress: request.socket.remoteAddress }),
+      ...(userAgent === undefined ? {} : { userAgent: userAgent.slice(0, MAX_USER_AGENT_CHARS) }),
+    };
+  };
+
+  /** Answers a request on a live session, which is in use until the answer is finished. */
+  const answerOn = async (
+    sessionId: string,
+    existing: S,
+    request: IncomingMessage,
+    response: ServerResponse,
+    body?: unknown,
+  ): Promise<void> => {
+    const done = sessions.busy(sessionId);
+    try {
+      await existing.transport.handleRequest(request, response, body);
+    } finally {
+      done();
+    }
+  };
+
+  /**
    * A session belongs to the identity that opened it.
    *
    * Another verified subject presenting its own valid token is not entitled to this conversation,
@@ -134,7 +172,7 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
       const startedAt = Date.now();
       if (isStream) logger.debug('mcp stream opened', { sessionId, subject });
 
-      await existing.transport.handleRequest(request, response);
+      await answerOn(sessionId, existing, request, response);
 
       logExchange(
         isStream ? 'mcp stream closed' : 'mcp request',
@@ -163,7 +201,7 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
         return;
       }
       const startedAt = Date.now();
-      await existing.transport.handleRequest(request, response, parsed.body);
+      await answerOn(sessionId, existing, request, response, parsed.body);
       logExchange('mcp request', startedAt, subject, { ...describeRpc(parsed.body), sessionId });
       return;
     }
@@ -173,29 +211,46 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
       return;
     }
 
-    if (!sessions.admit()) {
+    const admission = sessions.admit({
+      ...(subject === undefined ? {} : { subject }),
+      client: clientOf(request),
+    });
+    if (!admission.admitted) {
       // 503, not 429. RFC 9110: 503 is "a temporary overload ... which will likely be
       // alleviated after some delay" — which is exactly a global session cap. 429 means "the
       // user has sent too many requests" (RFC 6585), a per-client quota; here a client's very
       // first request can be refused through no fault of its own, and that client backing off
-      // frees nothing. If a per-client session quota is ever added, that one is a 429.
+      // frees nothing. The per-subject limit never refuses — it closes the subject's own oldest
+      // session instead — so there is no 429 to send.
       //
-      // Retry-After is the part that was missing: a 503 without it tells the client to give up
-      // rather than come back. Sessions free up on the sweep, so that interval is the honest
-      // hint.
-      response.setHeader('Retry-After', String(RETRY_AFTER_SECONDS));
-      sendRpcError(response, 503, 'Too many active sessions');
+      // Reaching this means every session is in use or was used within the eviction floor, so
+      // Retry-After is when the quietest of them could first be closed, not a fixed interval.
+      response.setHeader('Retry-After', String(admission.retryAfterSeconds));
+      sendRpcError(
+        response,
+        503,
+        'Too many active sessions, and none has been idle long enough to close. Retry in ' +
+          `${String(admission.retryAfterSeconds)} s.`,
+      );
       return;
     }
 
+    const { slot } = admission;
     const session = deps.createSession(
       authorization.identity === undefined
         ? ANONYMOUS
         : verifiedIdentity(authorization.identity, directoryClaim),
+      slot,
     );
-    await session.connect();
     const startedAt = Date.now();
-    await session.transport.handleRequest(request, response, parsed.body);
+    try {
+      await session.connect();
+      await session.transport.handleRequest(request, response, parsed.body);
+    } finally {
+      // An initialize that failed — refused by the SDK, or thrown — never registered, so the slot
+      // it held goes back, and the session built for it is closed rather than left to the GC.
+      if (slot.cancel()) void session.close();
+    }
 
     logExchange('mcp request', startedAt, subject, {
       ...describeRpc(parsed.body),

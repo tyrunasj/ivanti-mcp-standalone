@@ -61,6 +61,17 @@ That is the idiom for clearing a value inherited from `--env-file`, so an empty 
 rather than a deliberate override.
 *(Solved: `withoutEmpty` in `load-config.ts` treats an empty value as unset. Verified in the code 2026-09-28.)*
 
+**Docker's published ports bypass ufw and firewalld.**
+`-p 3000:3000` binds every host interface, and Docker writes its own iptables rules ahead of the
+host firewall — so a port "blocked" in ufw is open. Inside the container `MCP_BIND=0.0.0.0` is
+right; the host side must be `127.0.0.1:3000:3000` unless the port is meant to be reachable.
+`docker/compose.yaml` and the configurator both publish on loopback by default.
+
+**The health check must parse booleans exactly as `z.stringbool` does.**
+`HTTP_TRANSPORT_ON=y` (or `enabled`) started HTTP while `healthcheck.mjs`, which knew only `true`
+and `1`, concluded HTTP was off and exited 0 for ever. Any second parser of the environment has to
+accept the same spellings, case-insensitively.
+
 ## Toolchain
 
 **TypeScript is pinned to 6.x deliberately.**
@@ -227,10 +238,31 @@ What to establish before building on it:
 
 **Session state is in-memory.**
 `SessionStore` is a `Map` in the process. Restart drops every session (clients re-`initialize`,
-so it reconnects rather than errors), and **replicas need sticky routing by `Mcp-Session-Id`** or
-requests hit the wrong instance and get `404 Unknown or expired session`.
+so it reconnects rather than errors), and **there is one replica**: `initialize` carries no
+`Mcp-Session-Id`, the pod that answers it mints one, and no hash of a pod-minted id routes the
+next request back to that pod — so "sticky routing by `Mcp-Session-Id`" cannot work, and the chart
+refuses `replicaCount > 1`. A second instance answers `404 Unknown or expired session`.
 
 ---
+
+**`McpServer.close()` resolves before the release it starts.**
+The SDK calls `onclose` synchronously, so a `void slot.release()` inside it is still in flight when
+`close()` has resolved — and `process.exit` raced it. The factory's `close` now returns the release
+promise and shutdown awaits it, bounded by the shutdown deadline.
+
+**`StdioServerTransport` never notices stdin ending, and `listen()` returns before the port is bound.**
+A stdio client that quits left the process running with its Ivanti session held; the server now
+tears the conversation down on stdin end (only when HTTP is off — a container's stdin ends at
+once). And `server.listen()` returns immediately: "listening on http" was logged before an
+`EADDRINUSE` that then killed the process. Log on the `listening` event.
+
+**Node's 5 s keep-alive is shorter than every load balancer's idle timeout.**
+The proxy reuses a connection Node has already closed and answers 502. `keepAliveTimeout` is 65 s
+and `headersTimeout` 66 s; `requestTimeout` bounds receiving the request only, never the answer.
+
+**Admission counted only registered sessions.** Concurrent `initialize` requests near the cap all
+passed `admit()`, were refused by `register()`, and the SDK answered them `404 Session not found`.
+A slot is now reserved at admission and given back if the initialize fails.
 
 ## Configuration
 
@@ -331,6 +363,18 @@ them turns this server into an IdP. We serve only `mcpAuthMetadataRouter`-equiva
 bearer verification.
 
 ---
+
+**jose's key cache goes stale after 10 minutes, and a failed reload throws.**
+Past `cacheMaxAge` every `getKey` awaits a reload, so an IdP outage turned every request into a
+503 although the keys in hand still verified. The resolver now falls back to the last good key
+set and backs off (30 s up to 5 min) between refresh attempts; an unknown `kid` still refreshes.
+A *discovered* `jwks_uri` must be https (or loopback), like the configured one.
+
+**`email` is not an identity unless the IdP says it verified it.**
+Keycloak's account console, Auth0 with self-signup and Entra optional claims for guests let a user
+set their own address. The default claim order now uses `email` only with `email_verified: true`;
+Entra and Zitadel access tokens often carry no `email_verified`, so they fall through to
+`preferred_username` / `upn`, or need `OAUTH_IDENTITY_CLAIM`.
 
 ## Ivanti
 
@@ -586,6 +630,8 @@ to set the drivers and let the rule decide, or to set `Priority` alone. And the 
 at "a stale option list … or a value that needs a different cascade parent", which is the wrong
 advice here: the list was fresh and the value was legal. **A computed field is a third cause that
 message does not name.**
+*(Solved: the refusal now tells a computed field — one on the form's read-only list — from a stale
+list, and names the validated fields that did store as its likely drivers. Code 2026-09-29.)*
 
 **A cascade parent supplied under the wrong name filters nothing, silently.**
 `GetFormValidationListData` takes the parents inside the data model, so a key the form does not
@@ -635,6 +681,46 @@ records did not.
 **Null and dates in a filter.** An empty field matches only as `Owner eq '$NULL'`. Dates are bare
 and unquoted — `CreatedDateTime gt 2026-01-01`; the OData v2 form `datetime'…'` is rejected with a
 400 that blames the field rather than the literal.
+
+**The scrubber matched spellings, not the class — for the third time.**
+A quote reaches an error body however many layers encoded it: backslash-escaped at any depth,
+`&quot;`, `&#34;`, `&#x22;`, `&amp;quot;`. Ivanti's OData 500s are entity-encoded, and
+`{&quot;SessionId&quot;:…}` passed through unredacted. Delimiters are a class, and the closing
+one must match the opening one.
+
+**A non-CSDL 200 was cached by the parse branch.**
+The fetch branch already refused to cache a failure; the parse branch cached anything that would
+not parse, so a WAF or maintenance page on the seed `$metadata` URL made `Incidents` unknown until
+restart. Only a body that looks like CSDL — Ivanti's own fabricated, field-less answer to a typo —
+counts as an answer worth caching.
+
+**`fetch failed` hides the reason in `.cause`.**
+undici rejects with `TypeError("fetch failed")` for DNS, refused connections, resets and TLS
+interception alike; the code (`ENOTFOUND`, `ECONNRESET`, `CERT_*`, `UND_ERR_*`) is on `.cause`.
+`exchange()` now appends it, scrubbed.
+
+**`SubmitRequestForUser` now gets `serviceReqData.Subject` and `localOffset`.**
+Measured 2026-09-29: with `localOffset` the file path stores a date answer correctly. Whether it
+honours `Subject` is still open — both offerings tried (Generic Work Order, Data Restore) set their
+own subject on either path — so the subject is read back and reported (`subjectNote`) rather than
+assumed.
+
+**A `time` parameter is stored as an instant on the day it was submitted.**
+`14:30` on a UTC+2 tenant came back as `2026-09-29T12:30:00.0000000Z`. The verifier compared dates
+and instants but not a time of day, so a correct submit read as `storedDifferently` — the false
+mismatch that sends a caller into a second, non-idempotent submit. It now compares the wall clock
+the instant lands on in the tenant's frame. *(Measured and fixed 2026-09-29.)*
+
+**`$filter` does not follow OData's `and`-before-`or`, and an unbalanced filter is a 400.**
+Measured 2026-09-29 on the dev tenant, `count_records` on incidents in `enduser` with no
+impersonation, so the server sent `(<filter>) and ProfileLink_RecID eq '<me>'`. The person owns 8;
+2 are Active; the whole tenant has 66 Active. A caller filter that closes its own parenthesis —
+`Status eq 'Active') or (Status ne 'zzz'` — answered **2**, not the 66+ standard precedence would
+give. `…') or Status ne 'zzz' or (Status eq 'x'` and `…') or (Status eq 'Closed'` answered **0**,
+which no reading of the expression explains. The same filters sent unwrapped in `full` answer
+`400 ISM_4000` "No such entry exists". → The own-records scope happened to hold, but on a parser
+quirk nobody chose, and the answers were wrong. Refuse an unbalanced filter before sending it; never
+reason about a mixed `and`/`or` filter from the OData spec.
 
 **The validation-list endpoint is a POST.**
 `/api/rest/ServiceRequest/{paramRecId}/ValidationList` needs `POST` with a constraints body: a GET
@@ -965,6 +1051,9 @@ fields"* when `ParentLink_Category` is `Incident`, and succeeds with `Incident#`
 spelling, `CreatedBy` set in the same PATCH is accepted **and sticks** — so an uploaded file can be
 attributed to the person it came from rather than to the server's service account. `LastModBy`
 still does not stick, the same split as on record creation. *(Measured 2026-09-12.)*
+*(Solved: `attachments/upload.ts` `linkCategory` writes the AdminUI id in the tenant's casing and
+reads the row back. Verified live 2026-09-29: stored `ParentLink_Category: Incident#`, `CreatedBy`
+the person, and `AttachmentSize` is in bytes.)*
 
 **No fixed field list identifies a record across tenants.**
 A tenant defines its own Business Objects and renames fields on the ones Ivanti ships, so
@@ -1196,7 +1285,9 @@ relationship read back 4 rows, not 5, so the defect is only the reply. The pair 
 `unlink_records` checks membership first, because Ivanti accepts an unlink of nothing and on a
 Contains relationship severs a third record. Fix: reuse that membership read to answer
 `alreadyLinked: true` — never refuse, since re-running a batch after a partial failure depends on
-it. *(Measured 2026-09-28. Not yet fixed.)*
+it. *(Measured 2026-09-28.)* *(Solved: `alreadyLinked: true`, and a Contains link to a child that
+already has another parent is refused with the `unlink_records` call that would free it. Code
+2026-09-29.)*
 
 **Open question: relationships are where "several at once" is the normal request.** Linking four
 incidents to a problem cost four calls, unlinking three cost three, and seeing the result two more.
@@ -1220,6 +1311,19 @@ a create accepts (problem 10230); `Category` is mandatory there. The required li
 conditionality; the read-only one did not, which is why it was believed. *(Measured 2026-09-28.)*
 *(Solved: both lists are read and reported as `'sometimes'`, never refused on, and a required-field
 refusal carries the governed list. Verified in the code 2026-09-28.)*
+
+**A handshake that outlives its conversation must not land in the slot.**
+`endConversation` skipped the release when nobody was pinned yet, so a re-initialize during
+`act_as` let the handshake store person A's session, and every later `act_as` was refused naming
+A's login until restart. `release()` also left `pending`, so `open(B)` could join A's handshake.
+The slot now carries a generation: `release()` bumps it, a late handshake gives its session back,
+and `open()` joins only a handshake for the same login in the same generation.
+
+**`SessionKeyExpire` has no time zone, and an empty `ActiveRole` is a failure.**
+The person's session is re-opened once on a 401 or past its expiry (reads retried, writes reported
+as not repeated). `SelectRole` answering with no role now refuses rather than running a session
+with none — which reads zero records. Measured 2026-09-29: `act_as` for an account with
+`SelfServiceMobile` still succeeds.
 
 ## Observability
 

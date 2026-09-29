@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import type { Logger } from '../../logger.js';
 import { looksLikeCsdl } from '../metadata/csdl.js';
 import { createIvantiRoutes } from '../odata/url.js';
+import { IvantiApiError } from './errors.js';
+import { exchange, readText } from './exchange.js';
 
 /**
  * Ivanti tenants serve the API either under `/HEAT` or at the root, and which one is not
@@ -48,8 +51,15 @@ export interface BasePathProbe {
   /** The CSDL URL that answered — worth reusing rather than rediscovering. */
   metadataUrl: string;
   /** What was tried, in order — useful in the startup log and in the failure message. */
-  attempted: { url: string; status: number | 'error' }[];
+  attempted: { url: string; status: number | 'error'; reason?: string }[];
 }
+
+const SILENT: Logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
 
 /**
  * Finds the base path by asking for `$metadata` under each candidate.
@@ -59,32 +69,48 @@ export interface BasePathProbe {
  *
  * It must be asked for as **XML**: `Accept: application/json` turns the same URL into a 500,
  * because Ivanti tries to render CSDL as JSON and throws.
+ *
+ * Through `exchange()` like every other Ivanti request. This was the last bare `fetch`, and its
+ * `catch {}` recorded every network failure as the word "error" — so a tenant hostname that did not
+ * resolve, a firewall and a corporate proxy's certificate all failed the startup with the same
+ * message, and the one place the reason existed was thrown away.
  */
 export async function probeBasePath(
   baseUrl: string,
   apiKey: string,
   fetchImpl: ProbeFetch,
   timeoutMs: number = PROBE_TIMEOUT_MS,
+  logger: Logger = SILENT,
 ): Promise<BasePathProbe> {
   const attempted: BasePathProbe['attempted'] = [];
+  const context = { fetchImpl, logger, timeoutMs, secrets: [apiKey] };
 
   for (const candidate of BASE_PATH_CANDIDATES) {
     for (const graph of METADATA_GRAPHS) {
       const url = createIvantiRoutes(baseUrl, candidate).metadata(graph);
       try {
-        const response = await fetchImpl(url, {
-          headers: {
-            Authorization: `rest_api_key=${apiKey}`,
-            Accept: 'application/xml',
+        const { status, body } = await exchange(
+          url,
+          {
+            method: 'GET',
+            headers: { Authorization: `rest_api_key=${apiKey}`, Accept: 'application/xml' },
           },
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        attempted.push({ url, status: response.status });
-        if (response.ok && looksLikeCsdl(await response.text())) {
-          return { basePath: candidate, metadataUrl: url, attempted };
+          context,
+          readText,
+        );
+        attempted.push({ url, status });
+        if (looksLikeCsdl(body)) return { basePath: candidate, metadataUrl: url, attempted };
+      } catch (error: unknown) {
+        // Status 0 is "no answer", and its body is why — `exchange` has already scrubbed it.
+        if (error instanceof IvantiApiError && error.status > 0) {
+          attempted.push({ url, status: error.status });
+        } else {
+          attempted.push({
+            url,
+            status: 'error',
+            reason: error instanceof IvantiApiError ? error.body : String(error),
+          });
         }
-      } catch {
-        attempted.push({ url, status: 'error' });
       }
     }
   }
@@ -101,7 +127,9 @@ export async function probeBasePath(
 
   throw new Error(
     `Could not reach Ivanti OData under either base path. Tried:\n  ` +
-      attempted.map((a) => `${String(a.status)} ${a.url}`).join('\n  ') +
+      attempted
+        .map((a) => `${String(a.status)} ${a.url}${a.reason === undefined ? '' : ` (${a.reason})`}`)
+        .join('\n  ') +
       '\nCheck IVANTI_BASE_URL and that the API key is valid.',
   );
 }

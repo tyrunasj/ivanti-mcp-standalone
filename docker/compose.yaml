@@ -20,12 +20,26 @@ services:
       - ../.env
 
     # Anything here overrides `.env`, which is where the container-specific
-    # settings belong: inside a container, loopback is the container's own.
+    # settings belong: inside a container, loopback is the container's own, so
+    # the server must listen on every interface OF THE CONTAINER. Who can reach
+    # it is decided by the host address in `ports:` below, not by this.
     environment:
       MCP_BIND: 0.0.0.0
 
+    # PUBLISHED ON THE HOST'S LOOPBACK ONLY, by default. A bare `3000:3000`
+    # publishes on every host interface, and Docker writes its own iptables rules
+    # AHEAD of ufw and firewalld — so a host firewall that says "deny" does not
+    # stop it. With AUTH_MODE=none that is the whole tool surface, on the
+    # service account's key, served to the LAN.
+    #
+    # To reach it from other machines, put a TLS proxy on this host in front of
+    # 127.0.0.1 (the usual answer), or publish on an interface deliberately:
+    #   MCP_PUBLISH_ADDR=0.0.0.0 docker compose -f docker/compose.yaml up
+    # and only with AUTH_MODE=bearer or oauth. MCP_PUBLISH_ADDR is compose
+    # interpolation (your shell, or a `.env` in the directory you run compose
+    # from), not a server setting: the server never reads it.
     ports:
-      - '${MCP_PORT:-3000}:${MCP_PORT:-3000}'
+      - '${MCP_PUBLISH_ADDR:-127.0.0.1}:${MCP_PORT:-3000}:${MCP_PORT:-3000}'
 
     # The API key as a file rather than an environment variable: `docker inspect`
     # and `/proc/<pid>/environ` both show the environment, a mounted secret shows

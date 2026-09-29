@@ -4,6 +4,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ConfigError, loadConfig } from './load-config.js';
 
+/** Long enough to be accepted: a bearer token is refused under 32 characters. */
+const FILE_TOKEN = 'token-from-file-long-enough-to-be-accepted';
+
 describe('loadConfig', () => {
   it('loads with no environment at all, defaulting to stdio', () => {
     const config = loadConfig({});
@@ -31,7 +34,7 @@ describe('loadConfig', () => {
   });
 
   it('resolves a file-backed secret before validating rules that depend on it', () => {
-    const readFile = vi.fn().mockReturnValue('token-from-file\n');
+    const readFile = vi.fn().mockReturnValue(`${FILE_TOKEN}\n`);
 
     const config = loadConfig(
       {
@@ -44,7 +47,7 @@ describe('loadConfig', () => {
       readFile,
     );
 
-    expect(config.BEARER_TOKEN).toBe('token-from-file');
+    expect(config.BEARER_TOKEN).toBe(FILE_TOKEN);
   });
 
   it('reports schema problems as a ConfigError', () => {
@@ -124,10 +127,10 @@ describe('loadConfig', () => {
           BEARER_TOKEN: '',
           BEARER_TOKEN_FILE: '/run/secrets/bearer-token',
         },
-        () => 'token-from-file',
+        () => FILE_TOKEN,
       );
 
-      expect(config.BEARER_TOKEN).toBe('token-from-file');
+      expect(config.BEARER_TOKEN).toBe(FILE_TOKEN);
     });
 
     it('lets an emptied _FILE path hand back to the inline form', () => {
@@ -154,6 +157,18 @@ describe('loadConfig', () => {
       ).toThrow(/BEARER_TOKEN/);
     });
 
+    it('refuses a placeholder bearer token, and says how to make a real one', () => {
+      expect(() =>
+        loadConfig({
+          AUTH_MODE: 'bearer',
+          HTTP_TRANSPORT_ON: 'true',
+          MCP_PUBLIC_URL: 'https://mcp.example.com',
+          TRUSTED_ORIGINS: 'https://mcp.example.com',
+          BEARER_TOKEN: 'change-me',
+        }),
+      ).toThrow(/at least 32[\s\S]*openssl rand -base64 32/);
+    });
+
     // Narrowing check: a genuine both-set collision must still be refused.
     it('still refuses a token that really is set both ways', () => {
       expect(() =>
@@ -162,6 +177,72 @@ describe('loadConfig', () => {
           () => 'from-file',
         ),
       ).toThrow(/provide exactly one/);
+    });
+  });
+
+  /**
+   * `full` is the default, and every `ENDUSER_*` setting is ignored in it. An employee deployment
+   * whose operator forgot to flip the mode started, looked configured, and handed every employee
+   * the whole IT-staff surface with the allowlist silently unused.
+   */
+  describe('an enduser setting in full mode', () => {
+    it.each([
+      ['ENDUSER_BUSINESS_OBJECTS', 'Incident,ServiceReq'],
+      ['ENDUSER_QUICK_ACTIONS', 'Close From Self Service'],
+      // Has a default, so only the environment can say it was set.
+      ['ENDUSER_ROLE', 'SelfServiceMobile'],
+    ])('refuses %s when MCP_MODE was left at its default', (setting, value) => {
+      expect(() => loadConfig({ [setting]: value })).toThrow(
+        new RegExp(`${setting} is set, but MCP_MODE is full \\(the default`),
+      );
+    });
+
+    it('refuses them when full was chosen explicitly too', () => {
+      expect(() => loadConfig({ MCP_MODE: 'full', ENDUSER_ROLE: 'SelfService' })).toThrow(
+        /ENDUSER_ROLE is set, but MCP_MODE is full, which/,
+      );
+    });
+
+    it('accepts them in enduser mode', () => {
+      expect(
+        loadConfig({
+          MCP_MODE: 'enduser',
+          ENDUSER_BUSINESS_OBJECTS: 'Incident',
+          ENDUSER_ROLE: 'SelfServiceMobile',
+        }).ENDUSER_ROLE,
+      ).toBe('SelfServiceMobile');
+    });
+
+    it('does not count one set to nothing', () => {
+      expect(loadConfig({ ENDUSER_ROLE: '' }).MCP_MODE).toBe('full');
+    });
+  });
+
+  describe('Ivanti timeouts', () => {
+    it('defaults a read to 10 s and a write to 30 s', () => {
+      const config = loadConfig({});
+
+      expect(config.IVANTI_TIMEOUT_MS).toBe(10_000);
+      expect(config.IVANTI_WRITE_TIMEOUT_MS).toBe(30_000);
+    });
+
+    it.each([
+      ['IVANTI_TIMEOUT_MS', '10'],
+      ['IVANTI_TIMEOUT_MS', '600000'],
+      ['IVANTI_WRITE_TIMEOUT_MS', '999'],
+      ['IVANTI_WRITE_TIMEOUT_MS', '300001'],
+    ])('refuses %s=%s, outside 1000–300000', (setting, value) => {
+      expect(() => loadConfig({ [setting]: value })).toThrow(new RegExp(`${setting}=${value} is outside`));
+    });
+
+    it('refuses a write timeout shorter than the read timeout', () => {
+      expect(() =>
+        loadConfig({ IVANTI_TIMEOUT_MS: '20000', IVANTI_WRITE_TIMEOUT_MS: '15000' }),
+      ).toThrow(/IVANTI_WRITE_TIMEOUT_MS \(15000\) is shorter/);
+    });
+
+    it('refuses a value that is not a whole number of milliseconds', () => {
+      expect(() => loadConfig({ IVANTI_TIMEOUT_MS: '10s' })).toThrow(ConfigError);
     });
   });
 });

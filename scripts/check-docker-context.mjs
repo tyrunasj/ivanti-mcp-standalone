@@ -10,6 +10,13 @@
  * Adding `THIRD-PARTY-NOTICES.md` to the image cost exactly that round trip:
  * `*.md` was excluded, `README.md` had a negation, the new file did not.
  *
+ * Two more facts the Dockerfile states and the repository owns:
+ *   - `ARG PNPM_VERSION` equals package.json's `packageManager`. They are edited
+ *     in different places — Dependabot moves one, nothing moves the other — and a
+ *     drift builds the image with a pnpm the lockfile was not written by.
+ *   - every base image is pinned by digest. A bare tag is whatever the publisher
+ *     pushed last, and the pin is easy to lose in a hand-edited upgrade.
+ *
  *   node scripts/check-docker-context.mjs
  */
 import { readFileSync, existsSync } from 'node:fs';
@@ -62,3 +69,30 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log('every Dockerfile COPY source is present in the build context');
+
+const pkg = JSON.parse(readFileSync(`${ROOT}package.json`, 'utf8'));
+const wanted = /^pnpm@(.+)$/.exec(pkg.packageManager ?? '')?.[1];
+const pinned = /^ARG\s+PNPM_VERSION=(\S+)\s*$/m.exec(dockerfile)?.[1];
+if (wanted === undefined || pinned === undefined || wanted !== pinned) {
+  console.error(
+    `docker/Dockerfile installs pnpm ${pinned ?? '(no ARG PNPM_VERSION=…)'}, ` +
+      `package.json's packageManager says ${pkg.packageManager ?? '(nothing)'}. Make them agree.`,
+  );
+  process.exit(1);
+}
+
+// A stage built FROM an earlier stage names it without a registry or a tag.
+const stages = new Set();
+const unpinned = [];
+for (const line of dockerfile.split('\n')) {
+  const m = /^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?/i.exec(line);
+  if (m === null) continue;
+  if (!stages.has(m[1]) && !/@sha256:[0-9a-f]{64}$/.test(m[1])) unpinned.push(m[1]);
+  if (m[2] !== undefined) stages.add(m[2]);
+}
+if (unpinned.length > 0) {
+  console.error('Base images not pinned by digest (keep the tag, add @sha256:…):');
+  for (const u of unpinned) console.error(`  ${u}`);
+  process.exit(1);
+}
+console.log(`pnpm ${pinned} matches packageManager; every base image is pinned by digest`);

@@ -111,6 +111,49 @@ describe('createSession', () => {
     expect(calls.filter((call) => call.url.includes('AuthenticateTenantAPIKey'))).toHaveLength(2);
   });
 
+  /**
+   * Two calls in flight on the same session when it expires. The first to hear 401 makes a new
+   * session; the second's 401 arrives after that, from a request sent on the OLD one — and once
+   * threw the new session away too, costing a third handshake and failing the calls using it.
+   */
+  it('discards only the session a refused request was sent on', async () => {
+    let handshakes = 0;
+    let releaseLate!: () => void;
+    const late = new Promise<void>((resolve) => {
+      releaseLate = resolve;
+    });
+    const seen: string[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      if (url.includes('AuthenticateTenantAPIKey')) {
+        handshakes += 1;
+        return reply(200, { d: `tenant#S${String(handshakes)}#1` });
+      }
+      if (url.includes('InitializeSession')) return reply(200, STATUS);
+      if (url.includes('GetUserData')) return reply(200, USER);
+      const cookie = init.headers.Cookie ?? '';
+      seen.push(cookie);
+      if (cookie === 'SID=tenant#S1#1') {
+        // Both are refused on the old session; the slow one only after the fast one has retried.
+        if (url.endsWith('/slow')) await late;
+        return reply(401, 'session expired');
+      }
+      return reply(200, { d: 'fresh' });
+    };
+    const live = session(fetchImpl);
+    await live.identity();
+
+    const slow = live.call('a.asmx', 'slow');
+    const fast = live.call('a.asmx', 'fast');
+    await expect(fast).resolves.toBe('fresh');
+    releaseLate();
+    await expect(slow).resolves.toBe('fresh');
+    // And a third call still finds the session the first retry made.
+    await expect(live.call('a.asmx', 'after')).resolves.toBe('fresh');
+
+    expect(handshakes).toBe(2);
+    expect(seen.at(-1)).toBe('SID=tenant#S2#1');
+  });
+
   it('reaches the admin console when the caller asks for it', async () => {
     // Allowed, but never required: the catalog built on it degrades to the workspace list.
     const { calls, fetchImpl } = tenant(() => reply(200, { d: [{ id: 'Incident#' }] }));

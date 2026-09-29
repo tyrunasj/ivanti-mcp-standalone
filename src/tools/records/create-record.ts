@@ -4,6 +4,7 @@
 import { z } from 'zod';
 import {
   confirmWrite,
+  readBackReport,
   resolveValidatedWrite,
   toObjectId,
 } from '../../ivanti/write/validated-write.js';
@@ -21,7 +22,8 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { projectWritten } from '../shared/project-written.js';
 import { connectionFor } from '../shared/connection-for.js';
-import { assertKnownFields } from '../shared/known-fields.js';
+import { knownFields } from '../shared/known-fields.js';
+import { assertOwnershipUntouched } from '../shared/ownership-writes.js';
 import { sessionStampedFields, sessionStampNote } from '../shared/session-stamp.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
@@ -107,18 +109,25 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // Before the request, and before the picklist work: the schema is already in hand, so a
         // field this object does not have is a caller's typo rather than a round trip. The form is
         // cached and comes along to translate a LABEL written where the field was meant.
+        // Every name comes back in the schema's spelling, so nothing after this can miss a
+        // validated field over a capital letter.
         const writeForm = await connection.forms.get(toObjectId(entity.name)).catch(() => undefined);
-        assertKnownFields(Object.keys(args.fields), entity, writeForm);
+        const fields = knownFields(args.fields, entity, writeForm);
+        const written = Object.keys(fields);
+
+        // The stamp wins only if nothing else names the same field in another spelling; a caller
+        // key that would override it is refused rather than raced.
+        await assertOwnershipUntouched(deps, target, fields, owner);
 
         const resolved = await resolveValidatedWrite({
           connection,
           logger: deps.logger,
           entity,
           entitySet,
-          fields: args.fields,
+          fields,
         });
 
-        const body = { ...args.fields, ...resolved.values, ...resolved.companions, ...owner };
+        const body = { ...fields, ...resolved.values, ...resolved.companions, ...owner };
         const url = transport.routes.entitySet(entitySet);
 
         const created = await transport
@@ -140,7 +149,7 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
               .get(toObjectId(entity.name))
               .catch(() => undefined);
             throw (
-              explainRequiredFields(error, form, Object.keys(args.fields)) ??
+              explainRequiredFields(error, form, written) ??
               explainFieldError(error, entity, referencedFieldNames({ fields: Object.keys(body) })) ??
               error
             );
@@ -155,21 +164,23 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         }
 
         // Throws when a value did not take: the record exists, but not as asked.
-        await confirmWrite(
+        const readBack = await confirmWrite({
           connection,
           entitySet,
           recId,
-          resolved.confirm,
-          resolved.companions,
+          resolved,
+          written: fields,
+          entity,
+          form: writeForm,
           transport,
-        );
+        });
 
         deps.logger.info('ivanti record created', { object: entitySet });
 
         // Named from the stored record, never from a list of field names: `Owner` is this
         // tenant's spelling of the assignment and another tenant's is its own.
         const acting = context.impersonation?.session()?.loginId ?? context.pin?.person()?.loginId;
-        const stamped = sessionStampedFields(created, Object.keys(args.fields), acting);
+        const stamped = sessionStampedFields(created, written, acting);
 
         return jsonResult({
           object: entitySet,
@@ -178,7 +189,10 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
           ...(stamped.length === 0 || acting === undefined
             ? {}
             : { stampedFromTheSession: stamped, note: sessionStampNote(stamped, acting) }),
-          record: projectWritten(created, args.returnFields, Object.keys(args.fields)),
+          ...readBackReport(readBack),
+          // What the read-back found, where it found anything: the create's own response echoes
+          // what was sent, including a value Ivanti then replaced.
+          record: projectWritten(readBack.stored ?? created, args.returnFields, written),
         });
       }),
   });

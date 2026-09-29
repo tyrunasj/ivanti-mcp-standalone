@@ -120,6 +120,61 @@ describe('buildInstructions', () => {
     expect(rule).toBeLessThan(instructions.indexOf('read-only against OData'));
   });
 
+  /**
+   * A signed-in conversation pins itself from the token on its first call, so telling the model
+   * to ask the person who they are spent a turn of every conversation on a question the sign-in
+   * had already answered.
+   */
+  it('does not tell a signed-in conversation to ask who the person is', () => {
+    for (const mode of ['full', 'enduser'] as const) {
+      const instructions =
+        buildInstructions({
+          capability: capabilityFixture({ tier: 'session' }),
+          mode,
+          authMode: 'oauth',
+        }) ?? '';
+
+      expect(instructions).not.toContain('Answer nothing, on any topic');
+      expect(instructions).not.toContain('ask them for their name');
+      expect(instructions).toContain('sign-in already says who you are helping');
+      // The fallback stays: a token that matched only a name is confirmed through act_as, and a
+      // name taken from a record is exactly as wrong as it is without a sign-in.
+      expect(instructions).toContain('`act_as`');
+      expect(instructions).toContain('from a record');
+    }
+  });
+
+  it.each(['none', 'bearer'] as const)('still tells an AUTH_MODE=%s deployment to ask', (authMode) => {
+    const instructions =
+      buildInstructions({ capability: capabilityFixture({ tier: 'session' }), authMode }) ?? '';
+
+    expect(instructions).toContain('Answer nothing, on any topic');
+    expect(instructions).toBe(
+      buildInstructions({ capability: capabilityFixture({ tier: 'session' }) }),
+    );
+  });
+
+  // The instructions budget is measured on the default text; the signed-in text replaces one
+  // paragraph of it, so it may never be the longer of the two in any deployment shape.
+  it('is never longer signed in than it is without a sign-in', () => {
+    for (const mode of ['full', 'enduser'] as const) {
+      for (const tier of ['odata', 'session', 'admin'] as const) {
+        for (const canImpersonate of [false, true]) {
+          const input = {
+            capability: capabilityFixture({ tier, canImpersonate }),
+            mode,
+            resourceUris: ['ivanti://reference/entity-naming', 'ivanti://reference/queries'],
+          };
+          const plain = buildInstructions(input) ?? '';
+          const signedIn = buildInstructions({ ...input, authMode: 'oauth' }) ?? '';
+
+          expect(signedIn.length).toBeLessThanOrEqual(plain.length);
+          expect(signedIn.length).toBeGreaterThan(200);
+        }
+      }
+    }
+  });
+
   it('points at the reference documents when there are any', () => {
     const withDocs = buildInstructions({
       capability: capabilityFixture({ tier: 'session' }),

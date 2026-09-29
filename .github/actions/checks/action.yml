@@ -17,12 +17,16 @@ description: >
 #
 # The caller does its own `actions/checkout`: an action that checked out the
 # repository would be deciding the caller's ref for it.
+#
+# Third-party actions are pinned by commit SHA, with the version beside it: a tag
+# is a pointer its owner can move, and these steps run with the caller's token.
+# Dependabot (.github/dependabot.yml) proposes the next SHA.
 
 runs:
   using: composite
   steps:
-    - uses: pnpm/action-setup@v4
-    - uses: actions/setup-node@v4
+    - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: 22
         cache: pnpm
@@ -82,5 +86,13 @@ runs:
     # A COPY whose source is .dockerignored fails only at image build time,
     # minutes later, with an error that reads like a missing file.
     - run: pnpm check:docker
+      shell: bash
+      if: ${{ !cancelled() }}
+
+    # The chart's guards are what move a bad configuration from a crash-looping
+    # pod to `helm install`, and nothing rendered them: `helm lint --strict`, the
+    # default values, and every guard — a refusal that renders fails, and so does
+    # a valid configuration that does not. Helm ships on GitHub's ubuntu runners.
+    - run: node scripts/check-chart.mjs
       shell: bash
       if: ${{ !cancelled() }}

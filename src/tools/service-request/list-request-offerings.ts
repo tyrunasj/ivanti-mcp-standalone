@@ -12,6 +12,16 @@ import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { connectionFor } from '../shared/connection-for.js';
 import type { IvantiConnection } from '../../ivanti/connect.js';
 
+/**
+ * The most offerings one answer lists.
+ *
+ * The whole catalogue came back every time — 132 offerings on a stock tenant, each with its
+ * description, re-sent with every later turn — when the question was almost always about one of
+ * them. Past this the list is cut, and the answer says so with the total and how to narrow it:
+ * `search` reaches every offering by any part of its name, so nothing is out of reach.
+ */
+const MAX_OFFERINGS = 50;
+
 /** A RecId's display name, so an opaque id can be echoed back as a person. Best effort. */
 async function findEmployeeName(
   deps: IvantiToolDeps,
@@ -97,8 +107,22 @@ export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefini
           ...(args.search === undefined ? {} : { search: args.search }),
         });
 
+        const offerings = result.offerings.slice(0, MAX_OFFERINGS);
+        const hasMore = result.offerings.length > offerings.length;
+
         return jsonResult({
-          returned: result.offerings.length,
+          returned: offerings.length,
+          total: result.offerings.length,
+          hasMore,
+          ...(hasMore
+            ? {
+                hasMoreNote:
+                  `${String(result.offerings.length)} offerings match; the first ` +
+                  `${String(MAX_OFFERINGS)} by name are listed. What is not listed may still be ` +
+                  'offered — narrow with `search` (any part of a name or description) or ' +
+                  '`topLevelOnly` rather than telling the person it is not available.',
+              }
+            : {}),
           servedBy: result.servedBy === 'catalog' ? "the catalog's top level" : 'the whole catalog',
           /**
            * The person this answer is FOR, resolved whichever way it was given.
@@ -112,7 +136,7 @@ export function createListRequestOfferingsTool(deps: IvantiToolDeps): ToolDefini
               ? pinned.displayName
               : ((await findEmployeeName(deps, connection, personRecId)) ?? personRecId),
           ...(result.note === undefined ? {} : { note: result.note }),
-          offerings: result.offerings,
+          offerings,
         });
       }),
   });

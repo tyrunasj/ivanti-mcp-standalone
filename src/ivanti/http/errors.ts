@@ -38,6 +38,12 @@ export interface IvantiApiErrorInit {
   method: string;
   url: string;
   body?: string;
+  /**
+   * Why Ivanti never answered, as a code — `ENOTFOUND`, `ECONNRESET`, `CERT_HAS_EXPIRED`,
+   * `UND_ERR_SOCKET`, `TimeoutError`. Status 0 only. A code names no person and no query, so it
+   * may go where the body may not: the `warn` line an operator reads without turning on debug.
+   */
+  code?: string;
 }
 
 export class IvantiApiError extends Error {
@@ -49,6 +55,7 @@ export class IvantiApiError extends Error {
    * only layer that knows it. Ivanti error bodies echo what was submitted.
    */
   readonly body: string;
+  readonly code: string | undefined;
 
   constructor(init: IvantiApiErrorInit, message?: string) {
     super(message ?? `Ivanti ${init.method} ${init.status}`);
@@ -57,6 +64,7 @@ export class IvantiApiError extends Error {
     this.method = init.method;
     this.url = init.url;
     this.body = truncate(init.body ?? '');
+    this.code = init.code;
   }
 
   /**
@@ -74,8 +82,54 @@ export class IvantiApiError extends Error {
       method: this.method,
       path: pathOf(this.url),
       body: this.body,
+      ...(this.code === undefined ? {} : { code: this.code }),
     };
   }
+}
+
+/**
+ * Ivanti answered, and the answer is bigger than the caller agreed to hold.
+ *
+ * Not an `IvantiApiError`: nothing failed and nothing was refused, so reporting it as one would
+ * tell the model "Ivanti refused the request (200)". The body was never read past the cap — that
+ * is the point of it: an attachment of any size used to be read whole into memory first.
+ */
+export class ResponseTooLargeError extends Error {
+  readonly url: string;
+  readonly maxBytes: number;
+  /** What `Content-Length` declared, when it did; otherwise the read stopped at the cap. */
+  readonly declaredBytes: number | undefined;
+
+  constructor(url: string, maxBytes: number, declaredBytes?: number) {
+    super(
+      (declaredBytes === undefined
+        ? `The file is larger than ${formatBytes(maxBytes)}`
+        : `The file is ${formatBytes(declaredBytes)}, over ${formatBytes(maxBytes)}`) +
+        ' — the most this server reads into a conversation — so it was not downloaded. Tell the ' +
+        'person its name and offer to open it in Ivanti instead.',
+    );
+    this.name = 'ResponseTooLargeError';
+    this.url = url;
+    this.maxBytes = maxBytes;
+    this.declaredBytes = declaredBytes;
+  }
+
+  /** The path, never the URL — the same rule `IvantiApiError` keeps. */
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      message: this.message,
+      path: pathOf(this.url),
+      maxBytes: this.maxBytes,
+      ...(this.declaredBytes === undefined ? {} : { declaredBytes: this.declaredBytes }),
+    };
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} bytes`;
+  if (bytes < 1024 * 1024) return `${String(Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** The path without the query string, for logs. Falls back to nothing rather than throwing. */
@@ -119,15 +173,29 @@ export function truncate(body: string, maxBytes: number = ERROR_BODY_MAX_BYTES):
  * the fields arrive as `\\"SessionId\\":\\"…\\"` rather than `"SessionId":"…"`. A first pass at
  * this matched only the unescaped form and redacted exactly one of the five — which is why the
  * leak survived a round of testing and was found again.
+ *
+ * It was found a third time, because that fix matched the two spellings it had been shown rather
+ * than the thing they were spellings OF. A quote arrives encoded by however many layers it passed
+ * through: escaped once or twice by JSON-in-a-string nesting (`\"`, `\\\"`), as an HTML entity —
+ * Ivanti's OData 500 is `Unhandled system exception: {&quot;error&quot;…}` — or as the unicode
+ * escape .NET serialisers write for `"`. So the delimiter is a CLASS of tokens, and the closing
+ * quote must be the same token as the opening one.
  */
-const SENSITIVE_FIELDS =
-  /\\?"(SessionId|SessionKey|ConnectionString|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)\\?"\s*:\s*\\?"(?:\\\\|[^"\\])*\\?"/gi;
-// The value class has to admit a BACKSLASH, or a value containing one fails to match at all and
-// the field is passed through whole. Measured on the nested shape above with a domain-qualified
-// login: `\"LoginId\":\"CORP\\\\jsmith\"` went unredacted while `SessionId` and `Hostname` either
-// side of it redacted correctly — so the body reaching the model still named the account.
-// `(?:\\\\|[^"\\])*` accepts a JSON-escaped backslash pair but never a lone one, which is what the
-// closing `\"` delimiter begins with, so the match still stops at the end of the value.
+const QUOTE = String.raw`\\*(?:"|&(?:amp;)*(?:quot|#0*34|#x0*22);)|\\+u0022`;
+
+const SENSITIVE_FIELD_NAMES =
+  'SessionId|SessionKey|ConnectionString|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress';
+
+// The value runs to the first closing quote that is not itself escaped. The value class admits
+// anything: an earlier one excluded the backslash, and a domain-qualified login
+// (`\"LoginId\":\"CORP\\\\jsmith\"`) then failed to match at all and went through whole while the
+// fields either side of it redacted correctly. `(?<!\\)(?:\\\\)*` lets a value end in an escaped
+// backslash, while a lone backslash before the quote means the quote belongs to the value.
+// Unbounded on purpose: a match that runs long redacts too much, a bounded one that misses leaks.
+const SENSITIVE_FIELDS = new RegExp(
+  String.raw`(${QUOTE})(${SENSITIVE_FIELD_NAMES})\1\s*:\s*\1[\s\S]*?(?<!\\)(?:\\\\)*\1`,
+  'gi',
+);
 
 /**
  * The same fields again, as XML elements.
@@ -135,21 +203,39 @@ const SENSITIVE_FIELDS =
  * CentralConfig answers XML rather than JSON, and `ConnectionString` there carries the tenant's
  * **database credentials, password included** — by a wide margin the most sensitive thing any
  * Ivanti surface returns. A JSON-shaped pattern matches none of it.
+ *
+ * Its brackets come in the same variety the quotes do — `&lt;` when an HTML error page quotes the
+ * XML, `<` when a JSON body does — and the closing tag is spelled like the opening one.
  */
-const SENSITIVE_ELEMENTS =
-  /<((?:DB)?ConnectionString|SessionId|SessionKey|PrimaryEncryptionKey|SecondaryKeyParams|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress)>[^<]*<\/\1>/gi;
+const OPEN_BRACKET = String.raw`<|&(?:amp;)*(?:lt|#0*60|#x0*3c);|\\+u003c`;
+const CLOSE_BRACKET = String.raw`>|&(?:amp;)*(?:gt|#0*62|#x0*3e);|\\+u003e`;
+const SENSITIVE_ELEMENT_NAMES =
+  '(?:DB)?ConnectionString|SessionId|SessionKey|PrimaryEncryptionKey|SecondaryKeyParams|' +
+  'TenantId|LoginId|Hostname|ServiceName|ClientIpAddress';
+const SENSITIVE_ELEMENTS = new RegExp(
+  String.raw`(${OPEN_BRACKET})(${SENSITIVE_ELEMENT_NAMES})(${CLOSE_BRACKET})[\s\S]*?\1\\*\/\2\3`,
+  'gi',
+);
+
+/**
+ * Every spelling of a credential worth looking for. A SID is `tenant#guid#n`, and echoed back
+ * inside a URL it arrives percent-encoded, which the plain string never matches.
+ */
+const spellingsOf = (secret: string): string[] =>
+  secret === '' ? [] : [...new Set([secret, encodeURIComponent(secret)])];
 
 export function scrubErrorBody(body: string, ...secrets: string[]): string {
-  const withoutKey = secrets.reduce(
-    (text, secret) => (secret === '' ? text : text.split(secret).join('[REDACTED-API-KEY]')),
-    body,
-  );
-  const withoutInternals = withoutKey.replace(SENSITIVE_FIELDS, (match, field: string) =>
-    match.startsWith('\\') ? `\\"${field}\\":\\"[REDACTED]\\"` : `"${field}":"[REDACTED]"`,
+  const withoutKey = secrets
+    .flatMap(spellingsOf)
+    .reduce((text, secret) => text.split(secret).join('[REDACTED-API-KEY]'), body);
+  const withoutInternals = withoutKey.replace(
+    SENSITIVE_FIELDS,
+    (_match, quote: string, field: string) => `${quote}${field}${quote}:${quote}[REDACTED]${quote}`,
   );
   const withoutElements = withoutInternals.replace(
     SENSITIVE_ELEMENTS,
-    (_match, element: string) => `<${element}>[REDACTED]</${element}>`,
+    (_match, open: string, element: string, close: string) =>
+      `${open}${element}${close}[REDACTED]${open}/${element}${close}`,
   );
   return truncate(withoutElements);
 }

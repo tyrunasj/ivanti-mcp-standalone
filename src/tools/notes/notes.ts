@@ -87,7 +87,7 @@ export async function readNotes(
   transport: IvantiTransport,
   parentRecId: string,
   options: { visibleOnly: boolean; top: number },
-): Promise<OdataRecord[]> {
+): Promise<{ rows: OdataRecord[]; total: { total: number; exact: boolean } }> {
   const conditions = [`ParentLink_RecID eq ${quoteOdataString(parentRecId)}`];
   if (options.visibleOnly) conditions.push('PublishToWeb eq true');
 
@@ -101,7 +101,14 @@ export async function readNotes(
     }),
   );
 
-  return readRows<OdataRecord>(await transport.request<OdataRecord>(url), url);
+  // The count comes back with the page, and it is the only way to know the page is not all of
+  // them. No count and no rows is Ivanti's empty body — an exact zero; rows without one are a floor.
+  const payload = await transport.request<OdataRecord>(url);
+  const rows = readRows<OdataRecord>(payload, url);
+  return {
+    rows,
+    total: readTotal(payload, rows.length) ?? { total: rows.length, exact: rows.length === 0 },
+  };
 }
 
 /**
@@ -116,12 +123,13 @@ export async function countJournalEntries(
   deps: IvantiToolDeps,
   transport: IvantiTransport,
   parentRecId: string,
-): Promise<number> {
+): Promise<{ total: number; exact: boolean }> {
   const url = withQuery(
     transport.routes.entitySet('journals'),
     buildQuery({ filter: `ParentLink_RecID eq ${quoteOdataString(parentRecId)}`, top: 1, count: true }),
   );
   const payload = await transport.request<OdataRecord>(url);
   const rows = readRows<OdataRecord>(payload, url);
-  return readTotal(payload, rows.length)?.total ?? rows.length;
+  // A page of one without a count says "at least one", not "one": only the empty body is exact.
+  return readTotal(payload, rows.length) ?? { total: rows.length, exact: rows.length === 0 };
 }

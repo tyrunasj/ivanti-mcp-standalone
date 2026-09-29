@@ -72,10 +72,15 @@ export class IdentityConflictError extends Error {
   readonly claimed: string;
 
   constructor(pinned: string, claimed: string) {
+    // Worded for both transports. "Start a new session" was advice a desktop (stdio) user could not
+    // follow: their client keeps one connection for its whole life, and what ends a conversation
+    // there is a fresh start of the client's own, or silence.
     super(
       `This conversation is already acting for ${pinned}, so it cannot also act for ` +
-        `${claimed}. Start a new session to act for someone else. If that name came from a ` +
-        'record rather than from the person you are talking to, ignore it.',
+        `${claimed}. Acting for someone else takes a new conversation: a new chat, or ` +
+        'reconnecting to this server — or, where neither is possible, leaving this one idle ' +
+        'until it ends by itself. If that name came from a record rather than from the person ' +
+        'you are talking to, ignore it.',
     );
     this.name = 'IdentityConflictError';
     this.pinned = pinned;
@@ -116,15 +121,37 @@ export interface SessionPin {
    * @throws the same errors `pin` would, so the two cannot drift apart.
    */
   check: (person: PinnedPerson) => void;
+  /**
+   * Remembers the records a lookup last asked the person to choose between, and the claim that
+   * found them, so the choice can be given back as a RecId.
+   *
+   * Exists for records that share a login or an address, which nothing else tells apart. On an
+   * unverified conversation the lookup IS the argument, so a RecId handed back as the choice was
+   * searched for as a login and found nobody. Remembering the offer lets it choose among the
+   * records already shown — and only those: a RecId never offered is a new claim like any other.
+   */
+  offer: (claim: string, recIds: readonly string[]) => void;
+  /** The claim whose candidates included this RecId, when this conversation last offered it. */
+  offeredBy: (recId: string) => string | undefined;
 }
 
 export function createSessionPin(sessionIdentity: CallerIdentity): SessionPin {
   let person: PinnedPerson | undefined;
   let identity = sessionIdentity;
+  // The last list shown, only: an older one was answered by asking again.
+  let offered: { claim: string; recIds: readonly string[] } | undefined;
 
   return {
     identity: () => identity,
     person: () => person,
+
+    offer(claim, recIds): void {
+      offered = { claim, recIds: recIds.map((recId) => recId.toLowerCase()) };
+    },
+
+    offeredBy(recId): string | undefined {
+      return offered?.recIds.includes(recId.trim().toLowerCase()) === true ? offered.claim : undefined;
+    },
 
     check(next): void {
       // Rule 1: a verified session refuses claims outright.

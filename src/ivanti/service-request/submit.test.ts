@@ -3,10 +3,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { connectionFixture } from '../connection.fixture.js';
+import type { IvantiSession } from '../session/asmx-session.js';
 import {
   buildSubmitPayload,
   encodeAnswer,
+  readRequestAttachments,
   readSubmitReply,
+  submitWithAttachments,
   SubmitRefusedError,
   verifyStoredAnswers,
 } from './submit.js';
@@ -146,6 +149,24 @@ describe('verifyStoredAnswers', () => {
     );
 
     expect(check).toEqual({ mismatches: [], missing: [] });
+  });
+
+  it('accepts a time of day stored as today\'s UTC instant, and still catches a wrong one', async () => {
+    // Measured 2026-09-29 on a UTC+2 tenant: a `time` parameter answered `14:30` stored as
+    // `2026-09-29T12:30:00.0000000Z` — correct, and reported as `storedDifferently`.
+    const stored = [
+      {
+        ParameterName: 'TimeRequested',
+        ParameterValue: '2026-09-29T12:30:00.0000000Z',
+        SvcReqTmplParamLink_RecID: 'P1',
+      },
+    ];
+
+    const right = await verifyStoredAnswers(withStored(stored), 'sr1', { P1: '14:30' }, -120);
+    expect(right).toEqual({ mismatches: [], missing: [] });
+
+    const wrong = await verifyStoredAnswers(withStored(stored), 'sr1', { P1: '15:30' }, -120);
+    expect(wrong.mismatches).toHaveLength(1);
   });
 
   it('accepts a date stored as the UTC instant of local midnight', async () => {
@@ -304,5 +325,66 @@ describe('verifyStoredAnswers', () => {
     );
 
     expect(check).toEqual({ mismatches: [], missing: [] });
+  });
+});
+
+describe('submitWithAttachments', () => {
+  function recordingSession() {
+    const calls: { method: string; args: Record<string, unknown> }[] = [];
+    const session: IvantiSession = {
+      call: <T>(_service: string, method: string, args?: Record<string, unknown>) => {
+        calls.push({ method, args: args ?? {} });
+        return Promise.resolve(undefined as T);
+      },
+      callHandler: () => Promise.reject(new Error('unused')),
+      uploadToHandler: () => Promise.reject(new Error('unused')),
+      identity: () => Promise.resolve({ role: 'Admin', displayName: 'Service Account' }),
+      identityIfKnown: () => undefined,
+    };
+    return { session, calls };
+  }
+
+  it('sends the subject and the offset, which the files path used to drop', async () => {
+    // `serviceReqData: {}` and no `localOffset`: a request with files lost its subject, and its
+    // dates went without the offset they were then verified against.
+    const { session, calls } = recordingSession();
+
+    await submitWithAttachments(
+      session,
+      { ...BASE, answers: { P1: '2026-09-30' }, subject: 'Laptop for Jo' },
+      [{ attachmentId: 'CE16', filename: 'quote.txt' }],
+    );
+
+    const submit = calls.find((call) => call.method === 'SubmitRequestForUser');
+    expect(submit?.args).toMatchObject({
+      serviceReqData: { Subject: 'Laptop for Jo' },
+      localOffset: -120,
+      attachmentsToUpload: [['CE16', 'quote.txt']],
+    });
+    // The session side effect still runs first, or the staged ids are refused.
+    expect(calls.map((call) => call.method)).toEqual(['GetPackageDataSDA', 'SubmitRequestForUser']);
+  });
+
+  it('sends an empty `serviceReqData` when there is no subject, as it always did', async () => {
+    const { session, calls } = recordingSession();
+
+    await submitWithAttachments(session, { ...BASE, answers: {} }, []);
+
+    expect(calls.at(-1)?.args['serviceReqData']).toEqual({});
+  });
+});
+
+describe('readRequestAttachments', () => {
+  it('reads the files by their link to the request, and keeps their names', async () => {
+    const { connection, urls } = connectionFixture({
+      responses: {
+        attachments: { value: [{ ATTACHNAME: 'quote.txt' }, { ATTACHNAME: '' }, { RecId: 'x' }] },
+      },
+    });
+
+    const names = await readRequestAttachments(connection.transport, "sr'1");
+
+    expect(names).toEqual(['quote.txt']);
+    expect(urls[0]).toContain("ParentLink_RecID%20eq%20'sr''1'");
   });
 });

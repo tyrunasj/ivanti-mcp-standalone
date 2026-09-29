@@ -11,8 +11,13 @@ spec:
   template:
     metadata:
       annotations:
-        # Roll the pods when the configuration changes, not only the image.
+        # Roll the pods when the configuration changes, not only the image. With
+        # secrets.existingSecret this hashes nothing the chart can see, so a key
+        # rotation rolls through rolloutToken (or `kubectl rollout restart`).
         checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.rolloutToken }}
+        ivanti-mcp/rollout-token: {{ . | quote }}
+        {{- end }}
         {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
       labels:
         {{- include "ivanti-mcp.selectorLabels" . | nindent 8 }}
@@ -58,12 +63,21 @@ spec:
             - { name: AUTH_MODE,          value: {{ .Values.server.authMode | quote }} }
             - { name: MCP_MODE,           value: {{ .Values.server.mode | quote }} }
             - { name: MCP_MAX_SESSIONS,   value: {{ .Values.server.maxSessions | quote }} }
+            {{- with .Values.server.maxSessionsPerSubject }}
+            - { name: MCP_MAX_SESSIONS_PER_SUBJECT, value: {{ . | quote }} }
+            {{- end }}
             - { name: MCP_SESSION_IDLE_TTL_SECONDS, value: {{ .Values.server.sessionIdleTtlSeconds | quote }} }
             - { name: LOG_LEVEL,          value: {{ .Values.server.logLevel | quote }} }
             - { name: IVANTI_BASE_URL,    value: {{ .Values.ivanti.baseUrl | quote }} }
             - { name: IVANTI_API_KEY_FILE, value: "{{ .Values.secrets.mountPath }}/ivanti-api-key" }
             {{- if .Values.ivanti.maxTier }}
             - { name: IVANTI_MAX_TIER,    value: {{ .Values.ivanti.maxTier | quote }} }
+            {{- end }}
+            {{- with .Values.ivanti.timeoutMs }}
+            - { name: IVANTI_TIMEOUT_MS,  value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.ivanti.writeTimeoutMs }}
+            - { name: IVANTI_WRITE_TIMEOUT_MS, value: {{ . | quote }} }
             {{- end }}
             {{- with .Values.ivanti.configUrl }}
             - { name: IVANTI_CONFIG_URL,  value: {{ . | quote }} }
@@ -73,8 +87,8 @@ spec:
             {{- with .Values.ivanti.impersonationRole }}
             - { name: IVANTI_IMPERSONATION_ROLE, value: {{ . | quote }} }
             {{- end }}
-            {{- with .Values.server.enduser.role }}
-            - { name: ENDUSER_ROLE,        value: {{ . | quote }} }
+            {{- if .Values.ivanti.impersonationRequired }}
+            - { name: IVANTI_IMPERSONATION_REQUIRED, value: "true" }
             {{- end }}
             {{- if eq .Values.server.authMode "bearer" }}
             - { name: BEARER_TOKEN_FILE,  value: "{{ .Values.secrets.mountPath }}/bearer-token" }
@@ -83,6 +97,9 @@ spec:
             - { name: ENDUSER_BUSINESS_OBJECTS, value: {{ join "," .Values.server.enduser.businessObjects | quote }} }
             {{- if .Values.server.enduser.quickActions }}
             - { name: ENDUSER_QUICK_ACTIONS, value: {{ join "," .Values.server.enduser.quickActions | quote }} }
+            {{- end }}
+            {{- with .Values.server.enduser.role }}
+            - { name: ENDUSER_ROLE,        value: {{ . | quote }} }
             {{- end }}
             {{- end }}
             {{- if eq .Values.server.authMode "oauth" }}

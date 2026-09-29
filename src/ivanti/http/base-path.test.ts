@@ -90,6 +90,50 @@ describe('probeBasePath', () => {
     );
   });
 
+  /**
+   * The probe was the one Ivanti request that bypassed `exchange()`, and its `catch {}` recorded a
+   * network failure as the word "error" — so a hostname that did not resolve, a firewall and a
+   * TLS-intercepting proxy all failed the startup with the same message.
+   */
+  it('says why an unreachable tenant could not be reached', async () => {
+    const unresolvable: ProbeFetch = () =>
+      Promise.reject(
+        new TypeError('fetch failed', {
+          cause: Object.assign(new Error('getaddrinfo ENOTFOUND tneant.example.com'), {
+            code: 'ENOTFOUND',
+          }),
+        }),
+      );
+
+    await expect(probeBasePath('https://tneant.example.com', 'k', unresolvable)).rejects.toThrow(
+      /ENOTFOUND tneant\.example\.com/,
+    );
+  });
+
+  it('never lets the key into the reason', async () => {
+    const echoes: ProbeFetch = () => Promise.reject(new Error('refused while sending secret-key'));
+
+    await expect(probeBasePath('https://t', 'secret-key', echoes)).rejects.not.toThrow(
+      /secret-key/,
+    );
+  });
+
+  it('logs each attempt like every other Ivanti request', async () => {
+    const debug = vi.fn();
+
+    await probeBasePath('https://t', 'k', tenant('/HEAT/'), 1_000, {
+      debug,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    });
+
+    expect(debug).toHaveBeenCalledWith(
+      'ivanti request',
+      expect.objectContaining({ path: '/HEAT/api/odata/incidents/$metadata', status: 200 }),
+    );
+  });
+
   it('reports every URL it tried when nothing works', async () => {
     const dead = tenant('never-matches');
 

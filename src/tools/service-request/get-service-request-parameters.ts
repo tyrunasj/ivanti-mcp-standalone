@@ -4,8 +4,15 @@
 import { z } from 'zod';
 import { decodeParameter } from '../../ivanti/service-request/parameter-shape.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
-import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
+import {
+  buildQuery,
+  MAX_TOP,
+  quoteOdataString,
+  readTotal,
+  withQuery,
+} from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
+import type { IvantiTransport } from '../../ivanti/http/transport.js';
 import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
@@ -18,6 +25,65 @@ import { transportFor } from '../shared/transport-for.js';
 
 /** The parameters live in their own Business Object, linked to the template by RecId. */
 const PARAMETER_OBJECT = 'servicereqtemplateparams';
+
+/** How far a form is read, a page of Ivanti's 100 at a time, before the rest is called cut off. */
+const MAX_ROWS = 500;
+
+interface PagedRows {
+  rows: OdataRecord[];
+  /** What Ivanti counted, when it said; the rows read otherwise. */
+  total: number;
+  /** Rows exist past what was read. */
+  hasMore: boolean;
+}
+
+/**
+ * Every row of one filtered read, a page at a time.
+ *
+ * This read ONE page of 100 and said nothing when there were more — so a form past 100
+ * parameters lost its tail silently, and the submit was then refused, one missing parameter at a
+ * time, for questions the caller had never been shown. Paging with `$skip` does not repeat rows
+ * (measured, see `MAX_TOP`); where even `MAX_ROWS` is not the end, the answer says so.
+ */
+async function readPaged(
+  transport: IvantiTransport,
+  entitySet: string,
+  query: { filter: string; orderBy?: string },
+): Promise<PagedRows> {
+  const rows: OdataRecord[] = [];
+  let counted: number | undefined;
+
+  for (;;) {
+    const url = withQuery(
+      transport.routes.entitySet(entitySet),
+      buildQuery({ ...query, top: MAX_TOP, skip: rows.length, count: true }),
+    );
+    const payload = await transport.request<OdataRecord>(url);
+    const page = readRows<OdataRecord>(payload, url);
+    // The first page's count is the one asked about; later pages only confirm it.
+    counted ??= readTotal(payload, page.length)?.total;
+    rows.push(...page);
+
+    const more = counted === undefined ? page.length === MAX_TOP : rows.length < counted;
+    if (!more || page.length === 0) {
+      return { rows, total: Math.max(counted ?? 0, rows.length), hasMore: false };
+    }
+    if (rows.length >= MAX_ROWS) {
+      return { rows, total: Math.max(counted ?? 0, rows.length), hasMore: true };
+    }
+  }
+}
+
+function cutOffNote(read: PagedRows, what: string): Record<string, unknown> {
+  return read.hasMore
+    ? {
+        hasMoreNote:
+          `Only the first ${String(read.rows.length)} ${what} were read` +
+          (read.total > read.rows.length ? ` of ${String(read.total)}` : '') +
+          '. The rest are not shown here — do not treat this as the complete list.',
+      }
+    : {};
+}
 
 /**
  * The answers a submitted request actually carries.
@@ -123,17 +189,10 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
           const request = await resolveObject(deps, 'ServiceReq');
           await assertOwnRecordById(deps, context, request, args.requestId);
 
-          const answersUrl = withQuery(
-            transport.routes.entitySet(ANSWER_OBJECT),
-            buildQuery({
-              filter: `ParentLink_RecID eq ${quoteOdataString(args.requestId)}`,
-              top: 100,
-            }),
-          );
-          const answered = readRows<OdataRecord>(
-            await transport.request<OdataRecord>(answersUrl),
-            answersUrl,
-          );
+          const read = await readPaged(transport, ANSWER_OBJECT, {
+            filter: `ParentLink_RecID eq ${quoteOdataString(args.requestId)}`,
+          });
+          const answered = read.rows;
 
           // A date answer stores the UTC instant of the chosen LOCAL day, so the raw value reads
           // back as the previous calendar date — narrating it verbatim tells the person they
@@ -149,6 +208,9 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
           return jsonResult({
             requestId: args.requestId,
             returned: answered.length,
+            total: read.total,
+            hasMore: read.hasMore,
+            ...cutOffNote(read, 'answers'),
             answers: answered.map((row) => {
               const type = row['DisplayType'];
               const value = row['ParameterValue'];
@@ -177,17 +239,11 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
           );
         }
 
-        const url = withQuery(
-          transport.routes.entitySet(PARAMETER_OBJECT),
-          buildQuery({
-            filter: `ParentLink_RecID eq ${quoteOdataString(args.templateId)}`,
-            orderBy: 'SequenceNum',
-            top: 100,
-          }),
-        );
-
-        const payload = await transport.request<OdataRecord>(url);
-        const rows = readRows<OdataRecord>(payload, url);
+        const read = await readPaged(transport, PARAMETER_OBJECT, {
+          filter: `ParentLink_RecID eq ${quoteOdataString(args.templateId)}`,
+          orderBy: 'SequenceNum',
+        });
+        const { rows } = read;
 
         // Ivanti sends every field whatever is asked for, and a 16-parameter template is ~28 KB
         // of mostly UI layout. Dropping empties on top is safe here: for a form parameter,
@@ -205,6 +261,9 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
         return jsonResult({
           templateId: args.templateId,
           returned: projected.length,
+          total: read.total,
+          hasMore: read.hasMore,
+          ...cutOffNote(read, 'parameters'),
           answerable,
           ...(answerable === projected.length
             ? {}

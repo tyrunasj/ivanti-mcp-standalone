@@ -448,7 +448,8 @@ TRUSTED_ORIGINS=https://claude.ai
 ```
 Size the token's audience to the tool surface behind it. A token given to a multi-user client
 grants that surface to **everyone** who can use the connector — pair a widely shared token with
-`MCP_MODE=enduser`.
+`MCP_MODE=enduser`. The token must be at least 32 characters, or the server refuses to start;
+`openssl rand -base64 32` makes one.
 
 **Trusted network, no authentication**
 ```bash
@@ -463,6 +464,65 @@ stops a page the user merely visits from driving this server from inside the net
 derived from the request, because the proxy rewrites Host and scheme while the OAuth token audience
 and RFC 9728 metadata must still match exactly.
 
+**Employees, not IT staff** — set `MCP_MODE=enduser` along with the `ENDUSER_*` settings. `full` is
+the default and ignores every `ENDUSER_*` setting, so any of them set while the mode is `full`
+refuses to start: the alternative is an employee deployment that serves the whole IT-staff surface
+because one line was forgotten.
+
+---
+
+## Reaching Ivanti
+
+**Over https.** `IVANTI_BASE_URL` and `IVANTI_CONFIG_URL` carry an API key with every request;
+`OAUTH_ISSUER` and `OAUTH_JWKS_URI` decide which tokens are trusted. All four must be `https://`.
+Plain `http://` is accepted only for a loopback host — `localhost`, `127.0.0.0/8`, `::1` — which is
+what a local mock or a `kubectl port-forward` looks like.
+
+**Through an egress proxy.** Node's built-in `fetch` **ignores `HTTPS_PROXY`** unless
+`NODE_USE_ENV_PROXY=1` is set as well (Node 22.21 or later). Without it the server tries to reach
+the tenant directly, and the startup fails with a DNS or connection error that reads like a wrong
+URL:
+
+```bash
+NODE_USE_ENV_PROXY=1
+HTTPS_PROXY=http://proxy.corp.example:3128
+NO_PROXY=localhost,127.0.0.1
+```
+
+`NO_PROXY` matters with `AUTH_MODE=oauth` when the IdP is internal, and for the container's own
+health check.
+
+**Through a TLS-intercepting proxy.** A proxy that re-signs traffic with a corporate root CA makes
+every request fail with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` or `SELF_SIGNED_CERT_IN_CHAIN`. Add the
+root to Node's trust store rather than turning verification off:
+
+```bash
+NODE_EXTRA_CA_CERTS=/etc/ssl/certs/corp-root-ca.pem   # PEM; mount it into the container
+```
+
+It is read once, at process start. Never reach for `NODE_TLS_REJECT_UNAUTHORIZED=0` instead: it
+makes the error go away along with the only thing that proves the other end is the tenant, for the
+API key and every record that crosses.
+
+**Timeouts.** Two, because reads and writes fail differently:
+
+| Setting | Default | Covers |
+|---|---|---|
+| `IVANTI_TIMEOUT_MS` | `10000` | every OData/REST GET, `$metadata`, the startup probe |
+| `IVANTI_WRITE_TIMEOUT_MS` | `30000` | every create, update, delete, link and upload — and the whole ASMX session (forms, pick lists, quick actions), which POSTs whether it reads or writes, and CentralConfig |
+
+A create runs the tenant's workflow before it answers, which on a workflow-heavy object takes
+longer than a read ever should. A write that times out **may still have been applied** — the model
+is told exactly that, and to check before retrying rather than file it twice. If
+`no answer within 30000 ms` appears on writes that did take effect, raise the write timeout. Both
+must be within 1000–300000, and the write timeout may not be the shorter of the two.
+
+**The schema is read once.** Each `$metadata` graph is cached for the life of the process, with no
+expiry — so a field or a Business Object added in Ivanti after the server started is unknown to it
+(`no Business Object named …`, or a field refused by name) until it **restarts**. A failure to read
+the schema is *not* cached: a timeout, a 5xx, a refused key, or a login or WAF page answering in
+Ivanti's place is asked again on the next call.
+
 ---
 
 ## Troubleshooting
@@ -474,6 +534,14 @@ and RFC 9728 metadata must still match exactly.
 | `Access token was signed by an unknown key` | JWKS problem, or the issuer is not who you configured. |
 | `Could not discover authorization server metadata` | Wrong `OAUTH_ISSUER`, or the IdP publishes metadata somewhere the spec's probe order does not look — set `OAUTH_JWKS_URI` to skip discovery. |
 | Startup exits `78` | Incomplete configuration. Every problem is listed; fix them all. |
+| `… is set, but MCP_MODE is full` | An `ENDUSER_*` setting in a `full` deployment, which would ignore it. Set `MCP_MODE=enduser` if the deployment is for employees; otherwise remove the setting. |
+| `… must use https://` | A URL that carries a key or decides which tokens are trusted was given as `http://`. Only a loopback host may use plain http. |
+| `BEARER_TOKEN is N characters` | Under 32. Generate one with `openssl rand -base64 32`. |
+| `Could not reach Ivanti … (fetch failed: getaddrinfo ENOTFOUND …)` | The hostname does not resolve from where the server runs — a typo in `IVANTI_BASE_URL`, or an egress proxy that `fetch` is not using: set `NODE_USE_ENV_PROXY=1` ([Reaching Ivanti](#reaching-ivanti)). |
+| `fetch failed: UNABLE_TO_VERIFY_LEAF_SIGNATURE` / `SELF_SIGNED_CERT_IN_CHAIN` | A TLS-intercepting proxy. Mount its root CA and point `NODE_EXTRA_CA_CERTS` at it. |
+| `ivanti unavailable` at **warn** | Ivanti did not answer (`status` 0), answered 5xx, or refused the key (401). When it did not answer, the line's `code` — `ENOTFOUND`, `ECONNRESET`, `TimeoutError`, a certificate code — says why; `LOG_LEVEL=debug` adds the full reason. |
+| Writes report `no answer within 30000 ms`, yet took effect | The tenant's workflow outlasts `IVANTI_WRITE_TIMEOUT_MS`. Raise it. |
+| A field or object added in Ivanti is unknown to the server | The schema is cached for the life of the process. Restart it. |
 | `MCP_PUBLIC_URL must not end with a trailing slash` | The resource identifier is compared verbatim against the token audience. |
 | Client keeps registering new apps | It is using DCR. Pin it with `--client-id`, and remember a **running client reads its config at startup** — restart it. |
 | Everything looks right, still 401 | Cached credentials from before the fix. Clear the client's stored authentication and re-authenticate. |
@@ -481,6 +549,7 @@ and RFC 9728 metadata must still match exactly.
 | Every tool answers *"I do not know who you are yet"* | Working as configured: `act_as` gates every other tool, in both modes. Call it with the name, email or login of the person being helped. |
 | Tools that worked start refusing on identity mid-session | The conversation went quiet for longer than `MCP_IDENTITY_IDLE_TTL_SECONDS` (default 1800) and ended, which is how a stdio process ends one at all. Call `act_as` again; the log line is `conversation ended; identity forgotten`. Raise the setting if the window is too short for how people work. |
 | Signing in works, but every tool still refuses on identity | The token is valid and Ivanti holds no record for that person. The server logs `the signed-in account matches nobody in ivanti` at **warn**, with the claim it looked up — create that employee record, or point `OAUTH_IDENTITY_CLAIM` at the claim that does match. |
+| Signed in, but `act_as` says the token names nobody | The token's `email` is not marked `email_verified: true`, so the default claim order skipped it (an unverified email can be set by the user). Set `OAUTH_IDENTITY_CLAIM` to an immutable, admin-controlled claim. |
 | A reference document reads *"Not yet"* | The same gate: `ivanti://reference/…` answers what the tools answer, so it serves the document once somebody is pinned. |
 | `Ivanti has no enabled user named X` from `act_as` | **Not a typo in the login.** CentralConfig only opens a session for an account whose `Disabled` bit is clear, and `Disabled` is a *different field from* `Status` — every account here read `Status: Active` while disabled. Enable the account in Ivanti. |
 | `impersonation configured but unavailable` at startup | The ConfigDB answered 401 (wrong `IVANTI_CENTRAL_CONFIG_API_KEY` — it comes from Configure → Security Controls → API Keys, `CentralConfigApiKey` group, and is **not** the tenant API key) or could not be reached. The server keeps running with `act_as` in its ordinary meaning. |

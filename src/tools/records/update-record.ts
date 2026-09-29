@@ -6,6 +6,7 @@ import { referencedFieldNames } from '../../ivanti/odata/filter.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import {
   confirmWrite,
+  readBackReport,
   resolveValidatedWrite,
   toObjectId,
 } from '../../ivanti/write/validated-write.js';
@@ -19,7 +20,8 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { projectWritten } from '../shared/project-written.js';
 import { connectionFor } from '../shared/connection-for.js';
-import { assertKnownFields } from '../shared/known-fields.js';
+import { knownFields } from '../shared/known-fields.js';
+import { assertOwnershipUntouched } from '../shared/ownership-writes.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
 export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
@@ -97,19 +99,26 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // Before the request, and before the picklist work: the schema is already in hand, so a
         // field this object does not have is a caller's typo rather than a round trip. The form is
         // cached and comes along to translate a LABEL written where the field was meant.
+        // Every name comes back in the schema's spelling, so nothing after this can miss a
+        // validated field over a capital letter.
         const writeForm = await connection.forms.get(toObjectId(entity.name)).catch(() => undefined);
-        assertKnownFields(Object.keys(args.fields), entity, writeForm);
+        const fields = knownFields(args.fields, entity, writeForm);
+        const changed = Object.keys(fields);
+
+        // Theirs, checked above — and so it stays: in `enduser` the customer link and the author
+        // are not a write's to change.
+        await assertOwnershipUntouched(deps, target, fields);
 
         const resolved = await resolveValidatedWrite({
           connection,
           logger: deps.logger,
           entity,
           entitySet,
-          fields: args.fields,
+          fields,
           recId: args.recordId,
         });
 
-        const body = { ...args.fields, ...resolved.values, ...resolved.companions };
+        const body = { ...fields, ...resolved.values, ...resolved.companions };
         const url = transport.routes.record(entitySet, args.recordId);
 
         const updated = await transport
@@ -121,29 +130,33 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
               .get(toObjectId(entity.name))
               .catch(() => undefined);
             throw (
-              explainRequiredFields(error, form, Object.keys(args.fields)) ??
+              explainRequiredFields(error, form, changed) ??
               explainFieldError(error, entity, referencedFieldNames({ fields: Object.keys(body) })) ??
               error
             );
           });
 
-        await confirmWrite(
+        const readBack = await confirmWrite({
           connection,
           entitySet,
-          args.recordId,
-          resolved.confirm,
-          resolved.companions,
+          recId: args.recordId,
+          resolved,
+          written: fields,
+          entity,
+          form: writeForm,
           transport,
-        );
+        });
 
         deps.logger.info('ivanti record updated', { object: entitySet });
 
-        const changed = Object.keys(args.fields);
         return jsonResult({
           object: entitySet,
           recId: args.recordId,
           changed,
-          record: projectWritten(updated, args.returnFields, changed),
+          ...readBackReport(readBack),
+          // The read-back, not the PATCH response: that echoes what was sent — measured, it
+          // reports `LastModBy` changed while the record keeps the session account.
+          record: projectWritten(readBack.stored ?? updated, args.returnFields, changed),
         });
       }),
   });

@@ -7,16 +7,25 @@
 # `.dockerignore` stays at the root because that is where the context is and where
 # the classic builder looks for it; BuildKit would also accept
 # `docker/Dockerfile.dockerignore`, but a second copy is a second thing to drift.
+#
+# BASE IMAGES ARE PINNED BY DIGEST, with the tag kept beside it for the reader. A
+# tag is a pointer the publisher moves; a digest is the bytes this was tested on.
+# Dependabot (.github/dependabot.yml) proposes the next digest as a pull request,
+# so a base-image change arrives reviewed and CI-built rather than silently on the
+# next rebuild. Both are multi-arch indexes (amd64 and arm64 among them).
+#
+# pnpm is pinned rather than taken from corepack, which has been moved and
+# deprecated across Node releases. It must equal package.json's `packageManager`,
+# and `pnpm check:docker` fails when the two disagree.
+ARG PNPM_VERSION=10.20.0
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Build: the toolchain never reaches the final image.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:22-slim AS build
+FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
 WORKDIR /app
-
-# pnpm is pinned rather than taken from corepack, which has been moved and
-# deprecated across Node releases; the version here must match package.json.
-RUN npm install --global pnpm@10.20.0
+ARG PNPM_VERSION
+RUN npm install --global "pnpm@${PNPM_VERSION}"
 
 # Dependencies first, so a source-only change does not re-resolve the lockfile.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -33,9 +42,10 @@ RUN pnpm build
 # which does not survive a COPY into another image: the links point at paths
 # that are not there. `--node-linker=hoisted` writes real directories instead.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:22-slim AS deps
+FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS deps
 WORKDIR /app
-RUN npm install --global pnpm@10.20.0
+ARG PNPM_VERSION
+RUN npm install --global "pnpm@${PNPM_VERSION}"
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod --node-linker=hoisted --ignore-scripts
 
@@ -55,7 +65,7 @@ RUN find node_modules \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) \
 # Runtime: distroless. No shell, no package manager, no npm — nothing to exec
 # into and nothing to install from, which is the point. Runs as `nonroot`.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/nodejs22-debian12:nonroot AS runtime
+FROM gcr.io/distroless/nodejs22-debian12:nonroot@sha256:13593b7570658e8477de39e2f4a1dd25db2f836d68a0ba771251572d23bb4f8e AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production

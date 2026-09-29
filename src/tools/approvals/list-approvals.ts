@@ -14,6 +14,8 @@ import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { zeroNote } from '../shared/zero-note.js';
 import { findPerson } from '../shared/find-person.js';
 import { transportFor } from '../shared/transport-for.js';
+import { assertOrderBy } from '../shared/order-by.js';
+import { voteOwnership } from './vote-owner.js';
 
 /**
  * Whose approvals are waiting.
@@ -28,6 +30,29 @@ import { transportFor } from '../shared/transport-for.js';
  */
 
 const VOTES = 'frs_approvalvotetrackings';
+
+/** Soonest due first — a preference, where the tenant's vote object has the field. */
+const BY_DUE_DATE = 'DueDateTime asc';
+
+/**
+ * The ordering, if this tenant can take it.
+ *
+ * `DueDateTime` is a field Ivanti ships, and nothing may depend on one: Ivanti answers an unknown
+ * `$orderby` field with 204, no rows, so hard-coding it would turn every queue on a tenant without
+ * it into an empty one — reported, by the note below, as a person with nothing waiting. So it is
+ * checked against the tenant's own schema, and a tenant without it gets its rows unordered rather
+ * than none.
+ */
+async function dueDateOrder(deps: IvantiToolDeps): Promise<{ orderBy?: string }> {
+  const entity = await deps.connection.metadata.entity(VOTES).catch(() => undefined);
+  if (entity === undefined) return {};
+  try {
+    assertOrderBy(BY_DUE_DATE, entity);
+    return { orderBy: BY_DUE_DATE };
+  } catch {
+    return {};
+  }
+}
 
 export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -137,15 +162,36 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
           transport.routes.entitySet(VOTES),
           buildQuery({
             filter: conditions.join(' and '),
-            orderBy: 'DueDateTime asc',
+            ...(await dueDateOrder(deps)),
             top: args.top ?? 25,
             count: true,
           }),
         );
 
         const payload = await transport.request<OdataRecord>(url);
-        const rows = readRows<OdataRecord>(payload, url);
-        const total = readTotal(payload, rows.length);
+        const fetched = readRows<OdataRecord>(payload, url);
+
+        /**
+         * The rows the `Owner eq '<display name>'` clause fetched for a NAMESAKE — kept in the
+         * query, because it is how a row whose `Owner` holds a display name is found at all, and
+         * then dropped here when the row's `Owner_Valid` names a different employee.
+         * `vote_on_approval` applies the same rule and would refuse them; listing one here would
+         * be offering someone a queue entry that is another person's, under their own name.
+         */
+        const approver = { recId: who.recId, loginId: lookupLogin, displayName: who.displayName };
+        const rows = fetched.filter((row) => voteOwnership(approver, row) === 'theirs');
+        const namesakes = fetched.length - rows.length;
+
+        // Dropping rows after the count leaves the count counting them. When the whole set came
+        // back, the difference is exact; when it did not, the real figure is somewhere below.
+        const counted = readTotal(payload, fetched.length);
+        const total =
+          counted === undefined || namesakes === 0
+            ? counted
+            : {
+                total: counted.total - namesakes,
+                exact: counted.exact && counted.total === fetched.length,
+              };
 
         /**
          * What is actually being approved.
@@ -234,6 +280,14 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
             ? {}
             : { readBy: pinned.displayName }),
           returned: approvals.length,
+          ...(namesakes === 0
+            ? {}
+            : {
+                leftOut:
+                  `${String(namesakes)} row${namesakes === 1 ? '' : 's'} carried this name but ` +
+                  `belong${namesakes === 1 ? 's' : ''} to a different employee record — someone ` +
+                  'who shares it — so they are not in this queue and cannot be voted on here.',
+              }),
           ...(approvals.length === 0
             ? {
                 note: zeroNote({
