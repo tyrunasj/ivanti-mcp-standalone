@@ -43,6 +43,7 @@ optional.
 | `IVANTI_CENTRAL_CONFIG_API_KEY` (`_FILE`) | from Configure → Security Controls → API Keys, `CentralConfigApiKey` group |
 | `ENDUSER_ROLE` | `enduser`'s role, default `SelfServiceMobile` |
 | `IVANTI_IMPERSONATION_ROLE` | `full` only — pins a role instead of keeping the one Ivanti made active; refused in `enduser` |
+| `IVANTI_IMPERSONATION_REQUIRED` | `true` refuses to run as the service account: exit 78 without the pair, or when the probe finds impersonation unavailable. Default `false` |
 
 The first two are **valid only as a pair**; `validateConfig` refuses one without the other.
 With neither, the server behaves exactly as without the feature.
@@ -50,9 +51,11 @@ With neither, the server behaves exactly as without the feature.
 ## 4. Startup probe
 
 Probed once at startup, like the capability tier — tools and descriptions are selected once — and
-**used when available, never required**: `Capability.canImpersonate`, with `impersonationReason`
-when false. A failing probe never fails the startup. It logs `impersonation available` (info),
-`… configured but unavailable` with the reason (warn), or `… not configured` (info).
+**used when available, required only when configured so**: `Capability.canImpersonate`, with
+`impersonationReason` when false. A failing probe fails the startup only under
+`IVANTI_IMPERSONATION_REQUIRED=true` — for a deployment whose promise is that Ivanti scopes every
+answer to the person. It logs `impersonation available` (info), `… configured but unavailable`
+with the reason (warn), or `… not configured` (info).
 `GetTenantTimeout` proves the key and reachability, not the tenant — a wrong tenant host passes
 and fails at the first `act_as` (see notes).
 
@@ -67,9 +70,15 @@ and fails at the first `act_as` (see notes).
 5. binds the session to the conversation beside the pin
 
 Every call in the conversation then uses it, through `connectionFor`. It is released when the
-conversation ends — best effort: `RemoveSession` answers 200 and ends nothing, so a session lives
-to the tenant timeout (18,000 s). `SessionKeyExpire` re-runs the handshake.
+conversation ends, and shutdown waits for that — best effort: `RemoveSession` answers 200 and ends
+nothing, so a session lives to the tenant timeout (18,000 s).
 
+- **A dead session is re-opened once**, for the same login: past `SessionKeyExpire` (less 30 s),
+  or when Ivanti answers a call 401. A read-only call is then retried; a write is reported, not
+  repeated — part of it may have gone through.
+- **A call keeps the session it started on**, even if its conversation ends meanwhile; an empty
+  slot means the service account, and the rest of a write must not go out as it. A handshake that
+  lands after its conversation ended is given back, never stored for the next one.
 - **A session without a role is never used** — it reads zero of everything, which would surface as
   a confident "you have no incidents".
 - **Failure is refused, with the reason** — disabled account, unknown login, ConfigDB
@@ -103,7 +112,8 @@ CentralConfig key and both spellings, `ConnectionString` and `DBConnectionString
 ## 8. Role selection
 
 **Mandatory, not a refinement.** A session with an empty `ActiveRole` reads nothing; a role is
-always selected before use.
+always selected before use. An empty `ActiveRole` after `SelectRole` is refused, not read as the
+role asked for, and a role Ivanti applied in place of the requested one is named in the reply.
 
 **Ivanti's `SelfServiceRole` flag decides; roles are never ranked** (design §10). It arrives on
 `GetUserData.userRoleList`:

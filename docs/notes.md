@@ -182,6 +182,9 @@ without ever sending `DELETE`, so `onsessionclosed` never fired and the old sess
 until the idle sweep. This is the *normal* case, which makes `MCP_SESSION_IDLE_TTL_SECONDS`
 load-bearing rather than defensive — without it every re-authentication leaks a session
 permanently, and `MCP_MAX_SESSIONS` would eventually be reached by ordinary use.
+The cap then refused every newcomer with 503 for up to the whole TTL while the slots were held by
+nobody. *(Solved 2026-09-29: at the cap a new session closes the least recently used one quiet for
+60 s with nothing in flight; 503 only when every session is busy.)*
 
 **An argument name the schema does not have was dropped in silence — and for `orderBy` that meant
 a confident wrong answer.** Zod strips unknown keys and the SDK hands the handler the parsed value.
@@ -699,6 +702,17 @@ undici rejects with `TypeError("fetch failed")` for DNS, refused connections, re
 interception alike; the code (`ENOTFOUND`, `ECONNRESET`, `CERT_*`, `UND_ERR_*`) is on `.cause`.
 `exchange()` now appends it, scrubbed.
 
+**"No answer" was reported as "no" — three times over.** A write this side gives up on is often
+committed on Ivanti's: a create runs the tenant's workflow before it answers, and the timeout was a
+fixed 10 s (15 s for ASMX). Status 0 fell through to *"Ivanti refused the request (0)"*, which a model reads as
+"did not happen" — so it filed the ticket again, approvals and notification emails included. The
+same shape elsewhere: a failed journal count became "no other activity", and a 500 or a timeout
+during an ownership check became *"No such record is available to you."* → A write with no answer
+(status 0, or a gateway's 502 or 504) says it may have been applied and to look before retrying;
+writes get their own, longer timeout (`IVANTI_WRITE_TIMEOUT_MS`); an uncounted total is reported
+as unknown; only Ivanti's `Invalid key` dialect reads as "not yours". *(Found in the 2026-09-29
+review; the 30 s write timeout against a workflow-heavy create is not yet measured.)*
+
 **`SubmitRequestForUser` now gets `serviceReqData.Subject` and `localOffset`.**
 Measured 2026-09-29: with `localOffset` the file path stores a date answer correctly. Whether it
 honours `Subject` is still open — both offerings tried (Generic Work Order, Data Restore) set their
@@ -774,7 +788,8 @@ authentication failure. The probe checks for an `<Edmx>` root, not just the stat
 It runs before the process serves anything, so an unreachable tenant that accepts the connection
 and never answers hangs the startup indefinitely — worse than exiting, because a container stuck
 part-way through starting looks alive. `PROBE_TIMEOUT_MS`, separate from the request timeout.
-*(Found while building B1, 2026-09-11.)*
+*(Found while building B1, 2026-09-11.)* *(Since 2026-09-29 the probe is given `IVANTI_TIMEOUT_MS`,
+the read timeout; `PROBE_TIMEOUT_MS` is only the default when none is passed.)*
 
 **`encodeURIComponent` does not escape `'`, and Ivanti keys are single-quoted.**
 `Incidents('<RecId>')` breaks out of the key on an apostrophe, so the key builder escapes it
@@ -804,12 +819,24 @@ Harold Sanders. Useful — no normalisation needed on either side — but worth 
 assuming, since it is the opposite of what `eq` means in several other OData implementations.
 *(Measured 2026-09-12.)*
 
+**The field guard ignored case, and everything after it did not.** The guard compared names
+case-insensitively, and everything after it — the form's validated fields, the pick-list resolver,
+the read-back — looked them up exactly. So `{status: 'Bogus'}` passed the guard, matched no
+validated field, went out with no `Status_Valid` and no read-back, and was reported as a success;
+`Status: 'Bogus'` was refused. Two checks that disagree about one name fail
+open. → `knownFields` settles every written name to the schema's spelling before anything reads
+it, and refuses two keys that differ only by case. Measured live afterwards: `subject` is written
+as `Subject` and confirmed. *(Fixed 2026-09-29.)*
+
 **`CreatedBy` can be overridden; `LastModBy` cannot.** Ivanti fills both from the session, but a
 create that sends `CreatedBy` keeps it — measured on an incident and on a note. `LastModBy` is
 stamped by the engine on every write even when sent explicitly, and the write **reports it as
 changed** while storing the session account. That split is useful rather than annoying: an end
 user's ticket can say they authored it while `LastModBy` records the account that performed it,
 which is what actually happened. *(Measured 2026-09-12.)*
+*(Solved: every written field is read back, and Ivanti's own stamps come back under
+`ignoredByIvanti` rather than as changed — `update_record {LastModBy: …}` answered
+`ignoredByIvanti: {LastModBy: "tyrunasj"}`. Verified live 2026-09-29.)*
 
 **A raw field update is not a vote.** Setting an approval vote row's `Status` to `Approved` stored
 the status, overwrote `VotedBy` with the **session account** despite being sent the approver's
@@ -915,7 +942,19 @@ produces something that is no longer a PNG. *(Measured 2026-09-12.)*
 the people are on its `frs_approvalvotetracking` rows, where `Owner` is the approver's **login**
 (`OwnerRecId` is null on this tenant), and `PrimaryParentObject` / `PrimaryParentID` name what is
 waiting. So "what needs my approval" is a filter on the vote-tracking object, not on the approval.
-*(Measured 2026-09-12.)*
+*(Measured 2026-09-12.)* *(Corrected 2026-09-29: `Owner` is a login on most rows only — see the next
+entry.)*
+
+**`Owner` on a vote row is not one identifier, and a display name is not an identity.**
+`Owner` holds a login on most rows, a display name on some — Becky Smith's fourth row stored
+`Becky   Smith`, three spaces where no middle name was set — and an email on others (a request this
+server had just filed). `Owner_Valid` is the employee RecId and never varies. Ownership was an OR of
+all four, so a row whose `Owner_Valid` named someone else still matched on the display name, and
+two people called John Smith could each list and cast the other's vote, recorded as the other's
+decision. → When `Owner_Valid` is present it decides alone (`vote-owner.ts`); the `Owner` spellings
+decide only on a row without one. `list_approvals` keeps its `Owner eq '<display name>'` clause —
+it is how such a row is found at all — and drops the namesakes after reading. *(Found in the
+2026-09-29 review; fixed in code.)*
 
 **An object allowlist guards the object you NAME, not the object you REACH.** `get_related_records`
 gated only its source, so on a tenant whose `ENDUSER_BUSINESS_OBJECTS` refuses `Employees`,
@@ -926,6 +965,25 @@ filters by `PublishToWeb` and a raw traversal did not.
 *(Found 2026-09-12 while wiring notes; a gate that is enforced in one direction only is not a
 gate.)*
 *(Solved: `get_related_records` checks the relationship's target against the gate. Verified in the code 2026-09-28.)*
+
+**Scoping the record you start from does not scope the rows it leads to.** `get_related_records`
+in `enduser` checked that the parent was the caller's and returned whatever hung off it. Right for
+children — a task or an attachment belongs to its parent — and wrong for associations:
+`IncidentAssociatedServiceReq` led from the caller's own incident to somebody else's service
+request, whole. Where `journal` was allowlisted it also returned the internal notes `list_notes`
+filters out. → Each row is checked: the caller's own where the target has a person link, else only
+rows whose `ParentLink_RecID` is the parent, else refused; the journal is refused in favour of
+`list_notes`. *(Found in the 2026-09-29 review, not measured live; fixed in code.)*
+
+**Stamping a record as the caller's does not stop a write un-stamping it.** `create_record` in
+`enduser` stamped the customer link and `CreatedBy`, and `update_record` then wrote whatever it was
+handed — so an end user could point their own ticket's `ProfileLink` at a colleague, or rewrite who
+filed it. The create had the same hole in a quieter shape: the stamp was merged over the caller's
+fields by exact key, so `profilelink_recid` rode alongside `ProfileLink_RecID` and Ivanti chose
+which to keep. → In `enduser` the customer-link pair, the bare link and `CreatedBy` are refused in
+any case, except a create naming the caller themselves. Measured live 2026-09-29: filing for
+someone else, handing a ticket over and setting `CreatedBy` are all refused, and the stored
+customer is the person.
 
 **A group Business Object's extension name can end in `s`, and the name resolver singularised it
 away.** `journal__notes` — the extension a person writes a note to — became `journal__note`, so
@@ -1324,6 +1382,20 @@ The person's session is re-opened once on a 401 or past its expiry (reads retrie
 as not repeated). `SelectRole` answering with no role now refuses rather than running a session
 with none — which reads zero records. Measured 2026-09-29: `act_as` for an account with
 `SelfServiceMobile` still succeeds.
+
+**A call still running when its conversation ends must not change hands.** Ending a conversation
+empties the impersonation slot, and an empty slot means "use the service account" to everything
+that routes a request — so a call in flight at that moment sent the rest of its requests, writes
+included, as this server's own account. Its result was discarded afterwards with *"retry"*, which
+for a write that had gone through meant doing it twice. → Each call keeps the session it started
+on, and a discarded write says the change may already have been made and to check the record
+first. *(Fixed 2026-09-29.)*
+
+**With stdio and HTTP both on under `AUTH_MODE=oauth`, the stdio conversation gets the OAuth
+instructions.** They are built once per process from `AUTH_MODE`, and under `oauth` they tell the
+model the sign-in already names the person — which a stdio connection has no token to do. The gate
+still refuses until `act_as` succeeds, so nothing leaks; the model just learns it one refusal
+later. Run the two transports as separate processes if that matters. *(Known limit, 2026-09-29.)*
 
 ## Observability
 

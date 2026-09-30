@@ -1,6 +1,6 @@
 # Ivanti MCP (standalone) — Design
 
-**Status:** implemented, 0.2.3 · **Updated:** 2026-09-28 · Written 2026-09-10, before any code.
+**Status:** implemented, 0.2.3 · **Updated:** 2026-09-29 · Written 2026-09-10, before any code.
 
 What was decided, why, and — in §10 — what was rejected, so it is not re-litigated. How the
 result works is in [`architecture.md`](./architecture.md); traps in [`notes.md`](./notes.md).
@@ -312,6 +312,8 @@ auth mode. Token propagation to Ivanti is settled by §11.
 | A logging library (`pino`) | What was missing — timestamps, error serialisation, request context — was about thirty lines on a logger of eighty |
 | Failing a pull request on manifest growth | A warning that prevents failed turns can be worth its characters; the usage report judges it, so CI's size check informs. The per-description caps still fail |
 | Pretty-printed JSON results | A third of every result was indentation, re-sent with every later request, and the reader is a model |
+| A release that checks and publishes in one job | The design until 2026-09-29, chosen to build `dist/` once. **Reversed:** `id-token: write` reaches every step of its job, and the checks run every devDependency, so any package in the tree could have signed as the release or pushed a tag. A read-only *Gate* and a *Publish* that installs no npm package, for a second checkout and one artifact hop — [`deployment.md`](./deployment.md#releasing) |
+| Scaling out by hashing `Mcp-Session-Id` at the ingress | Offered by the chart as `sessionAffinity` until 2026-09-29, and never able to work: the pod answering `initialize` mints the id, so the request that opens a session carries nothing to route by. The chart refuses it and more than one replica; scaling out needs a shared session store |
 
 ### Introspection — deferred
 

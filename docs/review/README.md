@@ -7,7 +7,7 @@ states the commit it was run against.
 | | Against | Raised | Refuted | Distinct defects |
 |---|---|---|---|---|
 | [`2026-09-14-full-review.md`](./2026-09-14-full-review.md) | `b17be17` (v0.2.0) | 86 | 24 | 38 — 9 high, 23 medium, 6 low · **all fixed**, see [`STATUS.md`](./STATUS.md) |
-| [`2026-09-29-full-review.md`](./2026-09-29-full-review.md) | `4807b1d` (v0.2.5) | 62 | 1 downgraded live; ~70 refuted before filing | 50 — 5 high, 16 medium, 29 low · see [`STATUS-2026-09-29.md`](./STATUS-2026-09-29.md) |
+| [`2026-09-29-full-review.md`](./2026-09-29-full-review.md) | `4807b1d` (v0.2.5) | 62 | 1 downgraded live; ~70 refuted before filing | 50 — 5 high, 16 medium, 29 low · **all fixed** (#42), see [`STATUS-2026-09-29.md`](./STATUS-2026-09-29.md) |
 
 ## How these are produced
 

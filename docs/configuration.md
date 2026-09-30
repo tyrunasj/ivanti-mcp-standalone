@@ -10,15 +10,22 @@ set the server up against a real identity provider, and what goes wrong.
 | **Transport** | `STDIO_TRANSPORT_ON`, `HTTP_TRANSPORT_ON` | How is the server reached? |
 | **Access** | `AUTH_MODE` and its credentials | Who may connect? |
 | **Audience** | `MCP_MODE`, `ENDUSER_BUSINESS_OBJECTS`, `ENDUSER_QUICK_ACTIONS` | What may they do? |
-| **Ivanti identity** *(optional)* | `IVANTI_CONFIG_URL` + `IVANTI_CENTRAL_CONFIG_API_KEY` | Does Ivanti see the service account, or the person? |
+| **Ivanti identity** *(optional)* | `IVANTI_CONFIG_URL` + `IVANTI_CENTRAL_CONFIG_API_KEY`, and `IVANTI_IMPERSONATION_REQUIRED` | Does Ivanti see the service account, or the person? |
 
 They are independent. `AUTH_MODE` is a **door**, not an identity: it decides whether a client may
 connect. Who an operation is *for* is decided per conversation by `act_as` — and with the ConfigDB
 pair set, Ivanti signs in as that person and applies their own access
-([`impersonation-plan.md`](./impersonation-plan.md)).
+([`impersonation-plan.md`](./impersonation-plan.md)). A ConfigDB that does not answer at startup
+is a warning, and the server then runs as the service account; `IVANTI_IMPERSONATION_REQUIRED=true`
+makes it exit `78` instead, for a deployment whose promise is that Ivanti scopes every answer.
 
 The server **fails closed**. An incomplete configuration exits `78` (`EX_CONFIG`) and prints every
 problem at once — not just the first.
+
+Every secret also takes a `_FILE` form (`IVANTI_API_KEY_FILE`, `BEARER_TOKEN_FILE`, …); giving
+both forms is an error, not a precedence question. To start from something that runs, copy one of
+the configurations in [`examples/env/`](../examples/env) — CI loads each through the real
+`loadConfig` and fails if any would exit `78`.
 
 ---
 
@@ -381,7 +388,10 @@ The candidate list depends on whether the issuer has a path component:
 Zitadel answers on the first. An implementation that tries fewer cannot reach one or the other.
 
 The document's `issuer` must equal `OAUTH_ISSUER` **exactly**, or it is rejected — that check is
-the mitigation for a metadata document served from one host claiming to be another.
+the mitigation for a metadata document served from one host claiming to be another. Its `jwks_uri`
+must be `https://` (a loopback host excepted), like a configured one: whoever answers that URL
+decides which tokens are genuine. A provider that publishes an `http://` key URL fails the startup;
+set `OAUTH_JWKS_URI` to the https address of its keys.
 
 Discovery runs **once, at boot**. A wrong issuer therefore fails immediately with the list of URLs
 tried, rather than turning into a puzzling 401 on the first real request hours later.
@@ -426,7 +436,27 @@ irrelevant when you supplied the URL yourself.
 
 In both modes the key set is **fetched lazily on the first token and cached**, and refetched when a
 token arrives with an unknown `kid` — which is what makes signing-key rotation at the IdP a
-non-event rather than an outage.
+non-event rather than an outage. An **IdP outage** is not one either: a refresh that fails falls
+back to the last key set that loaded, and is retried with a backoff (30 s, doubling to 5 min) rather
+than on every request. Only a token signed by a key that set does not hold is refused meanwhile —
+with a 503 rather than a 401, so clients do not start re-authenticating.
+
+---
+
+## Which claim names the person
+
+A signed-in conversation pins itself from the token, so the token has to name somebody Ivanti
+knows. By default the server tries `email` — **only when the token also carries
+`email_verified: true`** — then `preferred_username`, then `upn`, and looks the value up against
+Ivanti's employees and external contacts. An unverified `email` is skipped because on some IdPs
+(Keycloak's account console, Auth0 with self-signup, Entra optional claims for guests) a user can
+set it to a colleague's address and be signed in as them — and, with impersonation, be given
+Ivanti's own session as them.
+
+Entra and Zitadel access tokens often carry no `email_verified`, so they fall through to the next
+claim. When the provider puts the person's identifier somewhere else, set `OAUTH_IDENTITY_CLAIM`.
+It is used as-is, so it must be a claim users **cannot edit** in their own profile. Never `sub`:
+it names the token, and Entra's is an opaque pairwise id that appears nowhere in Ivanti.
 
 ---
 
@@ -460,9 +490,24 @@ TRUSTED_ORIGINS=https://claude.ai
 `TRUSTED_ORIGINS` still matters here — it is the *only* control left. Origin validation is what
 stops a page the user merely visits from driving this server from inside the network.
 
+`AUTH_MODE=none` on a non-loopback bind starts, with a warning at startup: inside a container
+`0.0.0.0` is the ordinary bind, and whether it reaches a network is decided by how the port is
+published — `-p 127.0.0.1:3000:3000` keeps it on the host.
+
 **Behind a reverse proxy** — set `MCP_PUBLIC_URL` to the externally visible URL. It is never
 derived from the request, because the proxy rewrites Host and scheme while the OAuth token audience
-and RFC 9728 metadata must still match exactly.
+and RFC 9728 metadata must still match exactly. The server keeps an idle connection open for 65 s,
+longer than the 60 s an AWS ALB or the nginx ingress keeps one upstream; a proxy set to keep
+upstream connections idle for longer than that will reuse closed ones and answer a sporadic 502.
+
+**Many people over HTTP** — `MCP_MAX_SESSIONS` (default 100) caps the sessions held at once.
+Clients routinely abandon a session without closing it, so at the cap a new one closes the least
+recently used session that has had no traffic for 60 s and nothing in flight; it is refused with
+`503` and a `Retry-After` only when every session is busy. Under `AUTH_MODE=oauth`,
+`MCP_MAX_SESSIONS_PER_SUBJECT` also caps what one signed-in person holds, closing their own least
+recently used session rather than refusing the new one. It is refused under `none` and `bearer`, where every
+caller is the same subject, and above `MCP_MAX_SESSIONS`. Sessions live in the process, so a
+deployment is **one instance**.
 
 **Employees, not IT staff** — set `MCP_MODE=enduser` along with the `ENDUSER_*` settings. `full` is
 the default and ignores every `ENDUSER_*` setting, so any of them set while the mode is `full`
@@ -537,11 +582,17 @@ Ivanti's place is asked again on the next call.
 | `… is set, but MCP_MODE is full` | An `ENDUSER_*` setting in a `full` deployment, which would ignore it. Set `MCP_MODE=enduser` if the deployment is for employees; otherwise remove the setting. |
 | `… must use https://` | A URL that carries a key or decides which tokens are trusted was given as `http://`. Only a loopback host may use plain http. |
 | `BEARER_TOKEN is N characters` | Under 32. Generate one with `openssl rand -base64 32`. |
+| `MCP_MAX_SESSIONS_PER_SUBJECT needs AUTH_MODE=oauth` | Only a verified token names a subject; under `none` and `bearer` every caller is the same one. Remove it, or use `oauth`. |
+| `Authorization server metadata at … names the signing keys at "http://…"` | The IdP's discovery document publishes its keys over plain http. Set `OAUTH_JWKS_URI` to their https address. |
+| `the IdP signing keys could not be refreshed; verifying with the last good set` at **warn** | The IdP is unreachable. Tokens keep verifying against the keys already loaded; one signed by a key those lack answers 503 until the IdP is back. |
 | `Could not reach Ivanti … (fetch failed: getaddrinfo ENOTFOUND …)` | The hostname does not resolve from where the server runs — a typo in `IVANTI_BASE_URL`, or an egress proxy that `fetch` is not using: set `NODE_USE_ENV_PROXY=1` ([Reaching Ivanti](#reaching-ivanti)). |
 | `fetch failed: UNABLE_TO_VERIFY_LEAF_SIGNATURE` / `SELF_SIGNED_CERT_IN_CHAIN` | A TLS-intercepting proxy. Mount its root CA and point `NODE_EXTRA_CA_CERTS` at it. |
 | `ivanti unavailable` at **warn** | Ivanti did not answer (`status` 0), answered 5xx, or refused the key (401). When it did not answer, the line's `code` — `ENOTFOUND`, `ECONNRESET`, `TimeoutError`, a certificate code — says why; `LOG_LEVEL=debug` adds the full reason. |
 | Writes report `no answer within 30000 ms`, yet took effect | The tenant's workflow outlasts `IVANTI_WRITE_TIMEOUT_MS`. Raise it. |
 | A field or object added in Ivanti is unknown to the server | The schema is cached for the life of the process. Restart it. |
+| New connections get `503 Too many active sessions` with a `Retry-After` | Every one of `MCP_MAX_SESSIONS` sessions has had traffic in the last 60 s or has a request running, so none could be closed to make room. Raise `MCP_MAX_SESSIONS`. |
+| A client reconnects after a short pause and the conversation starts over, and the log shows `session evicted` | The server was at `MCP_MAX_SESSIONS` and closed the least recently used idle session for a newcomer (`reason: cap`), or the person went over `MCP_MAX_SESSIONS_PER_SUBJECT` (`reason: subject limit`). Raise the limit. |
+| Sporadic 502 from the load balancer, with nothing in the server's log | The proxy keeps idle upstream connections open longer than the server's 65 s and reuses one the server has closed. Set the proxy's upstream keep-alive below 65 s. |
 | `MCP_PUBLIC_URL must not end with a trailing slash` | The resource identifier is compared verbatim against the token audience. |
 | Client keeps registering new apps | It is using DCR. Pin it with `--client-id`, and remember a **running client reads its config at startup** — restart it. |
 | Everything looks right, still 401 | Cached credentials from before the fix. Clear the client's stored authentication and re-authenticate. |
@@ -553,6 +604,8 @@ Ivanti's place is asked again on the next call.
 | A reference document reads *"Not yet"* | The same gate: `ivanti://reference/…` answers what the tools answer, so it serves the document once somebody is pinned. |
 | `Ivanti has no enabled user named X` from `act_as` | **Not a typo in the login.** CentralConfig only opens a session for an account whose `Disabled` bit is clear, and `Disabled` is a *different field from* `Status` — every account here read `Status: Active` while disabled. Enable the account in Ivanti. |
 | `impersonation configured but unavailable` at startup | The ConfigDB answered 401 (wrong `IVANTI_CENTRAL_CONFIG_API_KEY` — it comes from Configure → Security Controls → API Keys, `CentralConfigApiKey` group, and is **not** the tenant API key) or could not be reached. The server keeps running with `act_as` in its ordinary meaning. |
+| `IVANTI_IMPERSONATION_REQUIRED=true, but impersonation is unavailable`, exit `78` | The same failure as the row above, with the setting that makes it fatal. Fix the ConfigDB pair, or unset the setting to run as the service account. Without the pair configured at all it is refused as `IVANTI_IMPERSONATION_REQUIRED=true needs IVANTI_CONFIG_URL …`. |
+| `the person's ivanti session could not be re-opened` at **warn** | The person's Ivanti session ended (a 401, or past its `SessionKeyExpire`) and CentralConfig would not open another. Nothing is sent as the service account instead; the next call tries again. |
 | Impersonation is on, but every `act_as` fails | The startup probe validates the key, **not** the tenant: `GetTenantTimeout` answers 200 with a default for a tenant it has never heard of. Check `IVANTI_BASE_URL`'s hostname is the tenant CentralConfig knows. |
 | A form, pick-list or quick-action call answers **551** while impersonating | The session was never activated: `Session.asmx/SelectRole` must be called after `InitializeSession` — even naming the role it already reported — or every `Workspace.asmx` and service-catalog method refuses. The server always calls it, so a 551 here means that changed. |
 
@@ -560,4 +613,6 @@ At `LOG_LEVEL=debug` every MCP request logs its method, tool, session and authen
 and every Ivanti request logs its path, query, status and duration — with Ivanti's own error body
 when it fails, stamped with the `tool`, `sessionId` and `rpcId` that caused it. That answers most of
 the above directly. **Debug carries personal data** (a `$filter` names people), so turn it on to
-diagnose rather than leaving it on. Tool arguments and the values of a write are never logged.
+diagnose rather than leaving it on. Tool arguments and the values of a write are never logged; the
+one exception is what a write touched — its object, relationship and `…Id` arguments — on its
+`tool called` audit line at `info`, so "who deleted incident X" has an answer.

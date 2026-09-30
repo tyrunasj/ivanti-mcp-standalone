@@ -182,7 +182,9 @@ list, so CI and the release gate both run it.
 - **Secrets:** `secrets.existingSecret` with keys `ivanti-api-key` and, for bearer auth,
   `bearer-token`, mounted at `/run/secrets` (`0400`) with `fsGroup: 65532` so the image's user can
   read them. `secrets.create=true` is for development — it puts the values in Helm history. They
-  are read once, at startup: see *Rotating a key*.
+  are read once, at startup: see *Rotating a key*. The chart can measure only
+  `secrets.bearerToken`; a `bearer-token` under 32 characters in an existing Secret passes the
+  render and exits 78 at boot.
 - **Probes:** `/health` is unauthenticated and always 200, so liveness and readiness are plain
   `httpGet`. The startup probe allows two minutes, because boot probes the tenant and opens the
   ASMX session.

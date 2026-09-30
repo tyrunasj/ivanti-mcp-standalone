@@ -38,6 +38,8 @@ What a deployment exposes is decided by independent axes, all fixed at startup:
   the only one that type-checks the tests.
 - **Changed a tool description, argument or the `instructions`?** Run `pnpm handbook:sync` — the
   handbook embeds the manifest, and CI's `handbook:check` fails when it differs.
+- **Changed the chart?** Run `node scripts/check-chart.mjs` (needs `helm`) — CI renders every
+  guard and fails when a refusal renders or a valid configuration does not.
 - **`main` is protected, admins included:** a PR, with `Checks` and `Image` green. `/ship` runs
   the whole flow.
 - **A tool-surface change is verified by driving it** against the live tenant through
@@ -56,7 +58,8 @@ One line each; the reasoning is in [`docs/architecture.md`](docs/architecture.md
   tool by tool: a tool that forgot would not fail, it would answer.
 - **Tool arguments are closed** by `strictInput` in `defineTool`; `get_version` is the one open
   shape. Read arguments with `declaredArguments`, never by enumerating `inputSchema`.
-- **A write's field names are checked before it is sent** (`assertKnownFields`).
+- **A write's field names are checked and settled to the schema's spelling before it is sent**
+  (`knownFields`) — everything after looks names up exactly.
 - **The form's required and read-only rules are conditional** — report them, never refuse on them.
 - **Annotate every tool explicitly.** Unannotated means destructive and open-world; additive
   writes need `destructiveHint: false`; tools returning ticket text keep `openWorldHint: true`.
@@ -127,6 +130,7 @@ src/
     schema/ records/ search/ relationships/ notes/ knowledge/ attachments/
     service-request/ quick-actions/ approvals/ identity/
   resources/       the six ivanti://reference/ documents
+  usage/           what one tool call cost — requests, rows, outcome — for its usage line
 ```
 
 - `tools/` is the surface that gets tuned — descriptions, arguments, annotations. Nothing under it

@@ -82,11 +82,11 @@ content** — no arguments, no ticket text, no names.
 | Field | Meaning |
 |---|---|
 | `tool` | The tool called. |
-| `outcome` | `ok`; the refusal's class (`UnsupportedFilterError`, `FieldNameError`, `IdentityRequiredError`…); `ivanti <status>`; `error` (the tool answered with an error of its own); `discarded` (the conversation ended mid-call); or `fault` (a bug here). |
+| `outcome` | `ok`; the refusal's class (`UnsupportedFilterError`, `FieldNameError`, `IdentityRequiredError`…); `ivanti <status>`; `SessionRenewed` (the person's Ivanti session had ended and was re-opened, but the write was not repeated) or `SessionUnavailable` (it could not be re-opened); `error` (the tool answered with an error of its own); `discarded` (the conversation ended mid-call); or `fault` (a bug here). |
 | `argsChars` | Size of the arguments as the model wrote them — output the model paid to generate. |
 | `argsHash` | Equal for equal arguments, in any key order, within one process. Salted per process and never reversible from the log; it exists only to spot an identical call made twice. |
 | `resultChars` | Size of the text the model reads back. `nonTextChars` when an image or other block came too. |
-| `rowsRead` | Rows read from Ivanti collections during the call, summed. `0` is an empty answer. Absent when the call read no collection — a record fetch, a write. |
+| `rowsRead` | Rows read from Ivanti collections during the call, summed. `0` is an empty answer. Absent when the call read no collection — a record fetch, a create or update. A write that checks or reads back a row by filter (`add_note`, `link_records`, `vote_on_approval`) counts it. |
 | `ivantiRequests` | Requests made to Ivanti — latency and tenant load, not model tokens. |
 | `ms` | How long the call took. |
 | `conversation` | A random id per conversation, unique across sessions and processes. A new one begins when the client initializes again or the conversation goes idle. |
