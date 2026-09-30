@@ -123,6 +123,7 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     timeoutMs,
     writeTimeoutMs,
     secrets: sid === undefined ? [apiKey] : [apiKey, sid],
+    credential: sid === undefined ? 'service' : 'person',
   };
 
   // One credential or the other, never both: sending the key as well would have Ivanti answer

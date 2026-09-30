@@ -3,7 +3,13 @@
 
 import type { Logger } from '../../logger.js';
 import { countIvantiRequest } from '../../usage/call-usage.js';
-import { IvantiApiError, pathOf, ResponseTooLargeError, scrubErrorBody } from './errors.js';
+import {
+  IvantiApiError,
+  type IvantiCredential,
+  pathOf,
+  ResponseTooLargeError,
+  scrubErrorBody,
+} from './errors.js';
 
 export interface FetchResponse {
   ok: boolean;
@@ -49,6 +55,8 @@ export interface ExchangeContext {
   writeTimeoutMs?: number;
   /** Every credential the call carries — redacted from anything Ivanti echoes back. */
   secrets: readonly string[];
+  /** Whose credential it is, stamped on every error this exchange throws. */
+  credential?: IvantiCredential;
 }
 
 export const readText = (response: FetchResponse): Promise<string> => response.text();
@@ -99,7 +107,14 @@ export async function exchange<T>(
     const code = failureCode(cause);
     logger.debug('ivanti request failed', line(0, reason));
     return new IvantiApiError(
-      { status: 0, method: init.method, url, body: reason, ...(code === undefined ? {} : { code }) },
+      {
+        status: 0,
+        method: init.method,
+        url,
+        body: reason,
+        ...(code === undefined ? {} : { code }),
+        ...(context.credential === undefined ? {} : { credential: context.credential }),
+      },
       `Ivanti ${init.method} did not complete: ${reason}`,
     );
   };
@@ -125,7 +140,13 @@ export async function exchange<T>(
     }
     const body = scrubErrorBody(text, ...secrets);
     logger.debug('ivanti request failed', line(response.status, body));
-    throw new IvantiApiError({ status: response.status, method: init.method, url, body });
+    throw new IvantiApiError({
+      status: response.status,
+      method: init.method,
+      url,
+      body,
+      ...(context.credential === undefined ? {} : { credential: context.credential }),
+    });
   }
 
   let body: T;

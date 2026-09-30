@@ -1,0 +1,91 @@
+name: Scan image
+description: >
+  Trivy over an image in the local Docker daemon: every finding into the job
+  summary, and a failure when a critical or high finding has a fix.
+
+# ONE SCAN, THREE CALLERS: the pull-request Image job, the release Gate and the
+# weekly scan of what is published. It exists because pinning the base image by
+# digest was not enough on its own — `nodejs22-debian12` stopped being rebuilt,
+# the pinned digest stayed the newest one, and Dependabot had nothing to propose
+# while Debian's fixes for its OpenSSL and glibc went unshipped
+# (docs/notes.md). A scan of the built image is what notices that.
+#
+# Trivy runs as a container pinned by digest, not as a third-party action, and
+# it never gets the Docker socket — that would be root on the runner. The image
+# is exported to a tarball and Trivy reads the file.
+#
+# Fails only on a finding somebody can act on: critical or high WITH a fixed
+# version. One with no fix published yet is reported in the summary and does not
+# block — nothing in this repository could change it.
+#
+# The vulnerability database comes from ghcr.io first: its mirror.gcr.io copy
+# answered 404 for a whole morning on 2026-09-30, and Trivy did not fall back.
+
+inputs:
+  image:
+    description: The image to scan, already loaded into the local Docker daemon.
+    required: true
+  fail-on-fixable:
+    description: Fail the step when a critical or high finding has a fix.
+    default: 'true'
+
+outputs:
+  fixable:
+    description: How many critical or high findings have a fixed version.
+    value: ${{ steps.scan.outputs.fixable }}
+  report:
+    description: Path of Trivy's JSON report.
+    value: ${{ steps.scan.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        FAIL_ON_FIXABLE: ${{ inputs.fail-on-fixable }}
+        # v0.74.0, the multi-arch index digest.
+        TRIVY: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+      run: |
+        set -euo pipefail
+        out="${RUNNER_TEMP}/image-scan"
+        mkdir -p "${out}/cache"
+        docker save "${IMAGE}" -o "${out}/image.tar"
+
+        docker run --rm -v "${out}:/work" "${TRIVY}" image \
+          --quiet --scanners vuln \
+          --cache-dir /work/cache \
+          --db-repository ghcr.io/aquasecurity/trivy-db:2,mirror.gcr.io/aquasec/trivy-db:2 \
+          --input /work/image.tar \
+          --format json --output /work/report.json
+
+        report="${out}/report.json"
+        count() { jq --arg s "$1" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $s)] | length' "${report}"; }
+        fixable="$(jq '[.Results[]?.Vulnerabilities[]?
+          | select((.Severity == "CRITICAL" or .Severity == "HIGH") and ((.FixedVersion // "") != ""))] | length' "${report}")"
+        rows="$(jq -r '.Results[]?.Vulnerabilities[]?
+          | select(.Severity == "CRITICAL" or .Severity == "HIGH")
+          | "| \(.Severity) | `\(.PkgName)` \(.InstalledVersion) | \(.FixedVersion // "" | if . == "" then "no fix yet" else . end) | \(.VulnerabilityID) |"' "${report}" | sort -u)"
+
+        {
+          echo "### Image scan — \`${IMAGE}\`"
+          echo
+          echo "| Critical | High | Medium | Low | Critical or high **with a fix** |"
+          echo "|---|---|---|---|---|"
+          echo "| $(count CRITICAL) | $(count HIGH) | $(count MEDIUM) | $(count LOW) | **${fixable}** |"
+          if [ -n "${rows}" ]; then
+            echo
+            echo "| Severity | Package | Fixed in | ID |"
+            echo "|---|---|---|---|"
+            echo "${rows}"
+          fi
+        } | tee "${out}/summary.md" >> "${GITHUB_STEP_SUMMARY}"
+
+        echo "fixable=${fixable}" >> "${GITHUB_OUTPUT}"
+        echo "report=${report}" >> "${GITHUB_OUTPUT}"
+
+        if [ "${FAIL_ON_FIXABLE}" = "true" ] && [ "${fixable}" -gt 0 ]; then
+          echo "::error::${fixable} critical or high finding(s) in ${IMAGE} have a fix. Update the package, or move the base image (docker/Dockerfile) — see the job summary."
+          exit 1
+        fi

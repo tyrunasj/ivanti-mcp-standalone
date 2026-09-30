@@ -48,6 +48,13 @@ guard rendered, failing if a refusal renders or a valid configuration does not. 
 the `PATH`. Run the one that covers what you touched: an example env, the Dockerfile or
 `.dockerignore`, the chart.
 
+**The image is scanned** by `.github/actions/scan-image` — Trivy, pinned by digest, over the built
+image exported as a tarball — in the `Image` job and in the release's Gate, before anything is
+pushed. It fails on a critical or high finding that has a fix, and writes every finding to the job
+summary. `.github/workflows/scan.yml` scans the published `latest` every Monday and opens (or
+comments on) an `image-scan` issue when there is something to fix. To scan by hand, run the step's
+script against a local image with `RUNNER_TEMP`, `GITHUB_OUTPUT` and `GITHUB_STEP_SUMMARY` set.
+
 ## Testing against the live tenant
 
 Unit tests prove the code; they have repeatedly passed while the manifest misled a model. So a

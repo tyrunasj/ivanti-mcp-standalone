@@ -246,8 +246,11 @@ it needs a create form, which OData cannot see.
   this way (`session-stamp.ts`) but does not correct it. `CreatedBy` accepts an override and keeps
   it; `LastModBy` does not. With the ConfigDB pair, `act_as` opens Ivanti's own session and every
   write carries the person's name because Ivanti filled it. That session is re-opened once for the
-  same person on a 401 or past its `SessionKeyExpire` — a read is retried, a write is reported as
-  not repeated — and never falls back to the service account. `IVANTI_IMPERSONATION_REQUIRED`
+  same person on a 401 **on the person's own credential** or past its `SessionKeyExpire` — a read
+  is retried, a write is reported as not repeated — and never falls back to the service account.
+  Every `IvantiApiError` carries the `credential` its request was sent with (`service`, or `person`
+  for a SID transport and the person's ASMX session), so a 401 on the service account's own calls —
+  schema, directory, the tenant's offset — leaves the person's session alone. `IVANTI_IMPERSONATION_REQUIRED`
   makes a failed startup probe fatal instead of a warning.
 - **A closed record is read-only, and only this server enforces it.** Ivanti sets `ReadOnly: true`
   and then accepts a PATCH. `assertRecordWritable` guards every write to an existing record.
@@ -391,6 +394,13 @@ it needs a create form, which OData cannot see.
   so concurrent initializes cannot overshoot. Under oauth, `MCP_MAX_SESSIONS_PER_SUBJECT` closes
   the subject's own least recently used session. **One replica**: `initialize` carries no session
   id, so no hash can route a session back to the pod that minted it.
+- **`/health` is alive; `/ready` is able to serve.** `/health` answers 200 while the process runs —
+  a liveness probe that restarted the pod over a tenant outage would fix nothing. `/ready`
+  (`server/http/readiness.ts`) answers from the last background check of the tenant: the
+  `$metadata` document startup settled on, through the transport, every 60 s
+  (`ivanti/check-tenant.ts`). 503 after two failures in a row, 200 on the first success; checked in
+  the background because a probe gets seconds and an Ivanti request can take longer. Both answer
+  anyone; the reason and time only to an authorized caller. No Ivanti configured, always ready.
 - **Shutdown hands every Ivanti session back before exiting.** SIGTERM and SIGINT close every
   conversation on both transports, and so does stdin ending when HTTP is off — a container's stdin
   ends at once, so there it means nothing. Closing is what releases the person's session, and the

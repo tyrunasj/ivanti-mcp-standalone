@@ -694,7 +694,12 @@ function directoryOf(
  * A tool that answers with the login of the session it ran on — or, on the sessions named, is
  * refused by Ivanti as unauthenticated, the way a request on a dead session is.
  */
-function probeTool(options: { readOnly: boolean; refusedOn?: ImpersonatedSession[] }) {
+function probeTool(options: {
+  readOnly: boolean;
+  refusedOn?: ImpersonatedSession[];
+  /** Whose credential the refusal came back on; a dead session is the person's. */
+  refusedAs?: 'person' | 'service';
+}) {
   const runs: (string | undefined)[] = [];
   const tool: ToolDefinition = {
     name: 'probe',
@@ -710,7 +715,12 @@ function probeTool(options: { readOnly: boolean; refusedOn?: ImpersonatedSession
         const held = call?.impersonation?.session();
         runs.push(held?.sid);
         if (held !== undefined && options.refusedOn?.includes(held) === true) {
-          throw new IvantiApiError({ status: 401, method: 'GET', url: 'https://t/HEAT/api/odata/x' });
+          throw new IvantiApiError({
+            status: 401,
+            method: 'GET',
+            url: 'https://t/HEAT/api/odata/x',
+            credential: options.refusedAs ?? 'person',
+          });
         }
         return Promise.resolve({ content: [{ type: 'text' as const, text: held?.sid ?? 'service account' }] });
       });
@@ -776,6 +786,24 @@ describe('the person\'s Ivanti session', () => {
     expect(result.content[0]?.text).toBe('tenant#FRESH#1');
     expect(probe.runs).toEqual(['tenant#DEAD#1', 'tenant#FRESH#1']);
     expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  // The service account's own calls — schema, directory, the tenant's offset — say nothing about
+  // the person's session. Re-opening it over their 401 threw away a session that was fine.
+  it('is kept when the 401 came from the service account, not the person\'s session', async () => {
+    const held = sessionAs('tenant#HELD#1');
+    const open = vi.fn(() => Promise.resolve(held));
+    const impersonation = createImpersonationSlot(open);
+    const probe = probeTool({ readOnly: true, refusedOn: [held], refusedAs: 'service' });
+    const { call } = directoryOf({ HSanders: HAROLD_CANDIDATE }, { impersonation, extra: [probe.tool] });
+
+    await call('act_as', { person: 'HSanders' });
+    const result = await call('probe');
+
+    expect(result.isError).toBe(true);
+    expect(probe.runs).toEqual(['tenant#HELD#1']);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(impersonation.session()).toBe(held);
   });
 
   // A write refused partway may already have done part of its work; repeating it would do it twice.

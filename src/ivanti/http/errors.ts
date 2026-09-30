@@ -33,11 +33,21 @@ export function isIvantiPromptRefusal(error: unknown): boolean {
   return error instanceof IvantiApiError && /PromptException/i.test(error.body);
 }
 
+/**
+ * Which credential a request carried: the API key's own account, or a person's session.
+ *
+ * It matters for a 401 alone. A person's session dies without saying so and is worth re-opening;
+ * the service account's key being refused is a different failure, and re-opening the person's
+ * session over it throws away a session that was fine.
+ */
+export type IvantiCredential = 'service' | 'person';
+
 export interface IvantiApiErrorInit {
   status: number;
   method: string;
   url: string;
   body?: string;
+  credential?: IvantiCredential;
   /**
    * Why Ivanti never answered, as a code — `ENOTFOUND`, `ECONNRESET`, `CERT_HAS_EXPIRED`,
    * `UND_ERR_SOCKET`, `TimeoutError`. Status 0 only. A code names no person and no query, so it
@@ -56,6 +66,8 @@ export class IvantiApiError extends Error {
    */
   readonly body: string;
   readonly code: string | undefined;
+  /** Which credential the request carried; unset where a caller built the error itself. */
+  readonly credential: IvantiCredential | undefined;
 
   constructor(init: IvantiApiErrorInit, message?: string) {
     super(message ?? `Ivanti ${init.method} ${init.status}`);
@@ -65,6 +77,7 @@ export class IvantiApiError extends Error {
     this.url = init.url;
     this.body = truncate(init.body ?? '');
     this.code = init.code;
+    this.credential = init.credential;
   }
 
   /**

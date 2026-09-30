@@ -39,7 +39,7 @@ cp -R "$ROOT/dist" "$STAGE/dist"
 cp -R "$ROOT/docker" "$STAGE/docker"          # healthcheck.mjs, for anyone who wants it
 cp "$ROOT/.env.example" "$STAGE/.env.example"
 # The licence and the third-party notices ship with every copy, not just the repo.
-cp "$ROOT/LICENSE" "$ROOT/THIRD-PARTY-NOTICES.md" "$STAGE/"
+cp "$ROOT/LICENSE" "$ROOT/THIRD-PARTY-NOTICES.md" "$ROOT/CHANGELOG.md" "$STAGE/"
 cp "$ROOT/README.md" "$STAGE/README.md" 2>/dev/null || true
 
 tar -czf "$OUT/ivanti-mcp-$VERSION.tar.gz" -C "$OUT" "ivanti-mcp-$VERSION"

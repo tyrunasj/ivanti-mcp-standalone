@@ -125,8 +125,11 @@ spec:
             - name: secrets
               mountPath: {{ .Values.secrets.mountPath }}
               readOnly: true
-          # /health is unauthenticated and always 200 — and the image is distroless,
-          # so an httpGet probe is the only option: there is no shell and no curl.
+          # /health is unauthenticated and always 200 — alive, which is all startup and
+          # liveness should ask: restarting the pod over a tenant outage fixes nothing.
+          # Readiness asks /ready, which answers 503 while the tenant has not answered
+          # two checks in a row, so the Service stops routing here until it does.
+          # The image is distroless, so httpGet is the only option: no shell, no curl.
           startupProbe:
             httpGet: { path: /health, port: http }
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
@@ -138,7 +141,7 @@ spec:
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
           readinessProbe:
-            httpGet: { path: /health, port: http }
+            httpGet: { path: /ready, port: http }
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
             timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}

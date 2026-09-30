@@ -199,9 +199,11 @@ list, so CI and the release gate both run it.
   are read once, at startup: see *Rotating a key*. The chart can measure only
   `secrets.bearerToken`; a `bearer-token` under 32 characters in an existing Secret passes the
   render and exits 78 at boot.
-- **Probes:** `/health` is unauthenticated and always 200, so liveness and readiness are plain
-  `httpGet`. The startup probe allows two minutes, because boot probes the tenant and opens the
-  ASMX session.
+- **Probes:** plain `httpGet`, since the image has no shell. Startup and liveness ask `/health`,
+  which is unauthenticated and 200 while the process is alive; readiness asks `/ready`, which
+  answers 503 once the tenant has failed two checks in a row, a minute apart — the Service stops
+  routing here without the pod being restarted. The startup probe allows two minutes, because boot
+  probes the tenant and opens the ASMX session.
 
 ## 4. Windows host
 

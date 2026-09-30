@@ -1,0 +1,70 @@
+name: Scan published image
+
+# New CVEs are published against images that have already shipped. CI and the
+# release gate scan an image when it is built; this scans what people are
+# actually pulling, every week, and turns a fixable critical or high into an
+# issue rather than a red run nobody opens. The scan of 2026-09-30 that prompted
+# it came from outside the repository.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Third-party actions are pinned by commit SHA with the version beside it; a tag
+# is a pointer its owner can move. Dependabot proposes the next SHA.
+
+jobs:
+  scan:
+    name: Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    env:
+      IMAGE: tyrunas/ivanti-mcp:latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - run: docker pull "${IMAGE}"
+
+      - id: scan
+        uses: ./.github/actions/scan-image
+        with:
+          image: ${{ env.IMAGE }}
+          fail-on-fixable: 'false'
+
+      # One open issue at a time: a new finding comments on it rather than opening
+      # a second. Closing it is the signal that the fix has shipped.
+      - name: Open or update the issue
+        if: steps.scan.outputs.fixable != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FIXABLE: ${{ steps.scan.outputs.fixable }}
+        run: |
+          set -euo pipefail
+          body="${RUNNER_TEMP}/issue.md"
+          {
+            echo "The weekly scan of \`${IMAGE}\` found **${FIXABLE}** critical or high finding(s) with a fix available."
+            echo
+            cat "${RUNNER_TEMP}/image-scan/summary.md"
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "Fix it in a patch release: update the package, or move the base image in \`docker/Dockerfile\`."
+          } > "${body}"
+          gh label create image-scan --color B60205 --description "Fixable findings in the published image" --force >/dev/null
+          existing="$(gh issue list --state open --label image-scan --json number --jq '.[0].number // empty')"
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body-file "${body}"
+          else
+            gh issue create --title "Published image has fixable critical or high findings" \
+              --label image-scan --body-file "${body}"
+          fi

@@ -134,6 +134,19 @@ describe('createTransport', () => {
     expect(seen[0]?.Accept).toBe('application/xml');
   });
 
+  it('names the credential on a 401: the key\'s own account, or the person\'s session', async () => {
+    const refused = () => Promise.resolve(reply(401, ''));
+    const byKey = await transport(refused).request('https://t/x').catch((e: IvantiApiError) => e);
+    const byPerson = await transport(refused)
+      .asPerson('tenant#SID#1')
+      .request('https://t/x')
+      .catch((e: IvantiApiError) => e);
+
+    expect(byKey).toBeInstanceOf(IvantiApiError);
+    expect((byKey as IvantiApiError).credential).toBe('service');
+    expect((byPerson as IvantiApiError).credential).toBe('person');
+  });
+
   it('scrubs the person\'s SID, not only the key, from what an impersonated call echoes', async () => {
     const t = transport(() => Promise.resolve(reply(500, 'session SID-OF-PERSON failed'))).asPerson(
       'SID-OF-PERSON',
