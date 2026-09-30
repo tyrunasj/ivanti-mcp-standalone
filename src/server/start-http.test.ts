@@ -11,6 +11,7 @@ import type { Config } from '../config/env-schema.js';
 import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
 import type { Logger } from '../logger.js';
 import { releaseOnClose, type McpConnection } from './create-server.js';
+import type { Readiness } from './http/readiness.js';
 import { EVICTION_FLOOR_MS } from './http/session-manager.js';
 import {
   HEADERS_TIMEOUT_MS,
@@ -387,5 +388,46 @@ describe('openModeWarnings', () => {
     expect(
       openModeWarnings(httpConfig({ AUTH_MODE: 'bearer', BEARER_TOKEN: 't', MCP_BIND: '0.0.0.0' })),
     ).toEqual([]);
+  });
+});
+
+describe('startHttp: /ready', () => {
+  const notReady: Readiness = {
+    state: () => ({ ready: false, reason: 'Ivanti GET 503', checkedAt: '2026-09-30T08:00:00.000Z' }),
+    checkNow: () => Promise.resolve(),
+    stop: () => undefined,
+  };
+  const get = async (http: HttpServer, headers: Record<string, string> = {}) => {
+    const response = await fetch(urlOf(http).replace(/\/mcp$/, '/ready'), { headers });
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  };
+
+  // With no Ivanti configured there is nothing to wait for.
+  it('is ready when nothing was given to check', async () => {
+    const http = await start(httpConfig(), spyLogger(), deps());
+
+    expect(await get(http)).toEqual({ status: 200, body: { status: 'ready' } });
+  });
+
+  it('answers 503 while the tenant is not answering, with why to a caller who may see it', async () => {
+    const http = await start(httpConfig(), spyLogger(), deps({ readiness: notReady }));
+
+    expect(await get(http)).toEqual({
+      status: 503,
+      body: { status: 'not-ready', reason: 'Ivanti GET 503', checkedAt: '2026-09-30T08:00:00.000Z' },
+    });
+  });
+
+  // A probe cannot authenticate, so the endpoint answers anyone — and says nothing more to them.
+  it('tells an anonymous caller only that it is not ready', async () => {
+    const token = 't'.repeat(40);
+    const http = await start(
+      httpConfig({ AUTH_MODE: 'bearer', BEARER_TOKEN: token }),
+      spyLogger(),
+      deps({ readiness: notReady }),
+    );
+
+    expect(await get(http)).toEqual({ status: 503, body: { status: 'not-ready' } });
+    expect((await get(http, { authorization: `Bearer ${token}` })).body).toMatchObject({ reason: 'Ivanti GET 503' });
   });
 });

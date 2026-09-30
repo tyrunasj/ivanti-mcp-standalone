@@ -1,0 +1,17 @@
+# Findings accepted in the open, and only until a date — read by
+# .github/actions/scan-image (the release Gate, pull requests, the weekly scan).
+#
+# Use it when a release cannot wait for a fix to reach the base image: Debian
+# has published it, distroless has not rebuilt yet. Every entry needs a
+# statement saying why the finding is acceptable meanwhile, and an expired_at
+# after which it blocks again. Remove the entry when the fix ships.
+#
+#   vulnerabilities:
+#     - id: CVE-2026-00000
+#       statement: >-
+#         Debian's libssl3t64; the fix is not in gcr.io/distroless/nodejs22-debian13
+#         yet. Node carries its own OpenSSL for TLS, and the server uses neither
+#         DTLS nor QUIC.
+#       expired_at: 2026-10-14
+
+vulnerabilities: []

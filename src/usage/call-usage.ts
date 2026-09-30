@@ -26,6 +26,11 @@ export interface CallUsage {
    * `ivanti <status>`, or `fault`. Unset when it answered.
    */
   outcome?: string;
+  /**
+   * Ivanti refused the person's own session as unauthenticated — a 401 on their credential, not
+   * the service account's. What decides whether that session is re-opened; never logged.
+   */
+  personRefused?: boolean;
 }
 
 const store = new AsyncLocalStorage<CallUsage>();
@@ -48,4 +53,9 @@ export function countRowsRead(rows: number): void {
 export function noteOutcome(outcome: string): void {
   const usage = store.getStore();
   if (usage !== undefined) usage.outcome = outcome;
+}
+
+export function notePersonRefused(): void {
+  const usage = store.getStore();
+  if (usage !== undefined) usage.personRefused = true;
 }

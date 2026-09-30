@@ -478,10 +478,13 @@ export function registerTools(
     // Judged on this handler's outcome alone, not on anything noted earlier in the call.
     const noted = usage.outcome;
     usage.outcome = undefined;
+    usage.personRefused = undefined;
     const result = await tool.handler(args, { ...call, impersonation: pinnedTo(slot, kept.live) });
-    const refused = usage.outcome === 'ivanti 401';
+    // A 401 on the PERSON'S session is Ivanti refusing that credential, not the request. One on
+    // the service account's own calls — schema, directory, the tenant's offset — is not about the
+    // person's session, which is kept. Anything else is the call's answer.
+    const refused = usage.personRefused === true;
     usage.outcome ??= noted;
-    // A 401 is Ivanti refusing the credential, not the request. Anything else is the call's answer.
     if (!refused || conversation !== startedIn) return result;
 
     // Named, so a refusal that arrives after another call already replaced it discards nothing.
@@ -505,6 +508,7 @@ export function registerTools(
 
     // Once. A second refusal on a session opened a moment ago is reported as it is.
     usage.outcome = undefined;
+    usage.personRefused = undefined;
     return tool.handler(args, { ...call, impersonation: pinnedTo(slot, renewed.live) });
   };
 

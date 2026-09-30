@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Logger, LogLevel } from '../../logger.js';
 import { IvantiApiError, ResponseTooLargeError } from '../../ivanti/http/errors.js';
+import { type CallUsage, withCallUsage } from '../../usage/call-usage.js';
 import { runTool } from './run-tool.js';
 
 interface Line {
@@ -34,6 +35,30 @@ const failWith = (status: number): IvantiApiError =>
   });
 
 describe('runTool', () => {
+  it.each([
+    ['person', 401, true],
+    ['service', 401, undefined],
+    [undefined, 401, undefined],
+    ['person', 500, undefined],
+  ] as const)(
+    'flags the person\'s session as refused only for a 401 on their credential (%s, %i)',
+    async (credential, status, flagged) => {
+      const { logger } = recorder();
+      const usage: CallUsage = { ivantiRequests: 0 };
+      const failure = new IvantiApiError({
+        status,
+        method: 'GET',
+        url: 'https://t/HEAT/api/odata/x',
+        ...(credential === undefined ? {} : { credential }),
+      });
+
+      await withCallUsage(usage, () => runTool('list_records', logger, () => Promise.reject(failure)));
+
+      expect(usage.personRefused).toBe(flagged);
+      expect(usage.outcome).toBe(`ivanti ${String(status)}`);
+    },
+  );
+
   it.each([400, 403, 404])(
     'keeps an Ivanti %i at debug: the model is told, and it is not the operator\'s problem',
     async (status) => {

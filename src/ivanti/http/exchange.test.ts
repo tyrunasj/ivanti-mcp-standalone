@@ -113,6 +113,31 @@ describe('exchange', () => {
     expect(debugged[0]?.fields).toEqual(['ObjectId', 'file']);
   });
 
+  it('stamps whose credential it carried on a refusal and on a request never answered', async () => {
+    const { logger } = recorder();
+    const refusal = (pending: Promise<unknown>): Promise<IvantiApiError> =>
+      pending.then(
+        () => {
+          throw new Error('expected Ivanti to refuse');
+        },
+        (error: unknown) => error as IvantiApiError,
+      );
+    const asPerson = (fetchImpl: FetchLike) =>
+      refusal(
+        exchange(
+          'https://t/HEAT/api/odata/x',
+          { method: 'GET', headers: {} },
+          { fetchImpl, logger, timeoutMs: 1_000, secrets: [], credential: 'person' },
+          readText,
+        ),
+      );
+
+    expect((await asPerson(() => Promise.resolve(reply(401, '')))).credential).toBe('person');
+    expect((await asPerson(() => Promise.reject(new Error('socket hang up')))).credential).toBe('person');
+    // A context that names none leaves it unset, rather than guessing.
+    expect((await refusal(send(() => Promise.resolve(reply(401, '')), logger))).credential).toBeUndefined();
+  });
+
   it('logs a refusal with the body Ivanti sent, scrubbed of the credential', async () => {
     const { logger, debugged } = recorder();
 

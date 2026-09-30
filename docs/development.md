@@ -48,6 +48,17 @@ guard rendered, failing if a refusal renders or a valid configuration does not. 
 the `PATH`. Run the one that covers what you touched: an example env, the Dockerfile or
 `.dockerignore`, the chart.
 
+**The image is scanned** by `.github/actions/scan-image` — Trivy, pinned by digest, over the built
+image exported as a tarball — and every finding goes to the job log and summary. **The release's
+Gate blocks** on a critical or high finding that has a fix, before anything is pushed. **A pull
+request's `Image` job only reports**: a fix Debian has published is often not yet in the distroless
+base, and a change that does not touch the image should not wait on that.
+`.github/workflows/scan.yml` scans the published `latest` every Monday and opens (or comments on)
+an `image-scan` issue. When a release cannot wait for upstream, accept the finding in
+`.trivyignore.yaml` — a statement and an `expired_at`, after which it blocks again — and remove the
+entry once the base carries the fix. To scan by hand, run the step's script against a local image
+with `RUNNER_TEMP`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` and `GITHUB_WORKSPACE` set.
+
 ## Testing against the live tenant
 
 Unit tests prove the code; they have repeatedly passed while the manifest misled a model. So a

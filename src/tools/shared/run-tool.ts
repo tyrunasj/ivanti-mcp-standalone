@@ -12,7 +12,7 @@ import {
 } from '../../ivanti/http/errors.js';
 import { isReadMethod } from '../../ivanti/http/exchange.js';
 import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
-import { noteOutcome } from '../../usage/call-usage.js';
+import { noteOutcome, notePersonRefused } from '../../usage/call-usage.js';
 import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
 import {
   ValidatedValueError,
@@ -67,6 +67,11 @@ export async function runTool(
           ? error.constructor.name
           : 'fault',
     );
+    // Only the person's own credential: a 401 on the service account's key says nothing about the
+    // person's session, and re-opening that over it throws away a session that was fine.
+    if (error instanceof IvantiApiError && error.status === 401 && error.credential === 'person') {
+      notePersonRefused();
+    }
 
     // Refused here, never sent: the caller's query was the problem, so this is a rejection
     // rather than a failure and does not belong in the error log.

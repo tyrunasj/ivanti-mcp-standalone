@@ -108,3 +108,23 @@ jobs:
           # Warms the cache the release build reads, so a release does not rebuild
           # both architectures from scratch.
           cache-to: type=gha,mode=max
+
+      # A multi-arch build cannot be loaded into the local daemon, so the scan gets
+      # an amd64 build of its own — from the cache just warmed, so it costs seconds.
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ivanti-mcp:scan
+          cache-from: type=gha
+
+      # Reports, and does not block: a fix Debian has published is often not yet in
+      # the distroless base, and a change that does not touch the image should not
+      # wait on it. The release Gate is where a fixable critical or high blocks.
+      - uses: ./.github/actions/scan-image
+        with:
+          image: ivanti-mcp:scan
+          fail-on-fixable: 'false'

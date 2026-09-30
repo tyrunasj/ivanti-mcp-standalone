@@ -14,6 +14,10 @@ describe('resolveRoute', () => {
     expect(resolveRoute('/health', oauthPaths)).toBe('health');
   });
 
+  it('routes the readiness probe', () => {
+    expect(resolveRoute('/ready', oauthPaths)).toBe('ready');
+  });
+
   it('routes the MCP endpoint', () => {
     expect(resolveRoute('/mcp', oauthPaths)).toBe('mcp');
   });

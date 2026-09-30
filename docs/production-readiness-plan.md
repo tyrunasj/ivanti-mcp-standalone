@@ -10,7 +10,7 @@ it is decided.
 |---|---|---|---|---|
 | Correctness and safety | 9 | 9 | Hold: every fix with a test that fails on the old code; one full review before 1.0 | — |
 | Security | 8 | 9 | 0.3.1 base-image fix, image scanning and SBOM in CI, threat model, one known limit | ~2.5 wk |
-| Deployment | 9 | 9 | Hold: a CHANGELOG with upgrade notes per release | ~0.5 wk |
+| Deployment | 9 | 9 | Hold: a CHANGELOG with upgrade notes per release — done (`CHANGELOG.md`) | — |
 | Operations and monitoring | 5 | 9 | Tenant-aware readiness, metrics, rate limits, runbook and alerts | ~7 wk |
 | Scale and availability | 4 | 9 | Replicas under OAuth, PodDisruptionBudget, load and soak tests | ~4 wk |
 | Validation breadth | 7 | 9 | A pilot on a production-like tenant with a real IdP, a client matrix, the unmeasured list closed | ~2 wk + pilot |
@@ -50,6 +50,12 @@ finding with a fix available**, and passed the end-to-end MCP check against the 
 
 ## Security, 8 → 9
 
+**Progress (2026-09-30):** 1 — the scan runs in `Image`, in the release Gate before anything is
+pushed, and weekly over `latest`; SBOM and provenance were already attached to every image, and
+are now documented. 2 — the Handbook's *Hardening* section. 3 — fixed: every Ivanti error now
+carries the credential it was sent with, and only a 401 on the person's own re-opens their
+session. Left: 4.
+
 1. **Scan every image in CI** — Trivy or Grype on the built image in `Image` and in the release
    Gate; fail on a critical or a fixable high. Attach an SBOM and build provenance to each image,
    verifiable with `cosign`. This is the check that would have caught the stale base.
@@ -65,6 +71,10 @@ finding with a fix available**, and passed the end-to-end MCP check against the 
 and the threat model is published.
 
 ## Operations and monitoring, 5 → 9
+
+**Progress (2026-09-30):** 1 — `/ready`, from a background check of the tenant every minute, 503
+after two failures in a row; the chart's readiness probe uses it. 4, in part — the log lines worth
+an alert are in the Handbook's *Watching it*. Left: metrics, rate limits, dashboards.
 
 1. **Readiness that reflects the tenant (~2 wk):** `/ready` checks that the tenant answers and the
    session is valid, cached for a few seconds; `/health` stays liveness only. The chart's
@@ -100,6 +110,11 @@ dashboard shows calls, errors and latency.
 load test meets the target, and memory is flat through the soak.
 
 ## Validation breadth, 7 → 9
+
+**Progress (2026-09-30):** the Windows Ivanti connection passed end to end on 0.3.1, after an
+upgrade by the documented steps; memory was re-measured on Linux (~104 MiB idle, ~64 KiB per
+session); Claude Code verified as a client over stdio and HTTP. Left: the pilot, Entra, Claude
+Desktop, the claude.ai and ChatGPT connectors, and the rest of the unmeasured list.
 
 1. **A pilot** on a production-like tenant with real users, two weeks, with `usage:report` as the
    baseline.

@@ -10,12 +10,14 @@ import {
   isIvantiConfigured,
   requiredImpersonationProblems,
 } from './config/validate-config.js';
+import { checkTenant } from './ivanti/check-tenant.js';
 import { connectIvanti } from './ivanti/connect.js';
 import { validateBusinessObjectAllowlist } from './ivanti/validate-allowlist.js';
 
 import { createLogger } from './logger.js';
 import { createServerFactory, SERVER_NAME, SERVER_VERSION } from './server/create-server.js';
 import { readSdkVersion } from './version.js';
+import { startReadiness, type Readiness } from './server/http/readiness.js';
 import { ListenError, startHttp, type HttpServer } from './server/start-http.js';
 import { startStdio, type StdioServer } from './server/start-stdio.js';
 
@@ -108,6 +110,7 @@ async function main(): Promise<void> {
   }
 
   let http: HttpServer | undefined;
+  let readiness: Readiness | undefined;
   if (config.HTTP_TRANSPORT_ON) {
     // `enduser` scopes records to one person per MCP session, and a session is whatever the
     // client opened — so a gateway that multiplexes many people onto one connection would show
@@ -134,8 +137,12 @@ async function main(): Promise<void> {
       });
     }
 
+    // Only HTTP has anything to route away from, and only a configured tenant can stop answering.
+    if (ivanti !== undefined) readiness = startReadiness({ check: () => checkTenant(ivanti), logger });
+
     // Resolves once the port is bound, and logs `listening on http` then — never before.
     http = await startHttp(config, logger, {
+      ...(readiness === undefined ? {} : { readiness }),
       verifier,
       createMcpServer: factory.create,
       serverName: SERVER_NAME,
@@ -159,6 +166,7 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     logger.info('shutting down', { reason });
+    readiness?.stop();
 
     const deadline = setTimeout(() => {
       logger.warn('shutdown timed out; exiting anyway', { afterMs: SHUTDOWN_GRACE_MS });

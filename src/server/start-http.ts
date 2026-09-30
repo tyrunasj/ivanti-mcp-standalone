@@ -19,6 +19,7 @@ import type { CallContext } from '../tools/tool-definition.js';
 import type { McpConnection } from './create-server.js';
 import { authorizeRequest, type AuthorizationResult } from './http/authorize-request.js';
 import { buildHealth, MINIMAL_HEALTH } from './http/health.js';
+import { ALWAYS_READY, type Readiness } from './http/readiness.js';
 import { createMcpHandler, type McpSession } from './http/mcp-handler.js';
 import { sendJson } from './http/respond.js';
 import { resolveRoute } from './http/resolve-route.js';
@@ -59,6 +60,8 @@ export interface HttpDeps {
   sdkVersion: string;
   /** What the `listening on http` line carries besides the address — the manifest, the tools. */
   listeningFields?: Record<string, unknown>;
+  /** Whether the tenant still answers; always ready when absent, as with no Ivanti configured. */
+  readiness?: Readiness;
 }
 
 /** The listener could not bind. Already logged; the process has nothing to serve and exits. */
@@ -260,6 +263,19 @@ export async function startHttp(
                   })
                 : MINIMAL_HEALTH,
             );
+            return;
+          }
+
+          case 'ready': {
+            // Unauthenticated, like /health, because a readiness probe cannot authenticate either.
+            // 503 while the tenant is not answering, so a Service or load balancer stops routing
+            // here until it is. Why, and since when, only to a caller who could see the rest.
+            const permitted = await authorize(request);
+            const { ready, ...detail } = (deps.readiness ?? ALWAYS_READY).state();
+            sendJson(response, ready ? 200 : 503, {
+              status: ready ? 'ready' : 'not-ready',
+              ...(permitted.authorized ? detail : {}),
+            });
             return;
           }
 

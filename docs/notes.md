@@ -33,6 +33,14 @@ itself carries its own OpenSSL, so the flagged `libssl3` was never on the TLS pa
 was in the image, and scanners count what is in the image. The check that would have caught it
 is a scan of the built image, not of the lockfile.
 
+**A fix Debian has published is not in distroless yet.** The first CI run of the image scan
+(2026-09-30) failed on two highs in `libssl3t64 3.5.7-1~deb13u2`: Debian had shipped
+`deb13u3` within the hour, Trivy's database knew, and `gcr.io/distroless/nodejs22-debian13:nonroot`
+still pointed at the digest the Dockerfile pinned. Nothing in this repository could fix it until
+distroless rebuilt. So a pull request's scan reports and the release blocks; a release that cannot
+wait accepts the finding in `.trivyignore.yaml` with an expiry, and the Dependabot digest bump —
+or a manual one — carries the fix when it lands.
+
 **`scratch` ships no CA bundle; every distroless image does.**
 Needed for TLS to Ivanti *and* for fetching the IdP's JWKS. A missing trust store surfaces as a
 **token-validation failure**, not as an obvious TLS error — which sends you debugging OAuth when

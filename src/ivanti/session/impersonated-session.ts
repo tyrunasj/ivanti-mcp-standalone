@@ -123,7 +123,13 @@ export async function openImpersonatedSession(
   // — measured at 18,000 s here. One wrapper covers every exit rather than three of them.
   try {
     // The SID is a live credential and Ivanti echoes submitted values into failures.
-    const context: ExchangeContext = { fetchImpl, logger, timeoutMs, secrets: [opened.sid] };
+    const context: ExchangeContext = {
+      fetchImpl,
+      logger,
+      timeoutMs,
+      secrets: [opened.sid],
+      credential: 'person',
+    };
 
     const post = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {
       const { body: text } = await exchange(
