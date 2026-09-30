@@ -131,10 +131,10 @@ networkPolicy:
   # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
   # - podSelector: { matchLabels: { app: my-agent } }
 
-# Measured (docs/handbook.html, "How much memory it needs"): 96 MB resident with
-# nothing connected; 117 MB with 100 sessions held (+21 MB, ~215 KB each) and
-# 242 MB with 1,000 (+146 MB, ~150 KB each) — the per-session cost falls as the
-# shared tool definitions amortise. Idle memory dominates until ~700 sessions.
+# Measured (docs/handbook.html, "How much memory it needs"): ~117 MiB resident
+# with nothing connected, plus ~60 KiB per held session — 176 MiB with 1,000.
+# The request holds even that; the limit is headroom for working sessions.
+# Idle memory dominates across the whole range.
 resources:
   requests: { cpu: 100m, memory: 192Mi }
   limits: { memory: 512Mi }

@@ -56,7 +56,7 @@ tests — the loop is in [`docs/development.md`](docs/development.md#testing-aga
 | [Handbook](https://tyrunasj.github.io/ivanti-mcp-standalone/) ([source](docs/handbook.html)) | interactive reference and configurator; start here to run it |
 | [`examples/env/`](examples/env) | working configurations — CI proves they load |
 | [`docs/configuration.md`](docs/configuration.md) | configuring against a real IdP, with a symptom → cause table |
-| [`docs/deployment.md`](docs/deployment.md) | the three shapes, the chart's guards, the image build, releasing |
+| [`docs/deployment.md`](docs/deployment.md) | the four shapes, the chart's guards, the image build, releasing |
 | [`docs/architecture.md`](docs/architecture.md) | how the server works and why — capability tiers, audience modes, identity, writes |
 | [`docs/development.md`](docs/development.md) | commands, checks, testing against the live tenant |
 | [`docs/usage.md`](docs/usage.md) | what the tool descriptions and results cost a conversation, the failed turns they cause, and how to tune them |
