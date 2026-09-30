@@ -28,8 +28,9 @@ exits 78 (`EX_CONFIG`) with a list of every problem when configuration is incomp
 
 **Before any commit, run all four:** `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`.
 `pnpm handbook:sync` regenerates the manifest snapshot `docs/handbook.html` embeds, and
-`pnpm handbook:check` (run in CI) fails when a description changed without it. `pnpm version:sync`
-writes `package.json`'s version into `Chart.yaml` and the handbook.
+`pnpm handbook:check` (run in CI) fails when a description changed without it. Merged to `main`,
+the page is published to <https://tyrunasj.github.io/ivanti-mcp-standalone/> by the `Pages`
+workflow. `pnpm version:sync` writes `package.json`'s version into `Chart.yaml` and the handbook.
 
 `pnpm budget` prints the manifest and `instructions` spend against their caps — the figures no
 document should quote, because they move with every description. `pnpm manifest:size` measures
@@ -37,6 +38,15 @@ the whole manifest, schemas included; see [`usage.md`](./usage.md).
 
 `typecheck` is not redundant with `build` — the build config excludes tests and fixtures, so it is
 the only thing that type-checks the test suite. `/ship` runs them and refuses on the first failure.
+
+CI runs more than the four, from one list in `.github/actions/checks` that the release shares:
+`pnpm version:check`, `handbook:check`, `check:examples` (every example env through the real
+`loadConfig`, so after `build`), `check:licenses`, `check:docker` (every `COPY` source is in the
+build context, `ARG PNPM_VERSION` matches `packageManager`, every base image is pinned by digest)
+and `node scripts/check-chart.mjs` — `helm lint --strict`, the default values, and every chart
+guard rendered, failing if a refusal renders or a valid configuration does not. It needs `helm` on
+the `PATH`. Run the one that covers what you touched: an example env, the Dockerfile or
+`.dockerignore`, the chart.
 
 ## Testing against the live tenant
 
@@ -58,6 +68,11 @@ is spawned per connection, so reconnecting *is* the redeploy — no build, no im
 - **`AUTH_MODE=` and `MCP_PUBLIC_URL=` are deliberate.** `.env` is written for HTTP, and an
   `AUTH_MODE` set while HTTP is off is a startup failure by design. An empty value means unset
   (`withoutEmpty`), and the client's environment beats `--env-file`.
+- **Whatever else `.env` carries must pass the startup rules too.** An `ENDUSER_*` line under
+  `MCP_MODE=full` refuses to start, and so does `MCP_MAX_SESSIONS_PER_SUBJECT` once `AUTH_MODE` is
+  cleared. Remove the line, or clear it the same way (`-e ENDUSER_BUSINESS_OBJECTS=`). The client
+  reports only that the connection closed; the exit-78 list is on stderr, so run the same command
+  in a terminal to read it.
 - **A running connection keeps the process it spawned.** Changes land on reconnect, not before.
 - **A fresh connection ends the conversation** — the pin is gone and the first call asks for
   `act_as` again. So does 30 minutes of silence (`MCP_IDENTITY_IDLE_TTL_SECONDS`).

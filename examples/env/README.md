@@ -1,6 +1,6 @@
 # Example configurations
 
-Eight starting points, one per shape people actually deploy. Copy one to `.env`,
+Nine starting points, one per shape people actually deploy. Copy one to `.env`,
 change the tenant and the secrets, and you have a working configuration.
 
 **`.env.example` at the repository root is the reference** — it documents every
@@ -35,11 +35,14 @@ An example that exits 78 is worse than no example, because it gets copied before
 it gets read. The check catches exactly the mistakes the server refuses to start
 on: HTTP without an `AUTH_MODE`, an `AUTH_MODE` set while HTTP is off, both
 transports off, a `MCP_PUBLIC_URL` with a trailing slash, `IVANTI_BASE_URL`
-without a key, and `enduser` with an empty allowlist.
+without a key, `enduser` with an empty allowlist, `ENDUSER_*` set in `full`, a
+bearer token under 32 characters, and a plain `http://` tenant, ConfigDB or
+issuer URL on anything but loopback.
 
 `_FILE` secrets point at paths that exist only in the target deployment, so the
-file reader is stubbed during the check. What is verified is the configuration,
-not the mount.
+file reader is stubbed during the check — with a value long enough to pass the
+bearer-token minimum, so a secret's real length is not what is verified. What is
+verified is the configuration, not the mount.
 
 ## What these files cannot tell you
 

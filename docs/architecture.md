@@ -27,7 +27,10 @@ are in [`notes.md`](./notes.md). The directory map is in `CLAUDE.md`.
 - **One reason to change per file**, tests beside it (`foo.ts` / `foo.test.ts`).
 - **Config loads in three phases, in this order:** secrets (`*_FILE` → value), then shape
   (`env-schema.ts`, *what a setting is*), then rules (`validate-config.ts`, *which combinations
-  are allowed*). "Bearer mode needs a token" cannot be judged before the secret file is read.
+  are allowed*). "Bearer mode needs a token" cannot be judged before the secret file is read. The
+  rules also get the names the environment actually set, because a setting the mode ignores
+  (`ENDUSER_*` under `full`) cannot otherwise be told from a default — and "set, but ignored" is
+  the mistake worth refusing.
 
 ## Scope
 
@@ -81,8 +84,15 @@ it needs a create form, which OData cannot see.
   error shape, the scrubbing and the request log. The timeout is chosen by method —
   `IVANTI_TIMEOUT_MS` for a GET, `IVANTI_WRITE_TIMEOUT_MS` for anything else, ASMX and the
   impersonation handshake included, because both are POSTs end to end. A write that gets no answer
-  is told to the model as *possibly applied*, never as refused: a timeout on a create is the
-  commonest way to file a ticket twice.
+  — status 0, or a gateway's 502 or 504 — is told to the model as *possibly applied*, never as
+  refused: a timeout on a create is the commonest way to file a ticket twice. A request Ivanti never
+  answered carries the code from undici's `cause` chain (`ENOTFOUND`, `ECONNRESET`, a certificate
+  error), since `fetch failed` alone makes a DNS typo, a firewall and a proxy's certificate read
+  alike.
+- **Downloads are capped before and during the fetch.** Ivanti serves a file whole or not at all,
+  so `download_attachment` judges the row's name and `AttachmentSize` before asking for any bytes,
+  and `requestBinary` stops reading at a byte cap (`Content-Length` first, then the stream) with a
+  `ResponseTooLargeError` — Ivanti answered, so it is not an `IvantiApiError`.
 - **Every collection read goes through `readCollection()`.** "No rows" has three encodings: a
   filter matching nothing answers 200 with an empty body, an empty navigation property answers
   `{"value": "No instances found."}` — a string with `.length === 19` — and only rows arrive as an
@@ -90,7 +100,9 @@ it needs a create form, which OData cannot see.
 - **Objects resolve through the metadata catalog, never by string conversion.** `resolveObject()`
   turns a wrong name into an error with suggestions, where Ivanti answers an empty result. An
   unknown entity set makes Ivanti *fabricate* a field-less entity type, so a schema with no fields
-  is a typo.
+  is a typo. Each graph is cached for the life of the process, and only that fabricated CSDL is
+  cached as an answer: a timeout, a 5xx, or a page that is not CSDL at all (a WAF, a login) is asked
+  again, or one bad moment makes `Incidents` unknown until a restart.
 - **A refusal is where a name is taught.** `suggestNames` ranks a name that contains the guess,
   then one the guess contains (at least half of it), then a typo — one slip under five letters,
   two above — so `Incidnet` reaches `incident` and `Stauts` reaches `Status`. The short `object`
@@ -106,7 +118,10 @@ it needs a create form, which OData cannot see.
 - **Ivanti answers errors as successes, so some requests are refused locally.** Get-by-key answers
   `400 ISM_4000 "Invalid key"` for a missing record (`isIvantiNotFound()` owns that dialect);
   `contains()` and friends are silently dropped and the whole set returned
-  (`assertSupportedFilter`); a bad `$orderby` answers 204, reading as "no rows" (`assertOrderBy`).
+  (`assertSupportedFilter`, which also refuses unbalanced parentheses and an unterminated string,
+  in every mode — Ivanti's `$filter` does not follow OData's `and`-before-`or`, and answered some
+  unbalanced shapes with wrong counts); a bad `$orderby` answers 204, reading as "no rows"
+  (`assertOrderBy`).
 
 ## Identity and the gate
 
@@ -125,10 +140,16 @@ it needs a create form, which OData cannot see.
 - **A signed-in conversation pins itself lazily**, on the first call that needs it, by running
   `act_as`'s own handler with the token's claim — not at `initialize`, where a slow tenant would
   fail the connection. A verified claim matching nobody is logged at warn; an unverified one never.
+  A failed attempt is not remembered — a transient 5xx cached there was replayed on every call —
+  while a question (which of these records is yours) stands until it is answered.
 - **A conversation ends on silence or a fresh `initialize`** — `MCP_IDENTITY_IDLE_TTL_SECONDS`,
   default 1800. A stdio process otherwise carried one person's pin into every later conversation.
   Neither signal is reachable by the model: a tool that ended a conversation could shed the pin,
-  and time is the one thing injected ticket text cannot forge.
+  and time is the one thing injected ticket text cannot forge. Ending one always releases the
+  impersonation slot, even with nobody pinned, and the slot carries a generation, so a handshake
+  still in flight lands nowhere. A call running at that moment keeps the Ivanti session it started
+  on — the emptied slot would have sent its remaining requests, writes included, as the service
+  account — and its result is discarded; a write's discard says the change may already be made.
 - **Identity is threaded, never reached for.** `CallerIdentity` carries a provenance —
   `anonymous`, `asserted`, `verified` — and arrives as a handler's second argument, bound per
   session. `get_version` reports the provenance, never the person: that would be an identity oracle.
@@ -137,8 +158,10 @@ it needs a create form, which OData cannot see.
   can tell a conversation to become someone else. Another verified subject on the same HTTP session
   gets 403. The pin is a per-connection object, so stdio is covered by the same mechanism.
 - **On a verified session the lookup term is the token's claim** (`OAUTH_IDENTITY_CLAIM`, default
-  a probe order: Entra sends `preferred_username` or `upn`, most others `email`). An exact match
-  pins silently; anything less asks for confirmation and shows what matched what.
+  a probe order: Entra sends `preferred_username` or `upn`, most others `email`). `email` counts
+  only with `email_verified` — some IdPs let a user set their own address, and the exact match
+  would pin them as the colleague they typed. An exact match pins silently; anything less asks for
+  confirmation and shows what matched what.
 - **The field tying a record to a person is discovered.** Incidents use `ProfileLink`, service
   requests add `AlternateContactLink`, changes use `RequestorLink`. `customer-link.ts` samples rows
   to see which `*_Category` holds a person, and reads its spelling there (`Employee`, where CSDL
@@ -153,14 +176,25 @@ it needs a create form, which OData cannot see.
   sequential numbers become an enumeration oracle. `own-records-guard.test.ts` makes every tool
   declare whether it may answer without an identity.
 - **Every call is audited in `registerTools`:** tool, session, provenance, and the subject only
-  when an issuer vouched for it. Argument values are never logged; a write's line adds `targets` —
-  the object, the relationship and every `…Id` argument — so "who deleted incident X" has an
-  answer.
+  when an issuer vouched for it. Argument values are never logged, bar a write's `targets` — the
+  object, the relationship and every `…Id` argument, identifiers rather than ticket text — so "who
+  deleted incident X" has an answer.
 
 ## Audience modes and allowlists
 
+| | `full` | `enduser` |
+|---|---|---|
+| Audience | IT staff | employees |
+| Business Objects | all the credential can see | `ENDUSER_BUSINESS_OBJECTS` — a gate; empty means none |
+| `act_as` | required; decides who "my" means | required; decides whose records these are |
+| Records | anyone's | own records only |
+| Quick actions | everything the role offers | `ENDUSER_QUICK_ACTIONS`, by name, on own open records |
+| Ivanti role, when impersonating | the active one or `IVANTI_IMPERSONATION_ROLE`; `switch_role` changes it | `ENDUSER_ROLE` (default `SelfServiceMobile`), fixed |
+
 - **Two modes, fixed at startup.** `MCP_MODE=full` (IT staff) or `enduser`. `selectTools()` narrows
-  at registration, so an unregistered tool is not in `tools/list` at all.
+  at registration, so an unregistered tool is not in `tools/list` at all. `full` is the default and
+  ignores every `ENDUSER_*` setting, so one set under `full` refuses to start: an employee
+  deployment that forgot the mode would otherwise serve the IT-staff surface.
 - **`ENDUSER_BUSINESS_OBJECTS` is a gate, not a hint.** `createObjectGate` is built once; every
   object-taking tool passes through it, and `resolveObject` refuses before resolving, so a gated
   object is not even confirmed to exist. It narrows the catalog, cross-object search, assigned
@@ -236,6 +270,7 @@ it needs a create form, which OData cannot see.
   a null parent, and a nonexistent parent is accepted — so the parent is read first, linked after
   (`ParentLink_Category` as the AdminUI id, `Incident#`), and the row read back. A delete answers 204 for an id that never existed, so existence is checked on both sides.
   `upload_attachment` takes base64 capped at 2 MB, because the bytes cross the context twice.
+  `add_note` reads its parent first on the same reasoning, and reads the note back.
 - **A validated field's values live on a create form**, reached workspace → layout → view → form
   (cached per object), then `GetFormValidationListData`. Rows arrive as columns: the value is at the
   lowest `FieldMap` index. Some lists cascade; a parent under a name the form lacks filters nothing,
@@ -250,12 +285,16 @@ it needs a create form, which OData cannot see.
   success. Every submit is read back and compared.
 - **Dates need the tenant's UTC offset negated, and the sign is destructive.** On UTC+2, `-120`
   stored the value, `0` the previous day, and `+120` year 0001 — while reporting success. The
-  offset comes from the newest rendered record; an old one is a daylight-saving change behind.
+  offset comes from the newest rendered record; an old one is a daylight-saving change behind. Both
+  submit paths send it (`localOffset` on the ASMX one). A `time` answer is stored as an instant on
+  the day of submission, so it is compared as the wall clock that instant shows in the tenant's
+  frame — compared as a date, a correct submit read as `storedDifferently`.
 - **Files are staged before the request exists, inside the submit.** `GetPackageDataSDA` →
   `GetUploadTicket` → multipart `UploadAttachmentHandler.ashx`, then an ASMX submit — the only path
   that binds them (REST drops an `attachments` field). A staging id is one-shot, so nothing reuses it.
 - **Approvals are read by `list_approvals` and cast by `vote_on_approval`, only on the vote row.**
-  `list_approvals` reads `frs_approvalvotetracking` rows whose `Owner` is the pinned person's login.
+  `list_approvals` reads `frs_approvalvotetracking` rows whose `Owner` is the pinned person's login
+  or display name, or whose `Owner_Valid` is their RecId.
   `vote_on_approval` runs `Approve Vote` / `Deny Vote` on such a row and refuses any row the pinned
   person does not own — that check is the whole safety argument. `Owner_Valid`, when present, alone
   decides whose row it is (`vote-owner.ts`): `Owner` holds a display name on some rows, and two
@@ -274,7 +313,17 @@ it needs a create form, which OData cannot see.
 - **OAuth is `src/auth/oauth/`, on `node:http`** — token verification (jose, JWKS), AS discovery,
   the RFC 9728 document, the `WWW-Authenticate` challenge. `express` is not a dependency.
 - **JWKS only; introspection is deferred** (design §9c, §10): `jwks_uri` is universal, introspection
-  absent on 4 of 10 IdPs including Entra. Adding it is additive behind `TokenVerifier`.
+  absent on 4 of 10 IdPs including Entra. Adding it is additive behind `TokenVerifier`. jose's
+  cache refetches on an unknown `kid`, but past ten minutes a failed reload throws although the
+  keys in hand still verify, so `createRemoteKeyResolver` falls back to the last good set and backs
+  off between attempts: an IdP outage is a warn line, not a 503 on every request.
+- **A URL that carries a credential or decides trust is https**, a loopback host excepted —
+  `IVANTI_BASE_URL`, `IVANTI_CONFIG_URL`, `OAUTH_ISSUER` and `OAUTH_JWKS_URI` in `validateConfig`, a
+  discovered `jwks_uri` where it is discovered, because no operator ever looked at that one.
+- **`AUTH_MODE=none` on a non-loopback bind is warned, not refused.** Inside a container `0.0.0.0`
+  is the ordinary bind, and whether that reaches a network is decided by how the port is published,
+  which this process cannot see. A bearer token under 32 characters *is* refused: it is the whole
+  door.
 - **Assume no Dynamic Client Registration** — half the surveyed IdPs lack it, so a pre-registered
   client is the default path.
 - **`OAUTH_AUDIENCE` defaults to `MCP_PUBLIC_URL` but is not it.** No mainstream IdP mints `aud`
@@ -304,7 +353,10 @@ it needs a create form, which OData cannot see.
   Re-run the exercise after any significant change to the tool surface.
 - **The server's `instructions` carry the identity and the one narration rule**
   (`src/server/instructions.ts`). The identity: this process signs in as one account, so "for the
-  current user" means that account. The rule: answer in the tenant's words — a record by number and
+  current user" means that account. Under `oauth` the model is not told to ask who it is helping —
+  the gate pins from the token, and asking cost a turn of every conversation — only to ask when a
+  tool does. `instructions.test.ts` keeps that text no longer than the default, which is the one
+  the budget measures. The rule: answer in the tenant's words — a record by number and
   title, a field by the ladder form label → display name → key (the key is the last rung, not a
   forbidden one; at `odata` tier it is the only one), a person by display name (login or email only
   to tell two apart), and never a tool name. It is said once because the manifest has no room to
@@ -337,8 +389,18 @@ it needs a create form, which OData cannot see.
   session that has been quiet for 60 s with nothing in flight (an open SSE stream counts); 503 only
   when none qualifies, with a `Retry-After` saying when one could. Slots are reserved at admission,
   so concurrent initializes cannot overshoot. Under oauth, `MCP_MAX_SESSIONS_PER_SUBJECT` closes
-  the subject's own oldest session. **One replica**: `initialize` carries no session id, so no
-  hash can route a session back to the pod that minted it.
+  the subject's own least recently used session. **One replica**: `initialize` carries no session
+  id, so no hash can route a session back to the pod that minted it.
+- **Shutdown hands every Ivanti session back before exiting.** SIGTERM and SIGINT close every
+  conversation on both transports, and so does stdin ending when HTTP is off — a container's stdin
+  ends at once, so there it means nothing. Closing is what releases the person's session, and the
+  SDK's `close()` resolves before that release does, so the factory's `close` returns the release
+  and shutdown awaits it (and any eviction still closing), bounded at 8 s — under Docker's 10 s
+  grace. `listening on http` is logged once the port is bound, and a bind failure names the
+  setting that fixes it.
+- **Node's HTTP timeouts are set for a proxy in front.** `keepAliveTimeout` 65 s outlasts the 60 s
+  an ALB or nginx keeps an idle upstream connection (Node's 5 s default meant sporadic 502s);
+  `headersTimeout` sits above it; `requestTimeout` bounds receiving a request, never the answer.
 
 ## Logging
 
@@ -356,7 +418,7 @@ it needs a create form, which OData cannot see.
   |---|---|
   | `debug` | every Ivanti request with its query, Ivanti error bodies, refusals, MCP request lines |
   | `info` | lifecycle, the `tool called` audit line, the `tool finished` usage line, writes, identity changes |
-  | `warn` | running degraded — a lower tier, an unreachable tenant (status 0, 5xx) or a refused credential (401), a rejected origin or token, an MCP protocol error |
+  | `warn` | running degraded — a lower tier, an unreachable tenant (status 0, 5xx) or a refused credential (401), IdP keys that could not be refreshed, a person's session that could not be re-opened, a full session cap, a rejected origin or token, an MCP protocol error |
   | `error` | faults in this server, with the stack — an unexpected exception, an unhandled rejection, a write that did not store, an orphaned attachment |
 
   An Ivanti 4xx other than 401 is debug: the model already has the explanation, and the mistake
@@ -387,8 +449,10 @@ it needs a create form, which OData cannot see.
 - **Scrub Ivanti error bodies** (`scrubErrorBody`, in `exchange()` — the one place that knows every
   credential a request carries: the key, or a person's SID). Ivanti echoes submitted values and the
   ASMX session sends the key in the body, so the credentials and named session fields (`SessionId`,
-  `TenantId`, `LoginId`, `ConnectionString`…) are redacted, escaped forms included. Never a generic
-  "key-shaped" pass — it would eat the RecIds the model needs.
+  `TenantId`, `LoginId`, `ConnectionString`…) are redacted however their quotes arrived — escaped
+  at any depth, as an HTML entity (Ivanti's OData 500s are entity-encoded) or a unicode escape — and
+  as XML elements for CentralConfig. The delimiter is a class, not a list of spellings. Never a
+  generic "key-shaped" pass — it would eat the RecIds the model needs.
 - **Only debug carries the query** — a `$filter` routinely holds a person's name, so `debug` is
   personal data and every level above it logs the path alone. A write's values (ticket text) are
   logged at no level; its field names are.
@@ -399,7 +463,11 @@ it needs a create form, which OData cannot see.
   in metadata, `get_link_fields` reports the `_Category` observed on real rows. A name in a
   description is an illustration, and says so.
 - **Refuse locally where Ivanti would answer wrongly with success** — `assertSupportedFilter`,
-  `assertOrderBy`, `assertKnownFields`, `assertRecordWritable`, and closed tool arguments.
+  `assertOrderBy`, `knownFields`, `assertRecordWritable`, and closed tool arguments.
+- **A write's field names are checked and settled to the schema's spelling before it is sent**
+  (`knownFields`). Everything after — the form's validated fields, the pick-list resolver, the
+  read-back — looks names up exactly, so a name that passed a case-insensitive check in the
+  caller's spelling skipped all three and reported success. See *Writes*.
 - **Tool arguments are closed.** Zod strips unknown keys and the SDK hands the handler the parsed
   value, so `orderby` for `orderBy` silently returned unsorted rows. `strictInput` in `defineTool`
   closes every shape (`z.strictObject(shape, { error })` — `.strict()` ignores its parameters) and

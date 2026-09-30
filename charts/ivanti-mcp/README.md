@@ -46,9 +46,9 @@ Full notes, including the secret-ownership and DNS traps, are in
 | `replicaCount` | `1` | Refused above 1 — sessions are in memory. `0` parks the release. |
 | `rolloutToken` | — | Change it to roll the pod after rotating a key in `existingSecret`; the key is read once, at startup. |
 | `networkPolicy.enabled` | `auto` | `auto` = on exactly when `authMode=none`. Admits `networkPolicy.from`, by default pods in the release namespace. |
-| `server.maxSessionsPerSubject` | — | `MCP_MAX_SESSIONS_PER_SUBJECT`. |
+| `server.maxSessionsPerSubject` | — | `MCP_MAX_SESSIONS_PER_SUBJECT`, `oauth` only. Past it, that person's least recently used session closes. |
 | `ivanti.timeoutMs` / `ivanti.writeTimeoutMs` | — | `IVANTI_TIMEOUT_MS` / `IVANTI_WRITE_TIMEOUT_MS`; empty = the server defaults, 10000 and 30000. |
-| `ivanti.impersonationRequired` | `false` | `IVANTI_IMPERSONATION_REQUIRED`, with `ivanti.configUrl`. |
+| `ivanti.impersonationRequired` | `false` | `IVANTI_IMPERSONATION_REQUIRED`, with `ivanti.configUrl`: exit rather than run as the service account when impersonation is unavailable. |
 | `hostAliases` | `[]` | For tenants behind split-horizon DNS. |
 | `image.digest` | — | Pin this in production instead of a tag. |
 

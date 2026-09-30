@@ -1,6 +1,6 @@
 # Implementation plan — status
 
-**Updated 2026-09-28.** The plan ran in two phases: **A** proved authentication with `get_version`
+**Updated 2026-09-29.** The plan ran in two phases: **A** proved authentication with `get_version`
 as the only tool, so no Ivanti behaviour was in the loop when auth failed; **B** added Ivanti
 functionality one axis per stage — read before write, `full` before `enduser`. Every stage is
 done. Each stage's goals, exit criteria and findings are in git history
@@ -45,6 +45,11 @@ The plan ended at 34 tools in `full` and 25 in `enduser`.
 - **First tuning from it** — the `object` argument said once instead of fourteen times, and typo
   suggestions that find the name meant (#38, 0.2.4); compact JSON results and
   `get_object_metadata` as table rows, 58–61% smaller (#39, 0.2.5) (2026-09-29).
+- **The second full review, fixed** (#42) — all 50 findings, each caught by a test that fails
+  against the old code: `enduser` ownership held on writes and related rows, every written field
+  read back, idle sessions evicted at the cap, the chart held to one replica, the release split
+  into a read-only gate and a publish job, and stricter startup refusals (2026-09-29). Where each
+  landed: [`review/STATUS-2026-09-29.md`](./review/STATUS-2026-09-29.md).
 
 ## What remains
 
@@ -56,8 +61,14 @@ The plan ended at 34 tools in `full` and 25 in `enduser`.
 - **A gateway carrying its own users' identities** (Slack, Teams) — deferred, not designed: a
   provenance between `asserted` and `verified`, best designed against a real deployment. Until
   then `enduser` over HTTP without `oauth` warns that each person needs their own session.
-- **Open items found while testing** — `link_records` reporting a no-op as a link, batch
-  relationship calls, elicitation — are tracked in [`notes.md`](./notes.md).
+- **More than one replica** — needs a shared session store. Sessions live in one process's
+  memory, so the chart refuses a second replica and a rollout ends every conversation
+  ([`deployment.md`](./deployment.md#3-kubernetes)).
+- **What #42 left unmeasured, and its known limits** — SIGTERM, a workflow-heavy create at the
+  write timeout, whether real IdPs' tokens carry `email_verified` — are listed at the end of
+  [`review/STATUS-2026-09-29.md`](./review/STATUS-2026-09-29.md).
+- **Open items found while testing** — batch relationship calls, elicitation — are tracked in
+  [`notes.md`](./notes.md).
 - **Tuning that waits on data** ([`usage.md`](./usage.md)) — whether to steer
   `get_object_metadata` towards `search` (a miss costs a whole extra request), whether the "look
   the object up first" instruction pays for the calls it causes, and `act_as`'s ~2,000-character

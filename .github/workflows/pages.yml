@@ -1,0 +1,63 @@
+name: Pages
+
+# Publishes the Handbook as https://tyrunasj.github.io/ivanti-mcp-standalone/.
+# GitHub's file view shows an .html file as source, and the Handbook is one
+# self-contained page — no relative links, no local assets — so it is served
+# alone, as index.html.
+#
+# Needs Pages enabled once, with GitHub Actions as the source:
+#   Settings → Pages → Build and deployment → Source: GitHub Actions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/handbook.html
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+# One deployment at a time, and never cancel one halfway: a newer push queues
+# behind it and publishes the later page.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Third-party actions are pinned by commit SHA with the version beside it; a tag
+# is a pointer its owner can move. Dependabot proposes the next SHA.
+
+jobs:
+  build:
+    name: Stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - run: |
+          mkdir -p "${RUNNER_TEMP}/site"
+          cp docs/handbook.html "${RUNNER_TEMP}/site/index.html"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+
+  # The only job holding the Pages and OIDC tokens, and it runs no repository code.
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
