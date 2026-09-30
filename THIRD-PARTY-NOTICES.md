@@ -53,7 +53,7 @@ tree — 99 components, resolved exactly as the image resolves them.
 | `express` | 5.2.1 | MIT | Copyright (c) 2009-2014 TJ Holowaychuk <tj@vision-media.ca> |
 | `express-rate-limit` | 8.7.0 | MIT | Copyright 2023 Nathan Friedly, Vedant K |
 | `fast-deep-equal` | 3.1.3 | MIT | Copyright (c) 2017 Evgeny Poberezkin |
-| `fast-uri` | 3.1.7 | BSD-3-Clause | Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae |
+| `fast-uri` | 3.1.8 | BSD-3-Clause | Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae |
 | `fast-xml-builder` | 1.3.1 | MIT | Copyright (c) 2026 Natural Intelligence |
 | `fast-xml-parser` | 5.11.1 | MIT | Copyright (c) 2017 Amit Kumar Gupta |
 | `finalhandler` | 2.1.1 | MIT | Copyright (c) 2014-2022 Douglas Christopher Wilson <doug@somethingdoug.com> |
@@ -69,7 +69,7 @@ tree — 99 components, resolved exactly as the image resolves them.
 | `http-errors` | 2.0.1 | MIT | Copyright (c) 2014 Jonathan Ong me@jongleberry.com |
 | `iconv-lite` | 0.7.3 | MIT | Copyright (c) 2011 Alexander Shtuchkin |
 | `inherits` | 2.0.4 | ISC | Copyright (c) Isaac Z. Schlueter |
-| `ip-address` | 10.7.0 | MIT | Copyright (C) 2011 by Beau Gunderson |
+| `ip-address` | 10.7.2 | MIT | Copyright (C) 2011 by Beau Gunderson |
 | `ipaddr.js` | 1.9.1 | MIT | Copyright (C) 2011-2017 whitequark <whitequark@whitequark.org> |
 | `is-promise` | 4.0.0 | MIT | Copyright (c) 2014 Forbes Lindesay |
 | `is-unsafe` | 2.0.2 | MIT | Copyright (c) 2026 Natural Intelligence |
@@ -93,7 +93,7 @@ tree — 99 components, resolved exactly as the image resolves them.
 | `path-key` | 3.1.1 | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
 | `path-to-regexp` | 8.4.2 | MIT | Copyright (c) 2014 Blake Embrey (hello@blakeembrey.com) |
 | `pkce-challenge` | 5.0.1 | MIT | Copyright (c) 2019 |
-| `proxy-addr` | 2.0.7 | MIT | Copyright (c) 2014-2016 Douglas Christopher Wilson |
+| `proxy-addr` | 2.0.8 | MIT | Copyright (c) 2014-2016 Douglas Christopher Wilson |
 | `qs` | 6.16.0 | BSD-3-Clause | Copyright (c) 2014, Nathan LaFreniere and other [contributors](https://github.com/ljharb/qs/graphs/contributors) |
 | `range-parser` | 1.3.0 | MIT | Copyright (c) 2012-2014 TJ Holowaychuk <tj@vision-media.ca> |
 | `raw-body` | 3.0.2 | MIT | Copyright (c) 2013-2014 Jonathan Ong <me@jongleberry.com> |

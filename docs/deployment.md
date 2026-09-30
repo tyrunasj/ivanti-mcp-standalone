@@ -14,11 +14,11 @@ tarball from the same commit.
 repository from the chart name, so pushing `ivanti-mcp` to Docker Hub's `tyrunas` namespace would
 overwrite the image; ghcr.io nests, so the chart lives under `charts/`.
 
-**The chart package is private** (checked 2026-09-28), as every package pushed by `GITHUB_TOKEN`
-starts. Until it is made public, an anonymous `helm pull` or `helm install` answers 403 — which is
-also why the home-lab deploy reads the chart from git. Making it public is a one-time setting:
-*repository → Packages → `charts/ivanti-mcp` → Package settings → Change visibility → Public*. The
-Docker Hub image is public.
+**The chart package is public** (since 2026-09-30, checked with an anonymous `helm show chart`),
+like the Docker Hub image, so `helm pull` and `helm install` need no credential. A package pushed by
+`GITHUB_TOKEN` starts private; visibility is a one-time, per-package setting, so a new package — a
+renamed chart, say — would need *Packages → the package → Package settings → Change visibility →
+Public* again.
 
 Everywhere: **one instance serves one tenant** (staging, UAT and production are three deployments)
 and **one audience** (`full` and `enduser` are different products — mixing them hands an employee
@@ -31,6 +31,11 @@ In the commands below, set `VERSION` to a release from
 ## 1. Linux host
 
 Node 22 and nothing else — no pnpm, no compiler, no registry access.
+
+Tested end to end on Ubuntu 26.04 with Node 22.22 (Ubuntu's `nodejs` package) and 0.3.0, on
+2026-09-30: the Handbook's steps verbatim; bearer auth, a 401 without it and a 403 for a foreign
+Origin; `act_as` and a tenant read; a clean stop; a restart after `kill -9`; and exit 78 left
+stopped rather than restarted.
 
 ```bash
 curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v$VERSION/ivanti-mcp-$VERSION.tar.gz
@@ -61,6 +66,14 @@ unit runs unprivileged, read-only, with no capabilities and a syscall filter.
 From source: `pnpm install --frozen-lockfile && pnpm build && pnpm start`.
 
 ## 2. Container
+
+Tested end to end on Ubuntu 26.04 with Docker 29, Compose 2.40 and 0.3.0, on 2026-09-30: the
+Handbook's steps with the generated `compose.yaml`; healthy, uid 65532, a read-only root and all
+capabilities dropped, published on `127.0.0.1` only; bearer auth, 401 and 403 as on the host;
+`act_as` and a tenant read; a clean stop; a restart after the process was killed. A configuration
+error restart-loops with back-off — `restart: unless-stopped` cannot spare exit 78 — and
+`docker compose logs` names it. **Compose knows a deployment by its `name:`, not its folder**:
+`up` from a new folder replaces an existing `ivanti-mcp` project on the same host.
 
 ```bash
 docker run -d --name ivanti-mcp --restart unless-stopped \
@@ -309,7 +322,7 @@ Repository secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (Read/Write on `tyru
 
 The cluster runs this through ArgoCD, and **releasing does not touch it**. `argocd-apps/ivanti-mcp.yaml`
 in `tyrunasj/k3s-home-lab` is a multi-source Application: the chart from this repo at a release
-**tag** (from git, because the ghcr package is private), the values from that repo at `main`.
+**tag** (from git — which predates the ghcr package going public), the values from that repo at `main`.
 
 Deploying is **Actions → deploy-ivanti-mcp → Run workflow** there, with a tag or empty for the
 latest. It checks that `Chart.yaml` at that tag agrees with the tag — `appVersion` *is* the deployed

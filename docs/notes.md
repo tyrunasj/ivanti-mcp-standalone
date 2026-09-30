@@ -21,11 +21,23 @@ test and fails only in the container, at boot. → Verify by running the built i
 There is no entrypoint wrapper to export them into the environment with `sh -c`;
 `read-secret-file.ts` reads them in-process, before the schema parses anything.
 
+**A digest-pinned base image can go stale while its tag is abandoned.** A container scan on
+2026-09-30 flagged `libssl3 3.0.18-1~deb12u2` and `libc6 2.36-9+deb12u13` in 0.2.5 and 0.3.0 —
+one critical and six high in Trivy. Debian had fixed every one of them in bookworm
+(`openssl 3.0.20-1~deb12u2`, `glibc 2.36-9+deb12u14`), but the newest
+`gcr.io/distroless/nodejs22-debian12:nonroot` was the very digest the Dockerfile pinned, still on
+Node 22.22.0: distroless had stopped rebuilding its Debian 12 images. Pinning was right —
+Dependabot proposes a new digest only when the tag moves, and this tag no longer moved. 0.3.1
+moved to `nodejs22-debian13` (none critical, one high with no fix published, Node 22.23.3). Node
+itself carries its own OpenSSL, so the flagged `libssl3` was never on the TLS path to Ivanti; it
+was in the image, and scanners count what is in the image. The check that would have caught it
+is a scan of the built image, not of the lockfile.
+
 **`scratch` ships no CA bundle; every distroless image does.**
 Needed for TLS to Ivanti *and* for fetching the IdP's JWKS. A missing trust store surfaces as a
 **token-validation failure**, not as an obvious TLS error — which sends you debugging OAuth when
 the problem is the base image. Distroless images, `static` included, carry `ca-certificates` and
-`tzdata` (upstream README, checked 2026-09-28), and `nodejs22-debian12` inherits both. This bites
+`tzdata` (upstream README, checked 2026-09-28), and `nodejs22-debian13` inherits both. This bites
 only if the base ever became `scratch`. *(Corrected 2026-09-28: this entry once said `static` had
 no CA bundle, and a sibling said distroless had no tzdata. Both were wrong.)*
 

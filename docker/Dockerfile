@@ -64,8 +64,12 @@ RUN find node_modules \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) \
 # ──────────────────────────────────────────────────────────────────────────────
 # Runtime: distroless. No shell, no package manager, no npm — nothing to exec
 # into and nothing to install from, which is the point. Runs as `nonroot`.
+#
+# Debian 13, not 12: the debian12 image stopped being rebuilt, so its newest
+# digest still carried the OpenSSL and glibc that Debian had long since fixed
+# (docs/notes.md). The digest is the multi-arch index.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/nodejs22-debian12:nonroot@sha256:13593b7570658e8477de39e2f4a1dd25db2f836d68a0ba771251572d23bb4f8e AS runtime
+FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:5ef534d3db0ac0c43bee379af4ae49cfbfc0ef38a46c94c52d87c68f32f34d8a AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
