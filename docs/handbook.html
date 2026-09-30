@@ -401,7 +401,7 @@ img  { max-width: 100%; }
            alt="SYNERGY" width="600" height="115" decoding="async">
       <span class="brandrule" aria-hidden="true"></span>
       <b>Ivanti MCP</b>
-      <span class="ver mono" id="verChip">v0.2.5</span>
+      <span class="ver mono" id="verChip">v0.3.0</span>
     </div>
     <div class="modeswitch">
       <span class="lbl">Theme</span>
@@ -471,7 +471,7 @@ img  { max-width: 100%; }
 <span class="key">IVANTI_API_KEY</span>=your-key
 
 <span class="cmt"># then, whichever you have:</span>
-docker run -i --rm --env-file .env tyrunas/ivanti-mcp:<span class="ver-now">0.2.5</span>
+docker run -i --rm --env-file .env tyrunas/ivanti-mcp:<span class="ver-now">0.3.0</span>
 node /opt/ivanti-mcp/dist/index.js
 node "C:\Program Files\ivanti-mcp\dist\index.js"</code></pre></div>
 
@@ -486,12 +486,12 @@ node "C:\Program Files\ivanti-mcp\dist\index.js"</code></pre></div>
 
       <h3>C. Container behind a token</h3>
       <p>The published image is multi-arch, so the same tag runs on both architectures.</p>
-      <div class="codewrap"><pre><code>docker pull tyrunas/ivanti-mcp:<span class="ver-now">0.2.5</span>
+      <div class="codewrap"><pre><code>docker pull tyrunas/ivanti-mcp:<span class="ver-now">0.3.0</span>
 docker run --rm -p 127.0.0.1:3000:3000 --env-file .env \
   -e MCP_BIND=0.0.0.0 \
   -v /run/secrets:/run/secrets:ro \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
-  tyrunas/ivanti-mcp:<span class="ver-now">0.2.5</span></code></pre></div>
+  tyrunas/ivanti-mcp:<span class="ver-now">0.3.0</span></code></pre></div>
     </section>
 
     <hr class="hr">
@@ -526,10 +526,10 @@ docker run --rm -p 127.0.0.1:3000:3000 --env-file .env \
         <li><b>Configurator:</b> pick <b>Linux</b>, then download <code>.env</code> and <code>ivanti-mcp.service</code> into the folder.</li>
         <li><b>Edit <code>.env</code>:</b> set <code>IVANTI_BASE_URL</code> to your tenant, and — for HTTP — <code>MCP_PUBLIC_URL</code> and <code>TRUSTED_ORIGINS</code>.</li>
         <li><b>Install the release</b>, from the folder:
-          <div class="codewrap"><pre><code>curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v<span class="ver-now">0.2.5</span>/ivanti-mcp-<span class="ver-now">0.2.5</span>.tar.gz
+          <div class="codewrap"><pre><code>curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v<span class="ver-now">0.3.0</span>/ivanti-mcp-<span class="ver-now">0.3.0</span>.tar.gz
 sudo useradd --system --home /opt/ivanti-mcp --shell /usr/sbin/nologin ivanti-mcp
 sudo install -d -o ivanti-mcp -g ivanti-mcp /opt/ivanti-mcp
-sudo tar xzf ivanti-mcp-<span class="ver-now">0.2.5</span>.tar.gz --strip-components=1 -C /opt/ivanti-mcp</code></pre></div></li>
+sudo tar xzf ivanti-mcp-<span class="ver-now">0.3.0</span>.tar.gz --strip-components=1 -C /opt/ivanti-mcp</code></pre></div></li>
         <li><b>Install the settings and secrets.</b> They are readable by root and the service only; skip the secret lines if you chose <em>Environment</em> for secrets.
           <div class="codewrap"><pre><code>sudo install -d -m 0750 -o root -g ivanti-mcp /etc/ivanti-mcp /etc/ivanti-mcp/secrets
 sudo install -m 0640 -o root -g ivanti-mcp .env /etc/ivanti-mcp/env
@@ -564,7 +564,7 @@ docker compose logs --tail 20           <span class="cmt"># the startup lines li
 curl -s http://127.0.0.1:3000/health    <span class="cmt"># {"status":"ok"} — HTTP only</span></code></pre></div></li>
       </ol>
       <p>The image is multi-arch (<code>linux/amd64</code>, <code>linux/arm64</code>), about 55&nbsp;MB to pull, distroless — no shell, no package manager — and runs as uid 65532. Final releases are tagged <code>1.2.3</code>, <code>1.2</code>, <code>1</code> and <code>latest</code>; pin a digest in production. To verify the signature before running it:</p>
-      <div class="codewrap"><pre><code>cosign verify tyrunas/ivanti-mcp:<span class="ver-now">0.2.5</span> \
+      <div class="codewrap"><pre><code>cosign verify tyrunas/ivanti-mcp:<span class="ver-now">0.3.0</span> \
   --certificate-identity='https://github.com/tyrunasj/ivanti-mcp-standalone/.github/workflows/release.yml@refs/heads/main' \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com</code></pre></div>
 
@@ -1145,7 +1145,7 @@ function state() {
 const HOST_PIN = "your-tenant.example.com:203.0.113.10";
 // One version for every generated file. `pnpm version:sync` writes it from package.json and
 // `pnpm version:check` fails CI when it drifts.
-const VERSION = "0.2.5";
+const VERSION = "0.3.0";
 const IMAGE = "tyrunas/ivanti-mcp:" + VERSION;
 // The server refuses a bearer token under 32 characters, and a placeholder long enough
 // to pass would be one shared, published secret. So the page makes a fresh one per
