@@ -38,8 +38,9 @@ EnvironmentFile=/etc/ivanti-mcp/env
 # systemd copies each into a private in-memory directory that only this service
 # can read, whatever the source file's ownership — so the source can stay
 # root:root 0600, and the key never sits in an environment `/proc` can show.
-# Remove the inline IVANTI_API_KEY (or BEARER_TOKEN) from the env file when you
-# enable a pair here: giving both forms of one secret is refused with exit 78.
+# When you enable a pair here, remove that secret's lines from the env file —
+# IVANTI_API_KEY or IVANTI_API_KEY_FILE, BEARER_TOKEN or BEARER_TOKEN_FILE: the
+# env file overrides Environment=, and both forms of one secret is exit 78.
 # `%d` is the credentials directory (systemd 248+).
 #LoadCredential=ivanti-api-key:/etc/ivanti-mcp/ivanti-api-key
 #Environment=IVANTI_API_KEY_FILE=%d/ivanti-api-key

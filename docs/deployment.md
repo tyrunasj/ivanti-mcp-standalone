@@ -1,11 +1,12 @@
 # Deployment
 
-Three shapes, one build. A release publishes a multi-arch image, a Helm chart and a self-contained
+Four shapes, one build. A release publishes a multi-arch image, a Helm chart and a self-contained
 tarball from the same commit.
 
 | | Runs as | Transport | Get it with |
 |---|---|---|---|
-| **Plain Node host** | a systemd service | stdio or HTTP | the release tarball |
+| **Linux host** | a systemd service | stdio or HTTP | the release tarball |
+| **Windows host** | a Windows service, run by WinSW | stdio or HTTP | the same release tarball |
 | **Container** | `docker run` / compose | either | `tyrunas/ivanti-mcp` on Docker Hub |
 | **Kubernetes** | a Deployment | HTTP only | `oci://ghcr.io/tyrunasj/charts/ivanti-mcp` |
 
@@ -27,7 +28,7 @@ and lists every problem at once.
 In the commands below, set `VERSION` to a release from
 <https://github.com/tyrunasj/ivanti-mcp-standalone/releases>.
 
-## 1. Plain Node host
+## 1. Linux host
 
 Node 22 and nothing else — no pnpm, no compiler, no registry access.
 
@@ -189,6 +190,37 @@ list, so CI and the release gate both run it.
   `httpGet`. The startup probe allows two minutes, because boot probes the tenant and opens the
   ASMX session.
 
+## 4. Windows host
+
+The same tarball, run as a Windows service by [WinSW](https://github.com/winsw/winsw) 2.12 — Windows
+cannot run `node` as a service by itself. The Handbook's configurator, with **Windows** selected,
+writes the whole install as one PowerShell script (Windows PowerShell 5.1 or PowerShell 7, Windows
+Server 2019 or later, Node 22 or later): it downloads the release and checks it against the digest
+GitHub publishes, downloads WinSW and checks its pinned SHA-256 (it is not code-signed), locks down
+the settings, then installs and starts the service.
+
+| Where | What |
+|---|---|
+| `C:\Program Files\ivanti-mcp` | the release, and WinSW as `ivanti-mcp.exe` with `ivanti-mcp.xml` |
+| `C:\ProgramData\ivanti-mcp` | `env`, `secrets\`, `logs\` — Administrators, SYSTEM and the service only |
+
+The service runs `node --env-file="%ProgramData%\ivanti-mcp\env" "%ProgramFiles%\ivanti-mcp\dist\index.js"`
+as **LocalService**, so it reads its settings and writes nothing but its logs.
+
+Tested on Windows Server 2025 with Node 24.4 and WinSW 2.12.0 (2026-09-30): the generated script
+on a clean machine under Windows PowerShell 5.1; start as LocalService; a CRLF `env` file and
+`_FILE` secrets on Windows paths; bearer auth, and a 401 without it; stop via Ctrl+C, which the
+server logs as a clean `SIGINT` shutdown; and a restart about 10 s after the process was killed.
+
+- **A configuration error restarts every 10 s.** WinSW has no `RestartPreventExitStatus`; the
+  reason is in `logs\ivanti-mcp.err.log`.
+- **Write secrets as ASCII or UTF-8.** Windows PowerShell 5.1's `>` writes UTF-16, which the server
+  reads as a different value. `Set-Content -NoNewline -Encoding ascii` is safe in both shells.
+- **A tenant certificate from an internal CA** needs `--use-system-ca` in the service's arguments
+  (Node 22.15 or later) — Node does not read the Windows certificate store otherwise.
+- **On the Ivanti application server itself**, keep `MCP_BIND=127.0.0.1` and put IIS in front for
+  TLS if clients on other machines need it.
+
 ## Rotating a key
 
 Every secret — the Ivanti API key, the bearer token, the ConfigDB key — is read **once, at
@@ -204,6 +236,7 @@ overlap — every client holding the old one fails once the server restarts, so 
 | systemd | the env file, or the `LoadCredential=` source file | `sudo systemctl restart ivanti-mcp` |
 | compose | `secrets/…`, or `.env` | `docker compose up -d --force-recreate` — `restart` re-reads neither `env_file` nor a replaced secret file |
 | `docker run` | the mounted file, or `.env` | `docker rm -f ivanti-mcp`, then the same `docker run` |
+| Windows service | the file in `C:\ProgramData\ivanti-mcp\secrets`, or `env` | `& "$env:ProgramFiles\ivanti-mcp\ivanti-mcp.exe" restart` |
 
 A restart ends every open session, in every shape; clients reconnect with a new one, and the person
 is established again — by the token under `oauth`, by `act_as` otherwise.
