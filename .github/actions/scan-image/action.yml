@@ -16,7 +16,15 @@ description: >
 #
 # Fails only on a finding somebody can act on: critical or high WITH a fixed
 # version. One with no fix published yet is reported in the summary and does not
-# block — nothing in this repository could change it.
+# block — nothing in this repository could change it. Whether a caller blocks is
+# its choice: the release Gate does; a pull request only reports, because a fix
+# Debian has published is often not yet in the distroless base, and a change
+# that does not touch the image should not wait on that.
+#
+# `.trivyignore.yaml` at the repository root, when present, is honoured: every
+# entry carries a statement and an `expired_at`, after which it blocks again.
+# It is how a release that cannot wait for upstream accepts a finding — in the
+# open, and only for as long as the date says.
 #
 # The vulnerability database comes from ghcr.io first: its mirror.gcr.io copy
 # answered 404 for a whole morning on 2026-09-30, and Trivy did not fall back.
@@ -53,10 +61,17 @@ runs:
         mkdir -p "${out}/cache"
         docker save "${IMAGE}" -o "${out}/image.tar"
 
+        ignore=()
+        if [ -f "${GITHUB_WORKSPACE}/.trivyignore.yaml" ]; then
+          cp "${GITHUB_WORKSPACE}/.trivyignore.yaml" "${out}/trivyignore.yaml"
+          ignore=(--ignorefile /work/trivyignore.yaml)
+        fi
+
         docker run --rm -v "${out}:/work" "${TRIVY}" image \
           --quiet --scanners vuln \
           --cache-dir /work/cache \
           --db-repository ghcr.io/aquasecurity/trivy-db:2,mirror.gcr.io/aquasec/trivy-db:2 \
+          "${ignore[@]}" \
           --input /work/image.tar \
           --format json --output /work/report.json
 
@@ -80,12 +95,17 @@ runs:
             echo "|---|---|---|---|"
             echo "${rows}"
           fi
-        } | tee "${out}/summary.md" >> "${GITHUB_STEP_SUMMARY}"
+        } > "${out}/summary.md"
+        # The job log too, so a failure explains itself where it is read.
+        cat "${out}/summary.md" | tee -a "${GITHUB_STEP_SUMMARY}"
 
         echo "fixable=${fixable}" >> "${GITHUB_OUTPUT}"
         echo "report=${report}" >> "${GITHUB_OUTPUT}"
 
-        if [ "${FAIL_ON_FIXABLE}" = "true" ] && [ "${fixable}" -gt 0 ]; then
-          echo "::error::${fixable} critical or high finding(s) in ${IMAGE} have a fix. Update the package, or move the base image (docker/Dockerfile) — see the job summary."
-          exit 1
+        if [ "${fixable}" -gt 0 ]; then
+          if [ "${FAIL_ON_FIXABLE}" = "true" ]; then
+            echo "::error::${fixable} critical or high finding(s) in ${IMAGE} have a fix. Update the package, or move the base image (docker/Dockerfile); if the fix is not in the base yet and this cannot wait, accept it in .trivyignore.yaml with an expiry."
+            exit 1
+          fi
+          echo "::warning::${fixable} critical or high finding(s) in ${IMAGE} have a fix — reported, not blocking here; a release refuses them."
         fi

@@ -121,7 +121,10 @@ jobs:
           tags: ivanti-mcp:scan
           cache-from: type=gha
 
-      # Fails on a critical or high finding that has a fix; see the action's header.
+      # Reports, and does not block: a fix Debian has published is often not yet in
+      # the distroless base, and a change that does not touch the image should not
+      # wait on it. The release Gate is where a fixable critical or high blocks.
       - uses: ./.github/actions/scan-image
         with:
           image: ivanti-mcp:scan
+          fail-on-fixable: 'false'
