@@ -64,6 +64,7 @@ tests — the loop is in [`docs/development.md`](docs/development.md#testing-aga
 | [`docs/impersonation-plan.md`](docs/impersonation-plan.md) | signing in as the person, through CentralConfig |
 | [`docs/notes.md`](docs/notes.md) | traps: things that pass locally and fail elsewhere |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | what was built, in what order, and what remains |
+| [`docs/production-readiness-plan.md`](docs/production-readiness-plan.md) | the plan to production readiness, area by area, with what counts as done |
 | [`docs/review/`](docs/review) | the full-codebase reviews — what was found and fixed, what was refuted, and what nobody looked at |
 | [`charts/ivanti-mcp/README.md`](charts/ivanti-mcp/README.md) | the chart's values and what it refuses to render |
 | [`CLAUDE.md`](CLAUDE.md) | orientation for agents working in this repository |

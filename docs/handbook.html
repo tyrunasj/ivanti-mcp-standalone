@@ -401,7 +401,7 @@ img  { max-width: 100%; }
            alt="SYNERGY" width="600" height="115" decoding="async">
       <span class="brandrule" aria-hidden="true"></span>
       <b>Ivanti MCP</b>
-      <span class="ver mono" id="verChip">v0.3.0</span>
+      <span class="ver mono" id="verChip">v0.3.1</span>
     </div>
     <div class="modeswitch">
       <span class="lbl">Theme</span>
@@ -471,7 +471,7 @@ img  { max-width: 100%; }
 <span class="key">IVANTI_API_KEY</span>=your-key
 
 <span class="cmt"># then, whichever you have:</span>
-docker run -i --rm --env-file .env tyrunas/ivanti-mcp:<span class="ver-now">0.3.0</span>
+docker run -i --rm --env-file .env tyrunas/ivanti-mcp:<span class="ver-now">0.3.1</span>
 node /opt/ivanti-mcp/dist/index.js
 node "C:\Program Files\ivanti-mcp\dist\index.js"</code></pre></div>
 
@@ -486,12 +486,12 @@ node "C:\Program Files\ivanti-mcp\dist\index.js"</code></pre></div>
 
       <h3>C. Container behind a token</h3>
       <p>The published image is multi-arch, so the same tag runs on both architectures.</p>
-      <div class="codewrap"><pre><code>docker pull tyrunas/ivanti-mcp:<span class="ver-now">0.3.0</span>
+      <div class="codewrap"><pre><code>docker pull tyrunas/ivanti-mcp:<span class="ver-now">0.3.1</span>
 docker run --rm -p 127.0.0.1:3000:3000 --env-file .env \
   -e MCP_BIND=0.0.0.0 \
   -v /run/secrets:/run/secrets:ro \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
-  tyrunas/ivanti-mcp:<span class="ver-now">0.3.0</span></code></pre></div>
+  tyrunas/ivanti-mcp:<span class="ver-now">0.3.1</span></code></pre></div>
     </section>
 
     <hr class="hr">
@@ -521,15 +521,15 @@ docker run --rm -p 127.0.0.1:3000:3000 --env-file .env \
       <p>Open the <a href="#config">configurator</a>, answer its six questions, and pick where it runs. <b>Download</b> each file it shows into one empty folder — the steps below call it <em>the folder</em>. Browsers may save <code>.env</code> as <code>env</code>; rename it back. Then follow the steps for your shape.</p>
 
       <h3>A. Linux host</h3>
-      <p>A systemd service running the release tarball on Node 22 or later.</p>
+      <p>A systemd service running the release tarball. Install Node 22 or later first — from your distribution (Ubuntu 26.04&rsquo;s <code>nodejs</code> package is Node 22) or from nodejs.org. Tested end to end on Ubuntu 26.04 with Node 22.22: install, bearer auth, tenant reads, a clean stop, a restart after a crash, and no restart loop on a configuration error.</p>
       <ol class="steps">
         <li><b>Configurator:</b> pick <b>Linux</b>, then download <code>.env</code> and <code>ivanti-mcp.service</code> into the folder.</li>
         <li><b>Edit <code>.env</code>:</b> set <code>IVANTI_BASE_URL</code> to your tenant, and — for HTTP — <code>MCP_PUBLIC_URL</code> and <code>TRUSTED_ORIGINS</code>.</li>
         <li><b>Install the release</b>, from the folder:
-          <div class="codewrap"><pre><code>curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v<span class="ver-now">0.3.0</span>/ivanti-mcp-<span class="ver-now">0.3.0</span>.tar.gz
+          <div class="codewrap"><pre><code>curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v<span class="ver-now">0.3.1</span>/ivanti-mcp-<span class="ver-now">0.3.1</span>.tar.gz
 sudo useradd --system --home /opt/ivanti-mcp --shell /usr/sbin/nologin ivanti-mcp
 sudo install -d -o ivanti-mcp -g ivanti-mcp /opt/ivanti-mcp
-sudo tar xzf ivanti-mcp-<span class="ver-now">0.3.0</span>.tar.gz --strip-components=1 -C /opt/ivanti-mcp</code></pre></div></li>
+sudo tar xzf ivanti-mcp-<span class="ver-now">0.3.1</span>.tar.gz --strip-components=1 -C /opt/ivanti-mcp</code></pre></div></li>
         <li><b>Install the settings and secrets.</b> They are readable by root and the service only; skip the secret lines if you chose <em>Environment</em> for secrets.
           <div class="codewrap"><pre><code>sudo install -d -m 0750 -o root -g ivanti-mcp /etc/ivanti-mcp /etc/ivanti-mcp/secrets
 sudo install -m 0640 -o root -g ivanti-mcp .env /etc/ivanti-mcp/env
@@ -548,7 +548,7 @@ curl -s http://127.0.0.1:3000/health    <span class="cmt"># {"status":"ok"} — 
       <p>The unit runs unprivileged, with a read-only filesystem, no capabilities and a syscall filter. It does not restart on exit 78: a configuration error will still be one in five seconds, so read the journal instead.</p>
 
       <h3>B. Container</h3>
-      <p>The published image, run with Docker or Docker Compose.</p>
+      <p>The published image, run with Docker or Docker Compose. Tested end to end on Ubuntu 26.04 with Docker 29 and Compose 2.40: healthy, uid 65532, read-only, tenant reads, a clean stop, and a restart after a crash.</p>
       <ol class="steps">
         <li><b>Configurator:</b> pick <b>Docker</b>, then download <code>.env</code> and <code>compose.yaml</code> into the folder — or <code>docker-run.sh</code> if you do not use Compose.</li>
         <li><b>Edit <code>.env</code>:</b> set <code>IVANTI_BASE_URL</code> to your tenant, and — for HTTP — <code>MCP_PUBLIC_URL</code> and <code>TRUSTED_ORIGINS</code>.</li>
@@ -557,14 +557,14 @@ curl -s http://127.0.0.1:3000/health    <span class="cmt"># {"status":"ok"} — 
 read -rs -p 'Ivanti API key: ' k; printf %s "$k" > secrets/ivanti-api-key; unset k
 openssl rand -hex 32 | tr -d '\n' > secrets/bearer-token    <span class="cmt"># bearer only — give it to your clients</span>
 sudo chown 65532:65532 secrets/* &amp;&amp; sudo chmod 600 secrets/*</code></pre></div></li>
-        <li><b>Start it</b> from the folder — <code>docker compose up -d</code>, or the commands in <code>docker-run.sh</code>.</li>
+        <li><b>Start it</b> from the folder — <code>docker compose up -d</code>, or the commands in <code>docker-run.sh</code>. <b>Already running an earlier install?</b> Compose knows a deployment by the <code>name:</code> at the top of <code>compose.yaml</code>, not by its folder: starting this one replaces the old one. To upgrade, run it from the old folder; to run a second one beside it, change the <code>name:</code> and the host port first.</li>
         <li><b>Check it:</b>
           <div class="codewrap"><pre><code>docker compose ps
 docker compose logs --tail 20           <span class="cmt"># the startup lines list every tool the key reaches</span>
 curl -s http://127.0.0.1:3000/health    <span class="cmt"># {"status":"ok"} — HTTP only</span></code></pre></div></li>
       </ol>
       <p>The image is multi-arch (<code>linux/amd64</code>, <code>linux/arm64</code>), about 55&nbsp;MB to pull, distroless — no shell, no package manager — and runs as uid 65532. Final releases are tagged <code>1.2.3</code>, <code>1.2</code>, <code>1</code> and <code>latest</code>; pin a digest in production. To verify the signature before running it:</p>
-      <div class="codewrap"><pre><code>cosign verify tyrunas/ivanti-mcp:<span class="ver-now">0.3.0</span> \
+      <div class="codewrap"><pre><code>cosign verify tyrunas/ivanti-mcp:<span class="ver-now">0.3.1</span> \
   --certificate-identity='https://github.com/tyrunasj/ivanti-mcp-standalone/.github/workflows/release.yml@refs/heads/main' \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com</code></pre></div>
 
@@ -1021,6 +1021,7 @@ Get-Content "$env:ProgramData\ivanti-mcp\secrets\bearer-token"   <span class="cm
             <tr><td>Everything looks right, still 401</td><td>Cached credentials from before the fix. Clear the client's stored authentication and re-authenticate.</td></tr>
             <tr><td class="mono">Too many active sessions, and none has been idle long enough to close</td><td>A 503 on <code>initialize</code>: every session under <code>MCP_MAX_SESSIONS</code> had traffic in the last minute or has a request in flight, so none could be displaced. <code>Retry-After</code> says when one could. Raise the cap if that is the real load.</td></tr>
             <tr><td class="mono">whether it was applied is unknown</td><td>A write got no answer &mdash; it outlasted <code>IVANTI_WRITE_TIMEOUT_MS</code>, or a gateway answered 502 or 504. It may have been stored: check the record before repeating it. If such writes keep turning out to have taken effect, raise the write timeout.</td></tr>
+            <tr><td>A container keeps restarting</td><td>Usually a configuration error: the server exits 78, and Docker&rsquo;s <code>restart: unless-stopped</code> starts it again, backing off each time. <code>docker compose logs</code> shows the reason.</td></tr>
             <tr><td>A Windows service restarts every 10 s</td><td>A configuration error: the server exits 78, and WinSW restarts anything that fails. The reason is in <code>C:\ProgramData\ivanti-mcp\logs\ivanti-mcp.err.log</code>.</td></tr>
             <tr><td>Startup fails with <code>unable to get local issuer certificate</code> or <code>self-signed certificate in certificate chain</code></td><td>The tenant&rsquo;s certificate comes from a CA Node does not bundle — usually an internal one. Add <code>--use-system-ca</code> (Node 22.15 or later) so Node trusts the host&rsquo;s certificate store, or point <code>NODE_EXTRA_CA_CERTS</code> at the CA&rsquo;s PEM file.</td></tr>
             <tr><td>A tool is missing from <code>tools/list</code></td><td>Either the mode does not register it, or the API key cannot reach what it needs. The startup log lists every tool this key reaches.</td></tr>
@@ -1145,7 +1146,7 @@ function state() {
 const HOST_PIN = "your-tenant.example.com:203.0.113.10";
 // One version for every generated file. `pnpm version:sync` writes it from package.json and
 // `pnpm version:check` fails CI when it drifts.
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 const IMAGE = "tyrunas/ivanti-mcp:" + VERSION;
 // The server refuses a bearer token under 32 characters, and a placeholder long enough
 // to pass would be one shared, published secret. So the page makes a fresh one per

@@ -223,7 +223,7 @@ Designed here and **not built**: `ALLOWED_CIDRS` (an IP allowlist modifier) and
 
 ## 9. Implementation stack
 
-- **TypeScript**, on `gcr.io/distroless/nodejs22-debian12`. Pinned to 6.x by `typescript-eslint`.
+- **TypeScript**, on `gcr.io/distroless/nodejs22-debian13` (Debian 12 until 0.3.1). Pinned to 6.x by `typescript-eslint`.
 - **pnpm**, for its strict layout: importing something undeclared fails the build — which is how
   the transitive-`express` trap is caught. Lockfile committed, version pinned.
 - **`@modelcontextprotocol/sdk` 1.30.0**, which implements protocol **`2025-11-25`**, not

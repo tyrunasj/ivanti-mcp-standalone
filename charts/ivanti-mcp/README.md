@@ -12,7 +12,7 @@ helm install ivanti-mcp oci://ghcr.io/tyrunasj/charts/ivanti-mcp \
   --set secrets.existingSecret=ivanti-mcp-secrets
 ```
 
-The package is private for now, so this needs a GHCR credential until it is made public.
+The package is public: no registry login is needed.
 
 The chart forces HTTP (stdio is meaningless in a pod) and refuses to render on a
 configuration the server would reject at boot. It also refuses `replicaCount > 1`:

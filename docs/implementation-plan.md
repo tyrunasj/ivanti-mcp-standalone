@@ -53,6 +53,11 @@ The plan ended at 34 tools in `full` and 25 in `enduser`.
 
 ## What remains
 
+**The plan to production readiness** — the 0.3.1 base-image fix first, then security,
+operations, scale and validation, each with a definition of done — is in
+[`production-readiness-plan.md`](./production-readiness-plan.md). The items below are the
+detail it draws on.
+
 - **A4 — Entra's final token check.** Discovery, issuer, JWKS and the PKCE-metadata question were
   proven against a live tenant; only token verification is untested, and it is IdP-agnostic code
   already proven against Zitadel. It is blocked by a deployment prerequisite, not code — an Entra
