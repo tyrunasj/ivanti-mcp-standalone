@@ -119,7 +119,7 @@ tree — 100 components, resolved exactly as the image resolves them.
 | `which` | 2.0.2 | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
 | `wrappy` | 1.0.2 | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
 | `xml-naming` | 0.3.0 | MIT | Copyright (c) 2026 Natural Intelligence |
-| `zod` | 4.6.1 | MIT | Copyright (c) 2025 Colin McDonnell |
+| `zod` | 4.6.5 | MIT | Copyright (c) 2025 Colin McDonnell |
 | `zod-to-json-schema` | 3.25.2 | ISC | Copyright (c) 2020, Stefan Terdell |
 
 ## Licence texts
