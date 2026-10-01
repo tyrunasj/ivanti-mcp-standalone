@@ -297,6 +297,7 @@ auth mode. Token propagation to Ivanti is settled by §11.
 | ~~Ivanti impersonation~~ | **Reversed 2026-09-14** — CentralConfig does mint a session for a named person, and Ivanti scopes it. Optional, off by default |
 | ~~Impersonating only records, not every surface~~ | **Reversed the same day.** The 551s that made forms look unreachable came from a session never *activated* — `SelectRole` must run after `InitializeSession`, even naming the reported role. Every surface now follows the person; only tenant facts stay on the service account |
 | **RFC 7662 introspection** | **Deferred, not abandoned** — below |
+| **More than one replica** | **Deferred, not abandoned** — below |
 | A shared package with `overlord-service` | Forked (2026-09-11) to evolve independently — see the plan, *Fork, not shared package* |
 | Dropping `search_knowledge` from `full` | Kept: it strips the article's HTML (~2,600 characters of markup around 400 words), truncates with the cut stated, and shows `Status` |
 | Exposing service-request staging ids | Staging happens inside the submit: an id is one-shot and a second submit *moves* the file |
@@ -323,6 +324,23 @@ latency but gives up instant revocation, its main advantage. **Revisit if** an I
 JWT, an IdP has no `jwks_uri`, or instant revocation becomes a requirement. It is additive:
 everything depends on one `TokenVerifier` type, and `looksLikeJwt()` would route to a second
 implementation enabled by `OAUTH_INTROSPECTION_CLIENT_ID` / `_SECRET` — roughly 100 lines.
+
+### More than one replica — deferred
+
+Decided 2026-10-01. Staging and UAT serve the people who build and test, and never approach the
+load one process carries. Production is not obviously different: one pod holds ~104 MiB idle and
+~64 KiB per open session (the Handbook's measurement on Linux), a tool call spends its time
+waiting on Ivanti rather than on this process, and the tenant is the ceiling — more replicas send
+more load at the same Ivanti. What one pod does not give is availability: a restart, a node
+failure or a deploy ends every open conversation, and the client starts a new session (under
+`oauth` the person is pinned again from the token; otherwise `act_as` is called again). Nothing is
+lost, and a deploy can wait for a quiet window.
+
+**Revisit if** a load test shows one pod saturating below production's expected peak, or
+production is given a zero-downtime requirement. The cheapest route is then stateless HTTP under
+`oauth` — the token names the person on every request, so any pod serves any request, and each
+keeps its own Ivanti session per person — with no shared store; `bearer` and `none` stay single.
+A Redis session store for every mode is the other, and costs a dependency to run and secure.
 
 ## 11. Spec conformance (verified 2026-09-10, against the 2026-07-28 authorization spec)
 

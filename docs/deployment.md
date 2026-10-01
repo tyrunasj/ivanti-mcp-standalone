@@ -37,18 +37,42 @@ Tested end to end on Ubuntu 26.04 with Node 22.22 (Ubuntu's `nodejs` package) an
 Origin; `act_as` and a tenant read; a clean stop; a restart after `kill -9`; and exit 78 left
 stopped rather than restarted.
 
-```bash
-curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v$VERSION/ivanti-mcp-$VERSION.tar.gz
-sudo install -d -o ivanti-mcp -g ivanti-mcp /opt/ivanti-mcp
-sudo tar xzf ivanti-mcp-$VERSION.tar.gz --strip-components=1 -C /opt/ivanti-mcp
-sudo chown -R ivanti-mcp:ivanti-mcp /opt/ivanti-mcp
-node /opt/ivanti-mcp/dist/index.js
-```
+Install Node 22 or later first — from the distribution (Ubuntu 26.04's `nodejs` is Node 22) or
+nodejs.org. Then, with the `.env` and `ivanti-mcp.service` the Handbook's configurator writes for
+**Linux** in one folder:
+
+1. **Edit `.env`:** `IVANTI_BASE_URL`, and for HTTP `MCP_PUBLIC_URL` and `TRUSTED_ORIGINS`.
+2. **Install the release:**
+
+   ```bash
+   curl -fsSLO https://github.com/tyrunasj/ivanti-mcp-standalone/releases/download/v$VERSION/ivanti-mcp-$VERSION.tar.gz
+   sudo useradd --system --home /opt/ivanti-mcp --shell /usr/sbin/nologin ivanti-mcp
+   sudo install -d -o ivanti-mcp -g ivanti-mcp /opt/ivanti-mcp
+   sudo tar xzf ivanti-mcp-$VERSION.tar.gz --strip-components=1 -C /opt/ivanti-mcp
+   ```
+
+3. **Install the settings and secrets**, readable by root and the service only:
+
+   ```bash
+   sudo install -d -m 0750 -o root -g ivanti-mcp /etc/ivanti-mcp /etc/ivanti-mcp/secrets
+   sudo install -m 0640 -o root -g ivanti-mcp .env /etc/ivanti-mcp/env
+   read -rs -p 'Ivanti API key: ' k; printf %s "$k" | sudo install -m 0640 -o root -g ivanti-mcp /dev/stdin /etc/ivanti-mcp/secrets/ivanti-api-key; unset k
+   openssl rand -hex 32 | tr -d '\n' | sudo install -m 0640 -o root -g ivanti-mcp /dev/stdin /etc/ivanti-mcp/secrets/bearer-token   # bearer only
+   ```
+
+4. **Install and start the service:**
+
+   ```bash
+   sudo install -m 0644 ivanti-mcp.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now ivanti-mcp
+   ```
+
+5. **Check it:** `systemctl status ivanti-mcp`, `journalctl -u ivanti-mcp -n 20`, and
+   `curl -s http://127.0.0.1:3000/ready` for HTTP.
 
 The tarball carries its production dependencies as real directories — pnpm's symlink store does not
-survive moving machines. As a service: copy `deploy/systemd/ivanti-mcp.service` to
-`/etc/systemd/system/`, with configuration in `/etc/ivanti-mcp/env` (`0640`, `root:ivanti-mcp`). The
-unit runs unprivileged, read-only, with no capabilities and a syscall filter.
+survive moving machines. The unit (`deploy/systemd/ivanti-mcp.service`) runs unprivileged,
+read-only, with no capabilities and a syscall filter.
 
 - **Set `STDIO_TRANSPORT_ON=false` for a service** — a service's stdin is `/dev/null`, so the stdio
   transport reads EOF at once: beside HTTP that is noise in the journal, and on its own it is a
@@ -57,8 +81,9 @@ unit runs unprivileged, read-only, with no capabilities and a syscall filter.
   `LoadCredential=ivanti-api-key:/etc/ivanti-mcp/ivanti-api-key` with
   `Environment=IVANTI_API_KEY_FILE=%d/ivanti-api-key`. systemd copies the file into a private
   in-memory directory only this service can read, so the source stays `root:root 0600` and the key
-  is never in an environment `/proc` can show. Remove the inline `IVANTI_API_KEY` from the env file
-  when you enable it — both forms is exit 78. Needs systemd 248+.
+  is never in an environment `/proc` can show. Remove that secret's lines from the env file when you
+  enable it — `IVANTI_API_KEY` or `IVANTI_API_KEY_FILE`: the env file overrides `Environment=`, and
+  both forms is exit 78. Needs systemd 248+.
 - **`MemoryDenyWriteExecute` is deliberately not set** — Node's JIT needs writable-then-executable
   pages, and the failure looks like a segfault.
 - **`RestartPreventExitStatus=78`** — a configuration error will still be one in five seconds.
@@ -99,6 +124,10 @@ cosign verify tyrunas/ivanti-mcp:$VERSION \
   --certificate-identity='https://github.com/tyrunasj/ivanti-mcp-standalone/.github/workflows/release.yml@refs/heads/main' \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com
 ```
+
+It needs cosign 3, or 2.6 with `--new-bundle-format` added; 2.5 and older cannot verify releases
+after 0.3.1. Those are signed as a Sigstore bundle stored as an OCI 1.1 referrer, so there is no
+`sha256-….sig` tag beside the image — `cosign tree tyrunas/ivanti-mcp:$VERSION` lists it.
 
 The identity is exact on purpose. The old `--certificate-identity-regexp='^https://github.com/<repo>/'`
 accepted a signature from **any** workflow in the repository, on **any** branch — including one

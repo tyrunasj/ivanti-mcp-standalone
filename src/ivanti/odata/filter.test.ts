@@ -27,9 +27,12 @@ describe('maskStringLiterals', () => {
 describe('findUnsupportedFilter — accepts what Ivanti supports', () => {
   for (const filter of [
     "Status eq 'Active'",
-    "(Status eq 'Active') and (Priority eq 1)",
+    "(Status eq 'Active' or Status eq 'Logged') and Priority eq 1",
+    "((Priority eq 1 or Priority eq 2) and Status eq 'Active')",
+    "(Priority eq 1 or Priority eq 2) and Status eq 'Active' or Status eq 'Logged'",
+    "Status eq 'Active' and Priority eq 1 or Priority eq 2",
     "Owner eq 'a' or Owner eq 'b'",
-    "not (Status eq 'Closed')",
+    "Notes eq 'x' and Subject eq 'not (this) or that and more'",
     'CreatedDateTime gt 2026-01-01T00:00:00Z',
     "Subject ne null and Priority le 3",
     '',
@@ -113,7 +116,31 @@ describe('findUnsupportedFilter — refuses a filter whose structure is not what
     expect(findUnsupportedFilter("Name eq 'O''Brien (x'")).toBeUndefined();
   });
 
+  // Each one measured on a live tenant: a 200 with the wrong rows, never an error.
+  it.each([
+    ["Status eq 'Active' and (Priority eq 1 or Priority eq 2)", 'group-not-first'],
+    ["(Priority eq 1 or Priority eq 2) and (Status eq 'Active' or Status eq 'Logged')", 'group-not-first'],
+    ["(Status eq 'Active' and Priority eq 1) or (Status eq 'Logged' and Priority eq 2)", 'group-not-first'],
+    ["(Status eq 'Active' and (Priority eq 1 or Priority eq 2))", 'group-not-first'],
+    ["Status eq 'Logged' or Status eq 'Active' and Priority eq 1", 'and-after-or'],
+    ["(Status eq 'Logged' or Status eq 'Active' and Priority eq 1)", 'and-after-or'],
+    ["not (Status eq 'Closed')", 'not'],
+    ["Status eq 'Active' and not (Priority eq 1)", 'not'],
+  ])('refuses %s, which Ivanti misreads', (filter, kind) => {
+    expect(findUnsupportedFilter(filter)?.kind).toBe(kind);
+  });
+
+  it('still names a function rather than its parenthesis', () => {
+    expect(findUnsupportedFilter("Status eq 'Active' and contains(Subject, 'x')")).toEqual({
+      kind: 'function',
+      name: 'contains',
+    });
+  });
+
   it('explains each refusal in words a caller can act on', () => {
+    expect(() => assertSupportedFilter("C eq 1 and (A eq 1 or B eq 2)")).toThrow(/START/);
+    expect(() => assertSupportedFilter("A eq 1 or B eq 2 and C eq 3")).toThrow(/`B and C or A`/);
+    expect(() => assertSupportedFilter("not (A eq 1)")).toThrow(/ne 'Closed'/);
     expect(() => assertSupportedFilter("A eq 1) or (B eq 2")).toThrow(/never opened/);
     expect(() => assertSupportedFilter("(A eq 1")).toThrow(/never closed/);
     expect(() => assertSupportedFilter("A eq 'x")).toThrow(/O''Brien/);

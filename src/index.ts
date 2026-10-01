@@ -56,6 +56,7 @@ async function main(): Promise<void> {
         logger,
         timeoutMs: config.IVANTI_TIMEOUT_MS,
         writeTimeoutMs: config.IVANTI_WRITE_TIMEOUT_MS,
+        maxConcurrentRequests: config.IVANTI_MAX_CONCURRENT_REQUESTS,
         ...(config.IVANTI_MAX_TIER === undefined ? {} : { maxTier: config.IVANTI_MAX_TIER }),
         // Both or neither: validateConfig has already refused the half-configured case.
         ...(isImpersonationConfigured(config)

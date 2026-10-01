@@ -15,6 +15,24 @@ full list of merged changes is on each [GitHub release](https://github.com/tyrun
   fine.
 - **Every image is scanned before it is published** — the release refuses one with a critical or
   high finding that has a fix — and the published `latest` is scanned every week.
+- **`IVANTI_MAX_CONCURRENT_REQUESTS`** (default 16): a cap on requests in flight to the tenant at
+  once. Past it a request waits its turn, and one that waits out its timeout fails as never sent.
+- **`MCP_MAX_CALLS_PER_MINUTE`** (default 120): tool calls per conversation per minute; past it a
+  call is refused with how long to wait. Both are new defaults rather than new requirements —
+  nothing needs setting on upgrade.
+- **Three known limits closed:** two initializes from one person at the same instant no longer
+  leave them above `MCP_MAX_SESSIONS_PER_SUBJECT`; shutdown waits for the release a client's own
+  DELETE started; with stdio beside an `oauth` HTTP transport, the stdio conversation is told to
+  ask who it is helping rather than that its sign-in already says.
+- **`group_count` with a filter counted wrong.** Ivanti honours parentheses only at the start of a
+  `$filter`, and each bucket put the caller's filter last — so buckets could add up to many times
+  the total. The same cause made `act_as` miss on a person's full name at the exact lookup. Both
+  now put the group first.
+- **Filters Ivanti would misread are refused before sending**, with how to rewrite them: a group
+  anywhere but the start, an `and` after an `or` in the same group, and `not`. Ivanti answers each
+  with a 200 and the wrong rows — `not` with every row.
+- `create_record` in `enduser` no longer credits Ivanti's session with the `CreatedBy` the server
+  stamped itself. The third-party notices now include nested dependencies.
 
 ## 0.3.1 — 2026-09-30
 

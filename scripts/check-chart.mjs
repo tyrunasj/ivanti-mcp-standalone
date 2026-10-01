@@ -12,8 +12,9 @@
  *   node scripts/check-chart.mjs
  */
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const CHART = new URL('../charts/ivanti-mcp', import.meta.url).pathname;
+const CHART = fileURLToPath(new URL('../charts/ivanti-mcp', import.meta.url));
 
 /** The four values without which nothing renders; each case starts from these. */
 const BASE = {

@@ -48,6 +48,8 @@ Full notes, including the secret-ownership and DNS traps, are in
 | `networkPolicy.enabled` | `auto` | `auto` = on exactly when `authMode=none`. Admits `networkPolicy.from`, by default pods in the release namespace. |
 | `server.maxSessionsPerSubject` | — | `MCP_MAX_SESSIONS_PER_SUBJECT`, `oauth` only. Past it, that person's least recently used session closes. |
 | `ivanti.timeoutMs` / `ivanti.writeTimeoutMs` | — | `IVANTI_TIMEOUT_MS` / `IVANTI_WRITE_TIMEOUT_MS`; empty = the server defaults, 10000 and 30000. |
+| `ivanti.maxConcurrentRequests` | — | `IVANTI_MAX_CONCURRENT_REQUESTS`: requests in flight to the tenant at once; empty = the server default (16) |
+| `server.maxCallsPerMinute` | — | `MCP_MAX_CALLS_PER_MINUTE`: tool calls per conversation per minute; empty = the server default (120) |
 | `ivanti.impersonationRequired` | `false` | `IVANTI_IMPERSONATION_REQUIRED`, with `ivanti.configUrl`: exit rather than run as the service account when impersonation is unavailable. |
 | `hostAliases` | `[]` | For tenants behind split-horizon DNS. |
 | `image.digest` | — | Pin this in production instead of a tag. |

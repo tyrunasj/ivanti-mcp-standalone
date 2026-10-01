@@ -114,8 +114,17 @@ export class SessionManager<T extends ClosableSession> {
     return true;
   }
 
+  /**
+   * The session ended from its own side — a client's DELETE, a transport that closed.
+   *
+   * Its close is tracked like any other, because closing is what hands the person's Ivanti session
+   * back: a DELETE a moment before a SIGTERM started a release that shutdown never waited for. The
+   * transport is already closed, so the connection's `close()` only awaits that release. A session
+   * evicted earlier is gone from the store by now, and is not closed twice.
+   */
   unregister(id: string): void {
-    this.store.delete(id);
+    const value = this.store.delete(id);
+    if (value !== undefined) void this.closeTracked(value);
     this.options.logger.info('session closed', { sessionId: id, sessions: this.store.size });
   }
 
@@ -179,7 +188,7 @@ export class SessionManager<T extends ClosableSession> {
           if (settled) return;
           settled = true;
           this.store.unreserve(subject);
-          this.register(id, session, request);
+          if (this.register(id, session, request)) this.holdToSubjectLimit(subject, id);
         },
         cancel: (): boolean => {
           if (settled) return false;
@@ -189,6 +198,27 @@ export class SessionManager<T extends ClosableSession> {
         },
       },
     };
+  }
+
+  /**
+   * The subject's limit, enforced again once a session is registered.
+   *
+   * Admission counts slots reserved for initializes still in flight, but cannot close one — so two
+   * initializes from one subject at the same instant were both admitted, and the subject sat above
+   * its limit for as long as the sessions lived. Here the newcomer is registered, and the subject's
+   * least recently used OTHER session closes until the count is back at the limit.
+   */
+  private holdToSubjectLimit(subject: string | undefined, kept: string): void {
+    const perSubject = this.options.maxPerSubject;
+    if (subject === undefined || perSubject === undefined) return;
+    const other = (session: StoredSession<T>): boolean => session.subject === subject && session.id !== kept;
+    while (this.store.countFor(subject) > perSubject) {
+      const victim =
+        this.store.leastRecentlySeen((session) => other(session) && session.inFlight === 0) ??
+        this.store.leastRecentlySeen(other);
+      if (victim === undefined) return; // the rest are still initializing; each enforces on commit
+      this.evict(victim, 'subject limit');
+    }
   }
 
   private evict(victim: StoredSession<T>, reason: string): void {

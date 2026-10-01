@@ -92,6 +92,13 @@ right; the host side must be `127.0.0.1:3000:3000` unless the port is meant to b
 and `1`, concluded HTTP was off and exited 0 for ever. Any second parser of the environment has to
 accept the same spellings, case-insensitively.
 
+**Cosign 3 signs differently, and the verify command hides it.** From `cosign-installer` 4 the
+release signs with cosign 3, which writes a Sigstore bundle as an OCI 1.1 referrer — no
+`sha256-<digest>.sig` tag any more, so a registry's tag list no longer shows a signature and
+`cosign tree` (or the referrers API) is where to look. `cosign verify` 3.x reads both formats, so
+older releases still verify; 2.6 needs `--new-bundle-format` for new ones, and 2.5 cannot verify
+them at all ("bundle support for image signatures is not yet implemented").
+
 ## Toolchain
 
 **TypeScript is pinned to 6.x deliberately.**
@@ -704,6 +711,22 @@ records did not.
 **Null and dates in a filter.** An empty field matches only as `Owner eq '$NULL'`. Dates are bare
 and unquoted — `CreatedDateTime gt 2026-01-01`; the OData v2 form `datetime'…'` is rejected with a
 400 that blames the field rather than the literal.
+
+**Parentheses count only at the start of a `$filter`.** Anywhere else Ivanti answers 200 with
+the wrong rows. Measured on `incidents` (2026-10-01): `(P1 or P2) and Status eq 'Active'` counted
+16; `Status eq 'Active' and (P1 or P2)` counted 121, the same as dropping the `and` altogether;
+`Logged or (Active and P1)` counted 0, where the group-first form counted 30. Two server-built
+filters had the group last — `group_count`'s bucket clause, and the directory's first-and-last
+name pair, which therefore matched nobody — and both now lead with it. `own-records` wraps the
+caller's filter as `(filter) and <person>`, group first, and the person clause held under every
+inner shape tried. Build any new filter the same way: one group, first.
+
+Two more, measured the same day. **An `and` after an `or` in one group is misread too:**
+`Logged or Active and P1` counted 0, which is neither reading (30 or 6), while `Active and P1 or
+P2` counted 60, as written. **`not` is never applied:** `not (Status eq 'Closed')` counted every
+incident, `Active and not (P1)` counted all Active, and a bare `not A` is a 400. All three shapes
+are now refused before sending (`findMisreadGrouping` in `odata/filter.ts`); over what remains,
+the own-records wrap and `group_count`'s bucket counted exactly right.
 
 **The scrubber matched spellings, not the class — for the third time.**
 A quote reaches an error body however many layers encoded it: backslash-escaped at any depth,

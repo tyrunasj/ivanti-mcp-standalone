@@ -42,6 +42,9 @@ server:
   maxSessions: 100
   # MCP_MAX_SESSIONS_PER_SUBJECT — optional; see .env.example. Empty = unset.
   maxSessionsPerSubject: ""
+  # MCP_MAX_CALLS_PER_MINUTE — tool calls per conversation per minute. Empty = the
+  # server default (120).
+  maxCallsPerMinute: ""
   sessionIdleTtlSeconds: 1800
   logLevel: info        # debug logs every Ivanti query, which names people; diagnose, then revert
 
@@ -73,6 +76,9 @@ ivanti:
   # server defaults (10000 and 30000).
   timeoutMs: ""
   writeTimeoutMs: ""
+  # IVANTI_MAX_CONCURRENT_REQUESTS — requests in flight to the tenant at once. Empty
+  # = the server default (16).
+  maxConcurrentRequests: ""
 
 oauth:
   issuer: ""

@@ -10,8 +10,8 @@ are looking at depends on where you read it.
 
 | Layer | Example on an incident | Where it appears |
 |---|---|---|
-| Form label | "Customer" | the screen a person actually uses |
-| Display name | "Profile Link" | the object's own metadata |
+| Form label | whatever that form calls it | the screen a person actually uses |
+| Display name | "Customer" | the object's own metadata |
 | Technical name | \`ProfileLink_RecID\` | what a filter or a write must send |
 
 Resolution order is **form label, then display name, then technical name** — the tools answer with
@@ -63,6 +63,6 @@ the field you have to change.
   Set it explicitly.
 
 Required-field rules are **conditional**. An incident can be created with almost nothing and sit
-at \`Logged\`; moving it to \`Active\` requires Category and Owner, and \`Resolved\` requires more
-again. A create that succeeded yesterday can be refused today because the status differs.
+at \`Logged\`; moving it to \`Active\` requires Category, Owner and Team, and \`Resolved\` requires
+more again. A create that succeeded yesterday can be refused today because the status differs.
 `.trim();

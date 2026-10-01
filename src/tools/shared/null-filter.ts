@@ -54,5 +54,5 @@ export function assertNullFilterTypes(filter: string | undefined, entity: Entity
  */
 export const NULL_FILTER_CAVEAT =
   "`$NULL` matches SQL NULL only. Ivanti stores many empty values as the empty string, which " +
-  "`ne '$NULL'` counts as PRESENT — measured, 13 of 42 rows that passed that test held `''`. To " +
+  "`ne '$NULL'` counts as PRESENT — measured: rows that passed that test held `''`. To " +
   "exclude both, add `and <field> ne ''`.";

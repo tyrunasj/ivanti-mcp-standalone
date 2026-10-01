@@ -4,6 +4,7 @@
 import type { Logger } from '../../logger.js';
 import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
 import { exchange, readText, type ExchangeContext } from '../http/exchange.js';
+import type { RequestLimiter } from '../http/request-limiter.js';
 import type { FetchLike } from '../http/transport.js';
 import type { IvantiRoutes } from '../odata/url.js';
 
@@ -67,6 +68,8 @@ export interface SessionOptions {
   logger: Logger;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
+  /** The process-wide cap on requests in flight to the tenant; see `request-limiter.ts`. */
+  limiter?: RequestLimiter;
 }
 
 interface Handshake {
@@ -110,6 +113,7 @@ export function createSession(options: SessionOptions): IvantiSession {
     logger,
     timeoutMs,
     secrets: secretsFor(sid),
+    ...(options.limiter === undefined ? {} : { limiter: options.limiter }),
   });
 
   const postJson = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {

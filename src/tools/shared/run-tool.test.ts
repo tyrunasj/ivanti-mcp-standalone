@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { Logger, LogLevel } from '../../logger.js';
 import { IvantiApiError, ResponseTooLargeError } from '../../ivanti/http/errors.js';
 import { type CallUsage, withCallUsage } from '../../usage/call-usage.js';
+import { IvantiBusyError } from '../../ivanti/http/request-limiter.js';
 import { runTool } from './run-tool.js';
 
 interface Line {
@@ -35,6 +36,21 @@ const failWith = (status: number): IvantiApiError =>
   });
 
 describe('runTool', () => {
+  // Never sent: reporting it as "may have been applied" would send someone checking a record for
+  // a change that cannot have happened.
+  it('says a request held back by the cap was never sent, and nothing changed', async () => {
+    const { logger, lines } = recorder();
+
+    const result = await runTool('update_record', logger, () => Promise.reject(new IvantiBusyError(16, 30_000)));
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('was not sent');
+    expect(JSON.stringify(result.content)).toContain('Nothing was changed');
+    expect(lines).toEqual([
+      expect.objectContaining({ level: 'warn', message: 'ivanti request cap reached; request not sent' }),
+    ]);
+  });
+
   it.each([
     ['person', 401, true],
     ['service', 401, undefined],

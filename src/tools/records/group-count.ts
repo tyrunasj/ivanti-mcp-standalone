@@ -130,10 +130,14 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
         // One request per bucket, together rather than in series.
         const groups: Bucket[] = await Promise.all(
           counted.map(async (value): Promise<Bucket> => {
-            const conditions = [`${args.groupBy} eq ${quoteOdataString(value)}`];
-            // Already carries the own-records constraint in `enduser` mode.
-            if (scoped.filter !== undefined && scoped.filter !== '')
-              conditions.push(`(${scoped.filter})`);
+            // The group goes FIRST: Ivanti honours parentheses only at the start of a `$filter`.
+            // `Status eq 'Active' and (P1 or P2)` counted 121 where the reverse counted 16, and
+            // the group here already carries the own-records constraint in `enduser` mode.
+            const bucket = `${args.groupBy} eq ${quoteOdataString(value)}`;
+            const conditions =
+              scoped.filter !== undefined && scoped.filter !== ''
+                ? [`(${scoped.filter})`, bucket]
+                : [bucket];
 
             const url = withQuery(
               transport.routes.entitySet(entitySet),

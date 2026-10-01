@@ -125,7 +125,9 @@ export function analyseWaste(lines: readonly ToolLine[]): Waste {
   const byConversation = new Map<string, ToolLine[]>();
   for (const line of lines) {
     const key = conversationOf(line);
-    byConversation.set(key, [...(byConversation.get(key) ?? []), line]);
+    const calls = byConversation.get(key) ?? [];
+    calls.push(line);
+    byConversation.set(key, calls);
   }
 
   const patterns: Waste['patterns'] = {
@@ -238,7 +240,7 @@ export function analyseWaste(lines: readonly ToolLine[]): Waste {
     lookupsBeforeAnswer: {
       p50: percentile(lookups, 50),
       p95: percentile(lookups, 95),
-      max: lookups.length === 0 ? 0 : Math.max(...lookups),
+      max: lookups.reduce((most, value) => Math.max(most, value), 0),
     },
     versions: [...versions.values()]
       .map((tally) => ({

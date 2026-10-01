@@ -32,6 +32,8 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   IVANTI_MAX_TIER: undefined,
   IVANTI_TIMEOUT_MS: 10_000,
   IVANTI_WRITE_TIMEOUT_MS: 30_000,
+  IVANTI_MAX_CONCURRENT_REQUESTS: 16,
+  MCP_MAX_CALLS_PER_MINUTE: 120,
   IVANTI_CONFIG_URL: undefined,
   IVANTI_CENTRAL_CONFIG_API_KEY: undefined,
   IVANTI_IMPERSONATION_ROLE: undefined,

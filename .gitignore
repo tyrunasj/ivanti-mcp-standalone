@@ -2,4 +2,6 @@ node_modules/
 dist/
 coverage/
 .env
+# Where the deployment docs put the key files; never a thing to commit.
+secrets/
 *.log

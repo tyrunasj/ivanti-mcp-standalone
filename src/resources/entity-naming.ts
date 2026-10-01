@@ -38,7 +38,7 @@ The rule converts a name you already have. It does not invent one: a picklist's 
 live in \`<Entity><Field>\`, but that is a convention and tenants break it, so find the object with
 \`list_business_objects\` rather than deriving its name from the field.
 
-The dotted form from Ivanti's own documentation (\`CI.Server\`) is not accepted anywhere.
+The dotted form from Ivanti's own documentation (\`CI.Server\`) is read as the \`#\` form (\`CI#Server\`).
 
 ## What a wrong name does
 

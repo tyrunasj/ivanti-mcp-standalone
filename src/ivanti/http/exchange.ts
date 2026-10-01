@@ -3,6 +3,7 @@
 
 import type { Logger } from '../../logger.js';
 import { countIvantiRequest } from '../../usage/call-usage.js';
+import type { RequestLimiter } from './request-limiter.js';
 import {
   IvantiApiError,
   type IvantiCredential,
@@ -57,6 +58,11 @@ export interface ExchangeContext {
   secrets: readonly string[];
   /** Whose credential it is, stamped on every error this exchange throws. */
   credential?: IvantiCredential;
+  /**
+   * The process-wide cap on requests in flight to the tenant, shared by every context that talks
+   * to it. A request waits for a slot as long as its own timeout, and is never sent if none frees.
+   */
+  limiter?: RequestLimiter;
 }
 
 export const readText = (response: FetchResponse): Promise<string> => response.text();
@@ -84,10 +90,22 @@ export async function exchange<T>(
   context: ExchangeContext,
   read: (response: FetchResponse) => Promise<T>,
 ): Promise<{ status: number; body: T }> {
+  if (context.limiter === undefined) return send(url, init, context, read);
+  // The slot covers the whole exchange, body included: Ivanti is busy until the body is sent.
+  return context.limiter.run(() => send(url, init, context, read), timeoutFor(init.method, context));
+}
+
+const timeoutFor = (method: string, context: ExchangeContext): number =>
+  isReadMethod(method) ? context.timeoutMs : (context.writeTimeoutMs ?? context.timeoutMs);
+
+async function send<T>(
+  url: string,
+  init: ExchangeInit,
+  context: ExchangeContext,
+  read: (response: FetchResponse) => Promise<T>,
+): Promise<{ status: number; body: T }> {
   const { fetchImpl, logger, secrets } = context;
-  const timeoutMs = isReadMethod(init.method)
-    ? context.timeoutMs
-    : (context.writeTimeoutMs ?? context.timeoutMs);
+  const timeoutMs = timeoutFor(init.method, context);
   const started = Date.now();
   // Counted when sent, not when answered: a timeout cost the call as much as a reply did.
   countIvantiRequest();

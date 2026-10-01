@@ -20,7 +20,10 @@ export type UnsupportedFilter =
   | { kind: 'function'; name: string }
   | { kind: 'typed-literal'; literal: string }
   | { kind: 'unbalanced-parentheses'; detail: 'closes-unopened' | 'left-open' }
-  | { kind: 'unterminated-string' };
+  | { kind: 'unterminated-string' }
+  | { kind: 'not' }
+  | { kind: 'group-not-first' }
+  | { kind: 'and-after-or' };
 
 /** Tokens that may legitimately precede `(` — logical operators, not functions. */
 const OPERATORS = new Set(['not', 'and', 'or']);
@@ -85,6 +88,44 @@ function findUnbalancedParentheses(
   return depth === 0 ? undefined : { kind: 'unbalanced-parentheses', detail: 'left-open' };
 }
 
+/**
+ * Whether Ivanti will read the grouping as written — measured, because it answers 200 either way.
+ *
+ * **A `(` counts only at the very start of the filter.** `(P1 or P2) and Status eq 'Active'`
+ * counted 16; `Status eq 'Active' and (P1 or P2)` counted 121, and `(A and B) or (C and D)`
+ * counted 0 where 6 was right. Groups nested at the start hold: `((A or B) and C)` counted 16.
+ *
+ * **Within one group, an `and` may not follow an `or`.** `Logged or Active and P1` counted 0 —
+ * neither `Logged or (Active and P1)` (30) nor `(Logged or Active) and P1` (6). The other order
+ * is read with the usual precedence: `Active and P1 or P2` counted 60, as written.
+ *
+ * Those two rules are also what the own-records wrap relies on: `(<caller>) and <mine>` measured
+ * exact over every shape they allow, and so did `group_count`'s bucket after it.
+ */
+function findMisreadGrouping(
+  masked: string,
+): Extract<UnsupportedFilter, { kind: 'group-not-first' | 'and-after-or' }> | undefined {
+  let leading = true;
+  // Per open group, innermost last: whether an `or` has been seen in it.
+  const sawOr: boolean[] = [false];
+  for (const [token] of masked.matchAll(/\(|\)|[A-Za-z_][A-Za-z0-9_]*/g)) {
+    if (token === '(') {
+      if (!leading) return { kind: 'group-not-first' };
+      sawOr.push(false);
+      continue;
+    }
+    leading = false;
+    if (token === ')') {
+      sawOr.pop();
+      continue;
+    }
+    const word = token.toLowerCase();
+    if (word === 'or') sawOr[sawOr.length - 1] = true;
+    if (word === 'and' && sawOr[sawOr.length - 1] === true) return { kind: 'and-after-or' };
+  }
+  return undefined;
+}
+
 export function findUnsupportedFilter(filter: string): UnsupportedFilter | undefined {
   const { masked, unterminated } = scanStringLiterals(filter);
 
@@ -107,7 +148,12 @@ export function findUnsupportedFilter(filter: string): UnsupportedFilter | undef
     if (!OPERATORS.has(name.toLowerCase())) return { kind: 'function', name };
   }
 
-  return undefined;
+  // Never honoured: `not (Status eq 'Closed')` counted every incident, `A and not (B)` counted
+  // A, and a bare `not A` is a 400. Before the grouping scan, whose refusal would point elsewhere.
+  if (/\bnot\b/i.test(masked)) return { kind: 'not' };
+
+  // Last: a function call is a `(` that is not first too, and its own refusal says more.
+  return findMisreadGrouping(masked);
 }
 
 export function describeUnsupportedFilter(unsupported: UnsupportedFilter): string {
@@ -132,6 +178,26 @@ export function describeUnsupportedFilter(unsupported: UnsupportedFilter): strin
       return (
         'This filter opens a quoted value and never closes it, so nothing was sent. Close the ' +
         "quote, and write a quote INSIDE a value as two: `Name eq 'O''Brien'`."
+      );
+    case 'not':
+      return (
+        "Ivanti's $filter has no `not`: it drops the clause it negates — or the whole filter — " +
+        'and answers with rows it should have excluded, so nothing was sent. Negate each ' +
+        "comparison instead: `Status ne 'Closed'`, and `Status ne 'A' and Status ne 'B'` for " +
+        'a group.'
+      );
+    case 'group-not-first':
+      return (
+        'Ivanti reads parentheses only at the very START of a filter; anywhere else it answers ' +
+        'with the wrong rows rather than an error, so nothing was sent. Move the group to the ' +
+        "front — `(A or B) and C`, not `C and (A or B)`. A question that needs two groups is " +
+        'two calls.'
+      );
+    case 'and-after-or':
+      return (
+        'Ivanti misreads an `and` that follows an `or` in the same group — `A or B and C` matches ' +
+        'neither way of reading it — so nothing was sent. Put the `and` first, `B and C or A`, ' +
+        'or open the filter with the `or` part as a group: `(A or B) and C`.'
       );
   }
 }

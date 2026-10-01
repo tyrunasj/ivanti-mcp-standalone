@@ -1,5 +1,6 @@
 /**
- * Every TypeScript source file carries the licence header.
+ * Every TypeScript source file carries the licence header, and so does every script the image
+ * ships beside it (`docker/`).
  *
  * The software is proprietary and is distributed as an image, a chart and a
  * tarball; a file that escapes one of those without a notice is a file with no
@@ -11,26 +12,28 @@
  */
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const SRC = new URL('../src', import.meta.url).pathname;
+const SRC = fileURLToPath(new URL('../src', import.meta.url));
+const DOCKER = fileURLToPath(new URL('../docker', import.meta.url));
 export const HEADER = [
   '// SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial',
   '// Copyright (c) 2026 SYNERGY. All rights reserved.',
 ].join('\n');
 const MARKER = 'SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial';
 
-function walk(dir) {
+function walk(dir, extension) {
   const out = [];
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...walk(p));
-    else if (name.endsWith('.ts')) out.push(p);
+    if (statSync(p).isDirectory()) out.push(...walk(p, extension));
+    else if (name.endsWith(extension)) out.push(p);
   }
   return out;
 }
 
 const write = process.argv[2] === '--write';
-const files = walk(SRC).sort();
+const files = [...walk(SRC, '.ts'), ...walk(DOCKER, '.mjs')].sort();
 const missing = [];
 
 for (const file of files) {

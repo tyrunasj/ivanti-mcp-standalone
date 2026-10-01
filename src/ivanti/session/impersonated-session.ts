@@ -5,6 +5,7 @@ import type { McpMode } from '../../config/env-schema.js';
 import type { Logger } from '../../logger.js';
 import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
 import { exchange, readText, type ExchangeContext } from '../http/exchange.js';
+import type { RequestLimiter } from '../http/request-limiter.js';
 import type { FetchLike } from '../http/transport.js';
 import type { IvantiRoutes } from '../odata/url.js';
 import type { IvantiSession, SessionIdentity } from './asmx-session.js';
@@ -68,6 +69,8 @@ export interface OpenImpersonatedSessionOptions {
   logger: Logger;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
+  /** The process-wide cap on requests in flight to the tenant; see `request-limiter.ts`. */
+  limiter?: RequestLimiter;
 }
 
 interface SessionStatus {
@@ -129,6 +132,7 @@ export async function openImpersonatedSession(
       timeoutMs,
       secrets: [opened.sid],
       credential: 'person',
+      ...(options.limiter === undefined ? {} : { limiter: options.limiter }),
     };
 
     const post = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {

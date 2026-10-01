@@ -20,8 +20,9 @@
  *   node scripts/check-docker-context.mjs
  */
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const dockerfile = readFileSync(`${ROOT}docker/Dockerfile`, 'utf8');
 const patterns = readFileSync(`${ROOT}.dockerignore`, 'utf8')
   .split('\n').map((l) => l.trim())

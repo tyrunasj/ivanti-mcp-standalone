@@ -9,6 +9,8 @@ import type * as ImpersonatedSessionModule from '../ivanti/session/impersonated-
 import { configFixture } from '../config/config.fixture.js';
 import { connectionFixture } from '../ivanti/connection.fixture.js';
 import type { Logger } from '../logger.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { createImpersonationSlot } from '../auth/impersonation.js';
@@ -88,6 +90,36 @@ describe('createServerFactory', () => {
     const factory = createServerFactory(config, { logger: logger(), ivanti: connection });
 
     expect(factory.toolNames).toContain('list_business_objects');
+  });
+});
+
+describe('the instructions a connection is sent', () => {
+  const instructionsOf = async (connection: { server: McpServer }): Promise<string | undefined> => {
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0' });
+    await connection.server.connect(serverSide);
+    await client.connect(clientSide);
+    const text = client.getInstructions();
+    await client.close();
+    return text;
+  };
+
+  // stdio beside an `oauth` HTTP transport carries no token: told that the sign-in named the
+  // person, the model called tools the gate then refused until `act_as`.
+  it('tells a conversation without a token to ask, even when AUTH_MODE is oauth', async () => {
+    const { connection } = connectionFixture();
+    const factory = createServerFactory(
+      { ...config, AUTH_MODE: 'oauth', HTTP_TRANSPORT_ON: true },
+      { logger: logger(), ivanti: connection },
+    );
+
+    const stdio = await instructionsOf(factory.create({ identity: ANONYMOUS }));
+    const signedIn = await instructionsOf(
+      factory.create({ identity: { provenance: 'verified', subject: 'alice@example.com' } }),
+    );
+
+    expect(stdio).toContain('until you know who you are helping');
+    expect(signedIn).toContain('The sign-in already says who you are helping');
   });
 });
 

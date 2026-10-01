@@ -32,7 +32,7 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
     description:
       'Lists records from a Business Object.\n\n' +
       'FILTER — Ivanti supports a strict subset of OData: `eq ne gt ge lt le and or` and ' +
-      'parentheses. It has NO functions: `contains()`, `startswith()` and `year()` are ' +
+      'a LEADING `(…)`. It has NO functions: `contains()`, `startswith()` and `year()` are ' +
       'SILENTLY IGNORED and the full unfiltered set comes back, so this tool refuses them ' +
       'before sending. Use `search` for substrings.\n' +
       '- empty field: `Owner eq \'$NULL\'` — the only way to match one, and TEXT FIELDS ONLY ' +

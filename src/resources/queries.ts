@@ -9,7 +9,17 @@ refusing. Most of what follows is about telling a real answer from a confident w
 
 ## \`$filter\` has operators and no functions
 
-Supported: \`eq ne gt ge lt le\`, \`and\`, \`or\`, and parentheses. That is the whole list.
+Supported: \`eq ne gt ge lt le\`, \`and\`, \`or\`, and parentheses at the START. That is the whole
+list — there is no \`not\`; it drops the clause, or the whole filter.
+
+Ivanti answers a filter it misreads with a 200 and the wrong rows, so this server refuses these
+shapes before sending:
+
+    C and (A or B)                   a group anywhere but the start — put it first
+    (A or B) and (C or D)            a second group — make it two calls
+    A or B and C                     an \`and\` after an \`or\` in the same group: write
+                                     \`B and C or A\`, or \`(A or B) and C\`
+    not (A)                          use \`ne\` on each comparison instead
 
 \`contains()\`, \`startswith()\`, \`endswith()\`, \`year()\` and friends are **silently ignored** —
 Ivanti drops the clause and returns the **full unfiltered set**, which looks exactly like a
@@ -21,18 +31,18 @@ being allowed to mislead you. Use \`search\` for substrings.
                                      entry exists", which reads as a bad field NAME; the field
                                      is fine, the operator is not, and there is no null test
                                      for those types. \`ne '$NULL'\` also counts the empty
-                                     string as present (13 of 42 rows, measured), so pair it
+                                     string as present (measured), so pair it
                                      with \`and Owner ne ''\` to exclude both.
     CreatedDateTime gt 2026-01-01    dates are bare and unquoted
-    (A eq 1 or B eq 2) and C eq 3    parentheses work, and precedence needs them
+    (A eq 1 or B eq 2) and C eq 3    a group, at the START; \`C eq 3 and (…)\` is refused
 
 There is **no default order**. "The latest" requires \`orderBy\`.
 
 ## \`search\` is the only substring match, and it over-matches
 
-It is a keyword search across the record's text fields. It reaches inside words: searching
-employees for \`John\` returns John Smith, John Davis, John M Doe — **and Scott Johnson**. Filter
-the result yourself if you meant one of them specifically.
+It is a keyword search across the record's text fields. It matches the start of any word:
+searching employees for \`John\` returns John Smith, John Davis, John M Doe — **and Scott Johnson**.
+Filter the result yourself if you meant one of them specifically.
 
 ## There is no projection, and no expansion
 

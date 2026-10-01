@@ -267,6 +267,26 @@ describe('SessionManager', () => {
       expect(quiet.close).toHaveBeenCalled();
     });
 
+    // Admission counts slots still initializing but cannot close one, so two initializes at the
+    // same instant were both admitted and the subject stayed above its limit.
+    it('holds to the limit when two of the subject\'s initializes land at the same instant', () => {
+      const m = manager(10, HOUR, silent(), 1);
+      const first = session();
+      const second = session();
+      const a = m.admit({ subject: 'alice' });
+      const b = m.admit({ subject: 'alice' });
+      if (!a.admitted || !b.admitted) throw new Error('expected both to be admitted');
+
+      a.slot.commit('first', first);
+      clock += 10;
+      b.slot.commit('second', second);
+
+      expect(m.size).toBe(1);
+      expect(m.get('second')).toBe(second);
+      expect(first.close).toHaveBeenCalled();
+      expect(second.close).not.toHaveBeenCalled();
+    });
+
     it('does not apply to callers without a subject', () => {
       const m = manager(10, HOUR, silent(), 1);
       const a = open(m, 'a');
@@ -278,15 +298,44 @@ describe('SessionManager', () => {
     });
   });
 
-  it('unregisters without closing, since the transport closed itself', () => {
+  // A client's DELETE ends the session from its side; its close is what releases the person's
+  // Ivanti session, and shutdown must not outrun it.
+  it('tracks the close of a session that ended itself, and waits for it on shutdown', async () => {
     const m = manager();
-    const s = session();
+    let released = false;
+    const s = {
+      close: vi.fn<() => void | Promise<void>>(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              released = true;
+              resolve();
+            }, 5);
+          }),
+      ),
+    };
     m.register('a', s);
 
     m.unregister('a');
-
     expect(m.size).toBe(0);
-    expect(s.close).not.toHaveBeenCalled();
+    await m.closeAll();
+
+    expect(s.close).toHaveBeenCalledTimes(1);
+    expect(released).toBe(true);
+  });
+
+  // An evicted session is out of the store already; its transport closing later is no second close.
+  it('does not close an evicted session again when its transport reports the close', () => {
+    const m = manager(1, HOUR);
+    const s = session();
+    m.register('a', s);
+    clock += EVICTION_FLOOR_MS;
+    m.admit();
+    expect(s.close).toHaveBeenCalledTimes(1);
+
+    m.unregister('a');
+
+    expect(s.close).toHaveBeenCalledTimes(1);
   });
 
   it('closes everything on shutdown', async () => {

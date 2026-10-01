@@ -293,6 +293,28 @@ describe('the fields that say whose record it is, in enduser', () => {
     expect(urls.some((url) => url.startsWith('PATCH'))).toBe(false);
   });
 
+  // The server stamps `CreatedBy` itself in enduser; Ivanti echoing it back is not Ivanti filling it.
+  it('does not credit the session with the CreatedBy the server stamped', async () => {
+    const { connection } = connectionFixture({
+      entities: { incident: INCIDENT, employee: {} },
+      responses: {
+        'POST incidents': { RecId: 'new-1', Subject: 'x', CreatedBy: 'HSanders', LastModBy: 'HSanders' },
+        "incidents('new-1')": { RecId: 'new-1', Subject: 'x', CreatedBy: 'HSanders', LastModBy: 'HSanders' },
+        incidents: { value: [MINE] },
+        employees: { value: [] },
+      },
+    });
+    const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+    context.pin?.pin({ ...PERSON });
+    const d = { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: true, actions: OPEN_ACTIONS };
+
+    const result = await createCreateRecordTool(d).handler({ object: 'Incidents', fields: { Subject: 'x' } }, context);
+    const body = JSON.parse(text(result)) as { stampedFromTheSession?: string[] };
+
+    expect(result.isError).toBeUndefined();
+    expect(body.stampedFromTheSession).toEqual(['LastModBy']);
+  });
+
   it('still lets them change the rest of their own record', async () => {
     const { d, urls, context } = enduser();
 

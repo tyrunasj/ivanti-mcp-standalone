@@ -10,6 +10,7 @@ import {
   type FetchLike,
   type FetchResponse,
 } from './exchange.js';
+import type { RequestLimiter } from './request-limiter.js';
 import { createIvantiRoutes, type IvantiRoutes } from '../odata/url.js';
 
 export type { FetchLike } from './exchange.js';
@@ -49,6 +50,8 @@ export interface TransportOptions {
    * reads. So this is not a second way of saying the same thing; it changes what comes back.
    */
   sid?: string;
+  /** The process-wide cap on requests in flight to the tenant; see `request-limiter.ts`. */
+  limiter?: RequestLimiter;
 }
 
 export interface RequestInit {
@@ -124,6 +127,7 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     writeTimeoutMs,
     secrets: sid === undefined ? [apiKey] : [apiKey, sid],
     credential: sid === undefined ? 'service' : 'person',
+    ...(options.limiter === undefined ? {} : { limiter: options.limiter }),
   };
 
   // One credential or the other, never both: sending the key as well would have Ivanti answer

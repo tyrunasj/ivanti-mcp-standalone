@@ -104,6 +104,34 @@ describe('registerTools', () => {
     expect(JSON.stringify(await callback({}))).toContain('asserted');
   });
 
+  // A model in a loop, or a client replaying one, is stopped here rather than at the tenant.
+  it('refuses a conversation\'s calls past its limit for the minute, and says how long to wait', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-01T08:00:00Z') });
+    try {
+      const registerTool = vi.fn();
+      const tools = selectTools(config(), context);
+      const call = { identity: assertedIdentity('jsmith'), sessionId: 's1' };
+      registerTools({ registerTool } as unknown as McpServer, tools, call, logger(), undefined, undefined, 2);
+      const callback = registerTool.mock.calls[0]?.[2] as (
+        args: Record<string, unknown>,
+      ) => Promise<{ isError?: boolean; content: { text: string }[] }>;
+
+      await callback({});
+      vi.advanceTimersByTime(20_000);
+      await callback({});
+      const refused = await callback({});
+
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0]?.text).toContain('Wait 40 s');
+
+      // The first call leaves the window a minute after it was made.
+      vi.advanceTimersByTime(40_000);
+      expect((await callback({})).isError).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('audits every call without ever logging its arguments', async () => {
     const lines: { message: string; fields?: Record<string, unknown> }[] = [];
     const log = { ...logger(), info: (message: string, fields?: Record<string, unknown>) => lines.push({ message, fields }) };

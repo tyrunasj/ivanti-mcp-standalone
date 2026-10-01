@@ -358,7 +358,8 @@ jobs:
 
             **Container** — `docker pull ${{ env.IMAGE }}:${{ needs.gate.outputs.version }}`
             Multi-arch (amd64, arm64), distroless, runs as uid 65532.
-            Signed with cosign by this repository's release workflow on `main`; verify with:
+            Signed with cosign by this repository's release workflow on `main`; verify with cosign 3
+            (or 2.6 with `--new-bundle-format`):
             ```
             cosign verify ${{ env.IMAGE }}:${{ needs.gate.outputs.version }} \
               --certificate-identity='https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main' \

@@ -74,7 +74,9 @@ and the threat model is published.
 
 **Progress (2026-09-30):** 1 — `/ready`, from a background check of the tenant every minute, 503
 after two failures in a row; the chart's readiness probe uses it. 4, in part — the log lines worth
-an alert are in the Handbook's *Watching it*. Left: metrics, rate limits, dashboards.
+an alert are in the Handbook's *Watching it*. 3 — `IVANTI_MAX_CONCURRENT_REQUESTS` caps requests in
+flight to the tenant (a request held back is never sent, and says so), and
+`MCP_MAX_CALLS_PER_MINUTE` limits each conversation (2026-10-01). Left: metrics, dashboards.
 
 1. **Readiness that reflects the tenant (~2 wk):** `/ready` checks that the tenant answers and the
    session is valid, cached for a few seconds; `/health` stays liveness only. The chart's
@@ -90,6 +92,9 @@ an alert are in the Handbook's *Watching it*. Left: metrics, rate limits, dashbo
 dashboard shows calls, errors and latency.
 
 ## Scale and availability, 4 → 9
+
+**Deferred 2026-10-01** — see `initial-design.md`, *More than one replica — deferred*, for why and
+for what would reopen it. What follows is the plan if it is reopened.
 
 1. **Decide the model** (decision 1), and record it in `initial-design.md`. §10 rejects routing by
    `Mcp-Session-Id` at the ingress; it does not reject either of these:
@@ -113,8 +118,10 @@ load test meets the target, and memory is flat through the soak.
 
 **Progress (2026-09-30):** the Windows Ivanti connection passed end to end on 0.3.1, after an
 upgrade by the documented steps; memory was re-measured on Linux (~104 MiB idle, ~64 KiB per
-session); Claude Code verified as a client over stdio and HTTP. Left: the pilot, Entra, Claude
-Desktop, the claude.ai and ChatGPT connectors, and the rest of the unmeasured list.
+session); Claude Code verified as a client over stdio and HTTP; `enduser` ownership held on Change,
+whose customer link is `RequestorLink`, with impersonation on and off (2026-10-01). Left: the
+pilot, Entra, Claude Desktop, the claude.ai and ChatGPT connectors, and the rest of the unmeasured
+list.
 
 1. **A pilot** on a production-like tenant with real users, two weeks, with `usage:report` as the
    baseline.
@@ -143,7 +150,7 @@ the unmeasured list is empty.
 
 ## Decisions still open
 
-1. **Scale:** stateless under OAuth (recommended), or Redis for every mode?
+1. **Scale:** deferred 2026-10-01 — one replica; stateless under OAuth if it is reopened.
 2. **Metrics:** a separate port bound inside the cluster, or the main port behind authentication?
 3. **Pilot:** which tenant — and can a public HTTPS hostname be arranged for Entra?
 4. **Load target:** how many concurrent users, and what latency is acceptable?

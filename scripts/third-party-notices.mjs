@@ -16,8 +16,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT = join(ROOT, 'THIRD-PARTY-NOTICES.md');
 
 const stage = mkdtempSync(join(tmpdir(), 'tpn-'));
@@ -25,27 +26,41 @@ try {
   for (const f of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'])
     writeFileSync(join(stage, f), readFileSync(join(ROOT, f)));
   execFileSync('pnpm', ['install', '--prod', '--frozen-lockfile', '--node-linker=hoisted',
-    '--ignore-scripts', '--silent'], { cwd: stage, stdio: 'ignore' });
+    '--ignore-scripts', '--silent'], { cwd: stage, stdio: ['ignore', 'ignore', 'inherit'] });
 
-  const modules = join(stage, 'node_modules');
+  // Nested trees too: a hoisted install still nests a version that conflicts with the hoisted one
+  // (`content-type@1.0.5` under `body-parser`), and it ships exactly as the top-level ones do.
   const dirs = [];
-  for (const name of readdirSync(modules).sort()) {
-    if (name.startsWith('.')) continue;
-    if (name.startsWith('@')) {
-      for (const sub of readdirSync(join(modules, name)).sort()) dirs.push(`${name}/${sub}`);
-    } else dirs.push(name);
-  }
+  const collect = (modules) => {
+    if (!existsSync(modules)) return;
+    for (const name of readdirSync(modules).sort()) {
+      if (name.startsWith('.')) continue;
+      const found = name.startsWith('@')
+        ? readdirSync(join(modules, name)).sort().map((sub) => join(modules, name, sub))
+        : [join(modules, name)];
+      for (const dir of found) {
+        dirs.push(dir);
+        collect(join(dir, 'node_modules'));
+      }
+    }
+  };
+  collect(join(stage, 'node_modules'));
 
   const pkgs = [];
+  const seen = new Set();
   for (const d of dirs) {
-    const manifest = join(modules, d, 'package.json');
+    const manifest = join(d, 'package.json');
     if (!existsSync(manifest)) continue;
     const m = JSON.parse(readFileSync(manifest, 'utf8'));
+    // One row per version shipped: two copies of the same version are one component.
+    const key = `${m.name ?? d}@${m.version ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const licence = typeof m.license === 'string' ? m.license : m.license?.type ?? 'see notice';
     let text = '';
-    for (const f of readdirSync(join(modules, d))) {
+    for (const f of readdirSync(d).sort()) {
       if (/^(licen[cs]e|copying)(\.\w+)?$/i.test(f)) {
-        text = readFileSync(join(modules, d, f), 'utf8').trim();
+        text = readFileSync(join(d, f), 'utf8').trim();
         break;
       }
     }
@@ -56,6 +71,8 @@ try {
     const copyright = (text.match(/^.*copyright.*$/im) ?? [''])[0].trim();
     pkgs.push({ name: m.name ?? d, version: m.version ?? '', licence, copyright, text });
   }
+
+  pkgs.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 
   const byLicence = new Map();
   for (const p of pkgs) byLicence.set(p.licence, (byLicence.get(p.licence) ?? 0) + 1);
@@ -91,10 +108,12 @@ try {
   if (process.argv[2] === '--check') {
     const current = existsSync(OUT) ? readFileSync(OUT, 'utf8') : '';
     if (current !== body) {
+      // Not process.exit: that would skip the `finally` and leave the temporary install behind.
       console.error('THIRD-PARTY-NOTICES.md is out of date. Run: node scripts/third-party-notices.mjs');
-      process.exit(1);
+      process.exitCode = 1;
+    } else {
+      console.log(`third-party notices up to date: ${String(pkgs.length)} components`);
     }
-    console.log(`third-party notices up to date: ${String(pkgs.length)} components`);
   } else {
     writeFileSync(OUT, body);
     console.log(`wrote THIRD-PARTY-NOTICES.md — ${String(pkgs.length)} components`);
