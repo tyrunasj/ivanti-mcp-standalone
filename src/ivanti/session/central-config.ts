@@ -3,6 +3,7 @@
 
 import type { Logger } from '../../logger.js';
 import { exchange, readText } from '../http/exchange.js';
+import type { RequestLimiter } from '../http/request-limiter.js';
 import type { FetchLike } from '../http/transport.js';
 
 /**
@@ -48,6 +49,8 @@ export interface CentralConfigOptions {
   logger: Logger;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
+  /** The process-wide cap on requests in flight to the tenant; see `request-limiter.ts`. */
+  limiter?: RequestLimiter;
 }
 
 export interface CentralConfig {
@@ -139,7 +142,13 @@ export function createCentralConfig(options: CentralConfigOptions): CentralConfi
       { method: 'GET', headers: { ApiKey: apiKey, Accept: 'application/xml' } },
       // The reply carries the tenant's database credentials even when it fails; the scrub
       // `exchange` applies to a failure body covers `ConnectionString` as an XML element.
-      { fetchImpl, logger, timeoutMs, secrets: [apiKey] },
+      {
+        fetchImpl,
+        logger,
+        timeoutMs,
+        secrets: [apiKey],
+        ...(options.limiter === undefined ? {} : { limiter: options.limiter }),
+      },
       readText,
     );
     return body;

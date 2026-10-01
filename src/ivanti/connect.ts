@@ -4,6 +4,7 @@
 import type { Logger } from '../logger.js';
 import { probeBasePath, type ProbeFetch } from './http/base-path.js';
 import { createTransport, type FetchLike, type IvantiTransport } from './http/transport.js';
+import { createRequestLimiter, type RequestLimiter } from './http/request-limiter.js';
 import { createMetadataCatalog, type MetadataCatalog } from './metadata/catalog.js';
 import { createSession, type IvantiSession } from './session/asmx-session.js';
 import { probeCapability, type Capability, type CapabilityTier } from './session/capability.js';
@@ -39,6 +40,11 @@ export interface ConnectOptions {
    * timeout.
    */
   writeTimeoutMs?: number;
+  /**
+   * `IVANTI_MAX_CONCURRENT_REQUESTS`: the cap on requests in flight to the tenant, shared by every
+   * surface below and by the person's sessions. Absent, nothing is capped.
+   */
+  maxConcurrentRequests?: number;
 }
 
 export interface IvantiConnection {
@@ -90,6 +96,8 @@ export interface IvantiConnection {
    * selected once: a tool that cannot work here should not exist rather than fail when called.
    */
   readonly capability: Capability;
+  /** The shared cap on requests in flight to the tenant, for the person's sessions to use too. */
+  readonly limiter?: RequestLimiter;
 }
 
 /**
@@ -136,12 +144,20 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     attempts: probe.attempted.length,
   });
 
+  // One for the whole process: the tenant does not care which surface a request came from.
+  const limiter =
+    options.maxConcurrentRequests === undefined
+      ? undefined
+      : createRequestLimiter(options.maxConcurrentRequests);
+  const limited = limiter === undefined ? {} : { limiter };
+
   const transport = createTransport({
     baseUrl,
     basePath: probe.basePath,
     apiKey,
     logger,
     fetchImpl,
+    ...limited,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(writeTimeoutMs === undefined ? {} : { writeTimeoutMs }),
   });
@@ -152,6 +168,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     apiKey,
     logger,
     fetchImpl,
+    ...limited,
     ...(sessionTimeoutMs === undefined ? {} : { timeoutMs: sessionTimeoutMs }),
   });
 
@@ -171,6 +188,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
           apiKey: impersonation.apiKey,
           logger,
           fetchImpl,
+          ...limited,
           ...(sessionTimeoutMs === undefined ? {} : { timeoutMs: sessionTimeoutMs }),
         });
 
@@ -192,6 +210,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
   return {
     basePath: probe.basePath,
     metadataUrl: probe.metadataUrl,
+    ...limited,
     transport,
     metadata,
     session,

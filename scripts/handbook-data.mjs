@@ -131,7 +131,8 @@ const data = {
   server: { name: pkg.name },
 };
 
-const next = html.replace(DATA_LINE, () => `const DATA = ${JSON.stringify(data)};`);
+// `</` escaped: a description containing `</script>` would otherwise end the page's script element.
+const next = html.replace(DATA_LINE, () => `const DATA = ${JSON.stringify(data).replace(/<\//g, '<\\/')};`);
 const mode = process.argv[2];
 
 if (mode === '--write') {

@@ -146,6 +146,9 @@ function toCandidate(row: OdataRecord, object: string, claim: string): PersonCan
  * `eq` is case-insensitive on Ivanti — `FirstName eq 'harold' and LastName eq 'SANDERS'` matches
  * Harold Sanders — so nothing is normalised on either side. A claim of two or more words also
  * tries first-and-last, taking the outermost tokens so a middle name does not break it.
+ *
+ * That pair goes FIRST: Ivanti honours parentheses only at the start of a `$filter`. Last, it
+ * matched nobody — "Tyrunas Jokubauskas" found 0 people, and act_as fell through to the search.
  */
 function exactFilter(claim: string): string {
   const value = quoteOdataString(claim.trim());
@@ -155,7 +158,7 @@ function exactFilter(claim: string): string {
   if (tokens.length >= 2) {
     const first = quoteOdataString(tokens[0] ?? '');
     const last = quoteOdataString(tokens[tokens.length - 1] ?? '');
-    clauses.push(`(FirstName eq ${first} and LastName eq ${last})`);
+    clauses.unshift(`(FirstName eq ${first} and LastName eq ${last})`);
   }
 
   return clauses.join(' or ');

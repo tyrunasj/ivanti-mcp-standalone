@@ -6,7 +6,7 @@ export const WORKFLOW = `
 
 ## Prefer a quick action to a raw write
 
-For anything Ivanti has defined — Close, Resolve, Escalate, Clone — use \`list_quick_actions\` then
+For anything Ivanti has defined — Close, Resolve, Reassign, Clone — use \`list_quick_actions\` then
 \`run_quick_action\`. The action runs its own configured logic: the child records it creates, the
 approvals it starts, the values it fills in.
 
@@ -29,11 +29,13 @@ The object is \`frs_approval#\` (\`frs_approvals\`); "Approvals" is not a name I
 
 - Pending: \`list_records({ object: 'frs_approvals', filter: "Status eq 'Pending'" })\`. \`Name\`
   describes the step and \`ParentLink_Category\` says what is waiting.
-- **Voting is a quick action, not a field update** — "Approve My Vote" / "Deny My Vote". Setting
-  Status directly skips the workflow that acts on the result.
-- **"My Vote" means the account this server signs in as**, not the person you are talking to.
-  Casting one records the service account's decision. Confirm with the user first, and never
-  present a pending-approval list as theirs.
+- **Voting is a quick action on the vote ROW, not a field update** — "Approve Vote" / "Deny Vote"
+  on \`frs_approvalvotetracking\`, which \`vote_on_approval\` runs. Setting Status directly skips
+  the workflow that acts on the result.
+- **"Approve My Vote" / "Deny My Vote" on the approval resolve "my" from the signed-in session** —
+  this server's account unless it signs in as the person — so they can record the wrong person's
+  decision. Confirm with the user before any vote, and never present a pending-approval list as
+  someone's without checking whose it is.
 
 ## Saved searches answer for the service account too
 
@@ -65,21 +67,22 @@ is \`upload_attachment\`, which sets the pair itself.
 vote rows directly:
 
     list_records({ object: "frs_approvalvotetracking",
-                   filter: "Status ne 'Approved'",
+                   filter: "Status eq 'Pending'",
                    fields: "Owner,OwnerFullName,OwnerEmail,Owner_Valid,DueDateTime" })
 
 **Do not group those rows by \`Owner\` alone.** It holds a login on most rows and a display name on
 others — measured, one tenant carried both \`BSmith\` and \`Becky   Smith\` (three spaces) for the
 same person, so grouping by \`Owner\` reported ten approvers where there were nine and undercounted
 one queue by a quarter. \`Owner_Valid\` is the employee RecId and is the only identifier that never
-varies; \`OwnerEmail\` is the next best. Better still, feed each candidate login back through
-\`list_approvals\`, which reconciles all three itself.
+varies; \`OwnerEmail\` varies too — measured, one person's rows carried two addresses. Better
+still, feed each candidate login back through \`list_approvals\`, which reconciles all three itself.
 
 Two further traps:
 
-- **Filter on \`Status ne 'Approved'\` rather than \`eq 'Pending'\`.** The vote vocabulary is the
-  tenant's own; a tenant that spells the undecided state differently answers zero to \`'Pending'\`
-  and the zero looks like an empty queue.
+- **Check the vote vocabulary before trusting a zero from \`'Pending'\`.** It is the tenant's own,
+  held in \`frs_approvalvotetrackstatus\` (Pending, Approved, Denied, Cancelled here); a tenant that
+  spells the undecided state differently answers zero, and the zero looks like an empty queue.
+  \`Status ne 'Approved'\` is no substitute: it also returns denied and cancelled votes.
 - **An approval BLOCK (\`frs_approval\`) can be Pending with no vote rows on it at all** — nobody
   was asked. Such a block is invisible to every per-person query. Find them with
   \`list_records({ object: "frs_approval", filter: "Status eq 'Pending'" })\`, whose \`Owner\` is the

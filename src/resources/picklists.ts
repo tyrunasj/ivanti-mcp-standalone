@@ -26,9 +26,10 @@ Some validated fields are filtered by what sibling fields hold on the same recor
 \`get_pick_list_constraints\` reports it as \`constrainedBy\`. Measured on a live tenant, 4 of an
 incident's 21 validated fields are filtered:
 
-    Category     <- Service
-    Subcategory  <- Service, Category
-    Owner        <- OwnerTeam
+    Category        <- Service
+    Subcategory     <- Service, Category
+    Owner           <- OwnerTeam
+    ActualCategory  <- ActualService
 
 An empty \`constrainedBy\` means any value from the source object is fine. A non-empty one means
 the value has to be legal **under the parents you are also writing** — a value that is valid in
@@ -50,8 +51,8 @@ To enumerate everything a field could ever hold, read its backing object directl
 
 \`get_object_metadata\` reports \`validated\` from \`$metadata\`, and a field **without** the flag
 may still be backed by a list the form knows about — \`Employee.Department\` carries no flag and
-has 17 values. If a field looks enumerable, ask for its values regardless of the flag rather than
-paging the table to find out.
+still has a list of values. If a field looks enumerable, ask for its values regardless of the flag
+rather than paging the table to find out.
 
 ## Searching a long option list
 
@@ -75,7 +76,7 @@ rather than swallowed.
 ## Getting the values
 
     get_pick_list_values({ object: 'Incident#', fields: ['Category'],
-                           values: { Service: 'Email Service' } })
+                           filters: { Service: 'Email Service' } })
 
 One call, filtered by Ivanti itself — the same evaluation the form UI does. A refused write also
 answers with the allowed list, so a rejection is usually enough to retry correctly without asking

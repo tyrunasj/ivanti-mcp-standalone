@@ -12,6 +12,7 @@ coverage
 !.env.example
 *.pem
 *.key
+secrets
 
 # Tests and tooling: the image runs the build output, nothing else.
 **/*.test.ts

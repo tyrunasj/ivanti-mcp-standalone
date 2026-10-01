@@ -116,7 +116,7 @@ function print(report: UsageReport, waste: Waste): void {
         .join(', ');
       const retried =
         tool.retries === 0 ? '' : `; ${size(tool.retriedChars)} spent on attempts that were retried`;
-      console.log(`  ${tool.tool}: ${outcomes}${retried}`);
+      console.log(printable(`  ${tool.tool}: ${outcomes}${retried}`));
     }
   }
 
@@ -203,7 +203,7 @@ function printWaste(waste: Waste, size: (chars: number) => string): void {
   if (waste.switches.length > 0) {
     console.log('\nSwitched tool after a failure or an empty answer — descriptions that overlap:');
     for (const change of waste.switches.slice(0, 10)) {
-      console.log(`  ${change.from} → ${change.to} ×${String(change.count)}`);
+      console.log(printable(`  ${change.from} → ${change.to} ×${String(change.count)}`));
     }
   }
 
@@ -214,7 +214,17 @@ function printWaste(waste: Waste, size: (chars: number) => string): void {
   );
 }
 
-function table(header: string[], rows: string[][]): void {
+/**
+ * Log fields reach the terminal: `client` is whatever name the connecting client chose, so an escape
+ * sequence in it would otherwise be run by the operator's terminal. Control characters go.
+ */
+function printable(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+}
+
+function table(header: string[], cells: string[][]): void {
+  const rows = cells.map((row) => row.map(printable));
   const widths = header.map((cell, column) =>
     Math.max(cell.length, ...rows.map((row) => (row[column] ?? '').length)),
   );

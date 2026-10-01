@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../logger.js';
 import { IvantiApiError, ResponseTooLargeError } from './errors.js';
 import { exchange, readText, type FetchLike, type FetchResponse } from './exchange.js';
+import type { RequestLimiter } from './request-limiter.js';
 
 const reply = (status: number, body: string): FetchResponse => ({
   ok: status >= 200 && status < 300,
@@ -111,6 +112,35 @@ describe('exchange', () => {
     await send(() => Promise.resolve(reply(200, '{}')), logger, { method: 'POST', body: form });
 
     expect(debugged[0]?.fields).toEqual(['ObjectId', 'file']);
+  });
+
+  it('sends through the shared cap, with the request\'s own timeout as how long it may wait', async () => {
+    const { logger } = recorder();
+    const waits: number[] = [];
+    const limiter: RequestLimiter = {
+      run: (send, waitMs) => {
+        waits.push(waitMs);
+        return send();
+      },
+      inFlight: 0,
+      waiting: 0,
+    };
+
+    await exchange(
+      'https://t/HEAT/api/odata/x',
+      { method: 'POST', headers: {} },
+      {
+        fetchImpl: () => Promise.resolve(reply(200, '{}')),
+        logger,
+        timeoutMs: 1_000,
+        writeTimeoutMs: 30_000,
+        secrets: [],
+        limiter,
+      },
+      readText,
+    );
+
+    expect(waits).toEqual([30_000]);
   });
 
   it('stamps whose credential it carried on a refusal and on a request never answered', async () => {

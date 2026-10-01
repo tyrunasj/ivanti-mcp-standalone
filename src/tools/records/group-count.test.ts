@@ -177,7 +177,8 @@ describe('group_count', () => {
       filter: 'Priority eq 1',
     });
 
-    expect(decodeURIComponent(urls[0] ?? '')).toContain("Status eq 'Active' and (Priority eq 1)");
+    // Group first: Ivanti ignores parentheses anywhere else, and reads the rest as one long `or`.
+    expect(decodeURIComponent(urls[0] ?? '')).toContain("(Priority eq 1) and Status eq 'Active'");
   });
 });
 

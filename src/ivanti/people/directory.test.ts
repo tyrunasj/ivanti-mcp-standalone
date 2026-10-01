@@ -210,6 +210,18 @@ describe('personObjects', () => {
  * confirmation. The mis-pin is worse than it sounds because it is indistinguishable from the
  * middle-name mismatch the manifest teaches the model to EXPECT, seen in reverse.
  */
+// Ivanti honours parentheses only at the start of a `$filter`; anywhere else the name pair matched
+// nobody, and every full name fell through to the loose search.
+it('sends the first-and-last pair first, where Ivanti honours its parentheses', async () => {
+  const { connection, urls } = connectionFixture({ entities: { employee: {} }, responses: {} });
+
+  await connection.people.directory.find('Harold Sanders');
+
+  const sent = urls.find((url) => url.includes('$filter')) ?? '';
+  const filter = new URL(sent.slice(sent.indexOf(' ') + 1)).searchParams.get('$filter');
+  expect(filter).toMatch(/^\(FirstName eq 'Harold' and LastName eq 'Sanders'\) or LoginID eq /);
+});
+
 describe('an exact name match still has to account for every token', () => {
   const MARY_WATSON = {
     RecId: 'w1',

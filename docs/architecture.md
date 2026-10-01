@@ -401,6 +401,14 @@ it needs a create form, which OData cannot see.
   (`ivanti/check-tenant.ts`). 503 after two failures in a row, 200 on the first success; checked in
   the background because a probe gets seconds and an Ivanti request can take longer. Both answer
   anyone; the reason and time only to an authorized caller. No Ivanti configured, always ready.
+- **The tenant is the ceiling, so it is what is protected.** Every exchange context — the
+  transport, the ASMX session, CentralConfig and each person's session — shares one
+  `RequestLimiter` (`IVANTI_MAX_CONCURRENT_REQUESTS`, default 16), inside `exchange()` so nothing
+  can go around it. Past the cap a request waits its turn, for as long as its own timeout, and one
+  still waiting fails as `IvantiBusyError` — never sent, so `runTool` says nothing changed, where a
+  status-0 `IvantiApiError` on a write would have said it may have been applied. Separately, each
+  conversation may make `MCP_MAX_CALLS_PER_MINUTE` tool calls (default 120); the next is refused
+  in `registerTools`, before the gate, with how long to wait.
 - **Shutdown hands every Ivanti session back before exiting.** SIGTERM and SIGINT close every
   conversation on both transports, and so does stdin ending when HTTP is off — a container's stdin
   ends at once, so there it means nothing. Closing is what releases the person's session, and the

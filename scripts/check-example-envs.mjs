@@ -1,5 +1,5 @@
 /**
- * Every file in `examples/env/` must load.
+ * Every file in `examples/env/` must load, and so must `.env.example`.
  *
  * An example configuration that exits 78 is worse than no example: it is copied
  * before it is read. This drives the real `loadConfig`, so the shape rules and
@@ -33,9 +33,15 @@ if (files.length === 0) {
   process.exit(2);
 }
 
+// `.env.example` ships in the tarball and is the reference the documents point at.
+const targets = [
+  ...files.map((name) => [name, new URL(name, dir)]),
+  ['.env.example', new URL('../.env.example', import.meta.url)],
+];
+
 let failed = 0;
-for (const name of files) {
-  const env = parse(readFileSync(new URL(name, dir), 'utf8'));
+for (const [name, file] of targets) {
+  const env = parse(readFileSync(file, 'utf8'));
   try {
     // Padded: a bearer token must be at least 32 characters, and whether an example
     // passes must not depend on how long its secret's path happens to be.
@@ -65,4 +71,4 @@ if (failed > 0) {
   console.error(`\n${failed} example configuration(s) would exit 78.`);
   process.exit(1);
 }
-console.log(`\n${files.length} example configurations load.`);
+console.log(`\n${targets.length} example configurations load.`);

@@ -261,6 +261,19 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
     }
   }
 
+  if (config.IVANTI_MAX_CONCURRENT_REQUESTS < 1 || config.IVANTI_MAX_CONCURRENT_REQUESTS > 256) {
+    problems.push(
+      `IVANTI_MAX_CONCURRENT_REQUESTS=${String(config.IVANTI_MAX_CONCURRENT_REQUESTS)} is outside ` +
+        '1–256. Zero would send nothing; past a few hundred it no longer protects the tenant.',
+    );
+  }
+  if (config.MCP_MAX_CALLS_PER_MINUTE < 1 || config.MCP_MAX_CALLS_PER_MINUTE > 10_000) {
+    problems.push(
+      `MCP_MAX_CALLS_PER_MINUTE=${String(config.MCP_MAX_CALLS_PER_MINUTE)} is outside 1–10000. ` +
+        'Zero would refuse every call; past that it limits nothing a model could do.',
+    );
+  }
+
   // A write cut off early is the costliest failure there is — it may have been applied — so it
   // must never be the one given less time.
   if (config.IVANTI_WRITE_TIMEOUT_MS < config.IVANTI_TIMEOUT_MS) {

@@ -146,6 +146,19 @@ export const envSchema = z.object({
    * CentralConfig, whose calls open and close sessions.
    */
   IVANTI_WRITE_TIMEOUT_MS: z.coerce.number().int().default(30_000),
+  /**
+   * How many requests this process may have in flight to the tenant at once, across every
+   * conversation and surface. Past it a request waits its turn, for as long as its own timeout,
+   * and one still waiting then fails as never sent. The tenant is the ceiling, not this server.
+   * The range is a rule in `validate-config.ts`.
+   */
+  IVANTI_MAX_CONCURRENT_REQUESTS: z.coerce.number().int().default(16),
+  /**
+   * Tool calls one conversation may make in a minute. Past it a call is refused with how long to
+   * wait — a model in a loop, or a client replaying one, stops hammering the tenant. Under `oauth`
+   * a person's sessions are themselves capped (`MCP_MAX_SESSIONS_PER_SUBJECT`).
+   */
+  MCP_MAX_CALLS_PER_MINUTE: z.coerce.number().int().default(120),
 
   /**
    * The ConfigDB tenant, e.g. `https://config-<tenant>/`.

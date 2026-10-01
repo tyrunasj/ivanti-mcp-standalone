@@ -128,6 +128,8 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
               : { pinnedRole: config.IVANTI_IMPERSONATION_ROLE }),
             // The handshake is POSTs end to end, so it gets the write budget.
             timeoutMs: config.IVANTI_WRITE_TIMEOUT_MS,
+            // The person's requests count against the same cap as everyone else's.
+            ...(ivanti.limiter === undefined ? {} : { limiter: ivanti.limiter }),
             logger: deps.logger,
           })
       : undefined;
@@ -144,12 +146,19 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
   // costs a map entry rather than a copy of every document.
   const resources = selectResources(config, toolContext);
 
-  const instructions = buildInstructions({
-    capability: deps.ivanti?.capability,
-    mode: config.MCP_MODE,
-    ...(config.AUTH_MODE === undefined ? {} : { authMode: config.AUTH_MODE }),
-    resourceUris: resources.map((resource) => resource.uri),
-  });
+  const instructionsFor = (withToken: boolean): string | undefined =>
+    buildInstructions({
+      capability: deps.ivanti?.capability,
+      mode: config.MCP_MODE,
+      ...(config.AUTH_MODE === undefined || !withToken ? {} : { authMode: config.AUTH_MODE }),
+      resourceUris: resources.map((resource) => resource.uri),
+    });
+  const instructions = instructionsFor(true);
+  // A conversation that carries no token is told to ask who it is helping, whatever AUTH_MODE
+  // says: with stdio beside an `oauth` HTTP transport, the stdio conversation was told the sign-in
+  // already named the person — and the gate, finding no token, refused every call until `act_as`.
+  // Built once too; identical to the other wherever AUTH_MODE is not `oauth`.
+  const instructionsWithoutToken = config.AUTH_MODE === 'oauth' ? instructionsFor(false) : instructions;
 
   // Once, like the tools: it is a property of the deployment, not of a session.
   const manifest = fingerprintManifest(tools, instructions);
@@ -159,10 +168,11 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
     resourceUris: resources.map((resource) => resource.uri),
     manifest,
     create: (context: CallContext): McpConnection => {
+      const sent = context.identity.provenance === 'verified' ? instructions : instructionsWithoutToken;
       const server = new McpServer(
         { name: SERVER_NAME, version: SERVER_VERSION },
         // Said once, at connect time, rather than repeated in every tool description.
-        instructions === undefined ? {} : { instructions },
+        sent === undefined ? {} : { instructions: sent },
       );
 
       // Unset, the SDK drops these on the floor. Warn rather than error, and no stack: the HTTP
@@ -190,6 +200,7 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
         deps.logger,
         config.MCP_IDENTITY_IDLE_TTL_SECONDS * 1000,
         manifest,
+        config.MCP_MAX_CALLS_PER_MINUTE,
       );
       endOnInitialize(server, endConversation);
       registerResources(server, resources, mayAnswer, deps.logger);

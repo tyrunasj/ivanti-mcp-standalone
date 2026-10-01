@@ -180,7 +180,9 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // Named from the stored record, never from a list of field names: `Owner` is this
         // tenant's spelling of the assignment and another tenant's is its own.
         const acting = context.impersonation?.session()?.loginId ?? context.pin?.person()?.loginId;
-        const stamped = sessionStampedFields(created, written, acting);
+        // The server's own ownership stamp counts as written: in `enduser` it sends `CreatedBy`
+        // itself, and crediting that to Ivanti's session told the model nothing had asked for it.
+        const stamped = sessionStampedFields(created, [...written, ...Object.keys(owner)], acting);
 
         return jsonResult({
           object: entitySet,

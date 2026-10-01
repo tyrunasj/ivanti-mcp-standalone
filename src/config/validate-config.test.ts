@@ -55,6 +55,17 @@ describe('validateConfig', () => {
     expect(validateConfig(config())).toEqual([]);
   });
 
+  it.each([
+    ['IVANTI_MAX_CONCURRENT_REQUESTS', 0],
+    ['IVANTI_MAX_CONCURRENT_REQUESTS', 257],
+    ['MCP_MAX_CALLS_PER_MINUTE', 0],
+    ['MCP_MAX_CALLS_PER_MINUTE', 10_001],
+  ] as const)('refuses %s=%i, outside what protects the tenant without stopping it', (setting, value) => {
+    const problems = validateConfig(config({ [setting]: value }));
+
+    expect(problems).toEqual([expect.stringContaining(`${setting}=${String(value)} is outside`)]);
+  });
+
   it('refuses a configuration that serves nobody', () => {
     const problems = validateConfig(config({ STDIO_TRANSPORT_ON: false }));
 

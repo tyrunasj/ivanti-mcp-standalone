@@ -87,7 +87,8 @@ async function customerField(
  * mine` are different questions, and only one of them is the one that was asked.
  *
  * The parentheses only hold if the caller's own do, so the caller's filter is checked HERE, on
- * its own, before it is wrapped. `buildQuery` checks what is sent, and by then it is too late:
+ * its own, before it is wrapped — and Ivanti honours this wrapper only because it comes FIRST,
+ * with the caller held to the shapes `assertSupportedFilter` allows (see `findMisreadGrouping`). `buildQuery` checks what is sent, and by then it is too late:
  * `A) or (B` wrapped is `(A) or (B) and mine`, which balances — and returns everyone's A.
  */
 export async function scopeToOwnRecords(

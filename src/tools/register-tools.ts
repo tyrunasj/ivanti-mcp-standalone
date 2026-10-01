@@ -268,6 +268,8 @@ export function registerTools(
   idleMs?: number,
   /** Stamped on every usage line, so the report can compare one version of the text with another. */
   manifest?: ManifestFingerprint,
+  /** `MCP_MAX_CALLS_PER_MINUTE`; omitted, nothing is limited — the shape every test wants. */
+  maxCallsPerMinute?: number,
 ): RegisteredTools {
   // One pin per conversation, and a new conversation gets a new one: re-creating is the whole of
   // "this conversation is over", and it leaves the pin's own rules with no reset to be tricked
@@ -275,6 +277,8 @@ export function registerTools(
   let pin = createSessionPin(context.identity);
   let bound: CallContext = { ...context, pin };
   let lastCallAt = Date.now();
+  // When each call of the last minute arrived, oldest first — this conversation's own.
+  const recentCalls: number[] = [];
   // Which conversation a running call belongs to. A handler captures the pin it was given, so one
   // that is still running when its conversation ends is holding a discarded object — and `act_as`
   // would pin THAT one and report success, leaving the model certain it had an identity while
@@ -522,6 +526,23 @@ export function registerTools(
     targets: readonly string[],
   ): Promise<CallToolResult> => {
     const at = Date.now();
+
+    // First, before the gate: a model in a loop, or a client replaying one, is stopped here rather
+    // than at the tenant — `act_as` included, since naming people over and over is the loop too.
+    if (maxCallsPerMinute !== undefined) {
+      while (recentCalls.length > 0 && at - (recentCalls[0] ?? at) >= 60_000) recentCalls.shift();
+      if (recentCalls.length >= maxCallsPerMinute) {
+        const retryAfter = Math.max(1, Math.ceil(((recentCalls[0] ?? at) + 60_000 - at) / 1000));
+        logger.warn('tool call rate limited', { tool: tool.name, ...session(), limit: maxCallsPerMinute });
+        noteOutcome('RateLimited');
+        return errorResult(
+          `This conversation has made ${String(maxCallsPerMinute)} calls in the last minute, the ` +
+            `most it may. Wait ${String(retryAfter)} s, then try again.`,
+        );
+      }
+      recentCalls.push(at);
+    }
+
     const quiet = idleMs !== undefined && at - lastCallAt >= idleMs;
     lastCallAt = at;
     if (quiet) {

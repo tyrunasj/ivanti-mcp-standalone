@@ -11,7 +11,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="$(node -p "require('$ROOT/package.json').version")"
+# The path travels as an argument, never inside the JavaScript source.
+VERSION="$(node -p 'require(process.argv[1]).version' "$ROOT/package.json")"
+# It names a directory that is removed below, so it must be a version and nothing else.
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]] || { echo "not a version: $VERSION" >&2; exit 1; }
 OUT="${1:-$ROOT/release}"
 STAGE="$OUT/ivanti-mcp-$VERSION"
 

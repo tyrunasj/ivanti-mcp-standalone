@@ -10,6 +10,7 @@ import {
   pathOf,
   ResponseTooLargeError,
 } from '../../ivanti/http/errors.js';
+import { IvantiBusyError } from '../../ivanti/http/request-limiter.js';
 import { isReadMethod } from '../../ivanti/http/exchange.js';
 import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
 import { noteOutcome, notePersonRefused } from '../../usage/call-usage.js';
@@ -180,6 +181,13 @@ export async function runTool(
     if (error instanceof UnknownEntityError) {
       logger.debug('tool rejected a name', { tool, entity: error.entity });
       return errorResult(error.message);
+    }
+
+    // Never sent: this server's own cap on requests to the tenant stayed full. Not Ivanti's
+    // failure, and not a write that may have been applied — the model is told to try again.
+    if (error instanceof IvantiBusyError) {
+      logger.warn('ivanti request cap reached; request not sent', { tool, limit: error.limit });
+      return errorResult(`${error.message} Nothing was changed. Try again in a moment.`);
     }
 
     // Ivanti answered, with more than the caller agreed to hold. Nothing failed.

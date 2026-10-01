@@ -67,7 +67,7 @@ export interface ToolStats {
 export interface UsageReport {
   calls: number;
   conversations: number;
-  /** Lines that were not JSON, or were JSON but not one of ours. */
+  /** Lines carrying no JSON object. JSON that is not one of ours is ignored, not counted. */
   skipped: number;
   tools: ToolStats[];
   resources: { uri: string; reads: number; resultChars: number }[];
@@ -146,7 +146,8 @@ function distribution(values: readonly number[]): Distribution {
   return {
     p50: percentile(values, 50),
     p95: percentile(values, 95),
-    max: values.length === 0 ? 0 : Math.max(...values),
+    // Not `Math.max(...values)`: spreading a large log's values overflows the call stack.
+    max: values.reduce((most, value) => Math.max(most, value), 0),
     total: values.reduce((sum, value) => sum + value, 0),
   };
 }
@@ -155,9 +156,14 @@ export function summarise(parsed: ReturnType<typeof parseLog>): UsageReport {
   const byTool = new Map<string, ToolLine[]>();
   const byConversation = new Map<string, ToolLine[]>();
   for (const line of parsed.tools) {
-    byTool.set(line.tool, [...(byTool.get(line.tool) ?? []), line]);
+    // Appended in place: copying the array on every line made a large log quadratic.
+    const forTool = byTool.get(line.tool) ?? [];
+    forTool.push(line);
+    byTool.set(line.tool, forTool);
     const key = conversationOf(line);
-    byConversation.set(key, [...(byConversation.get(key) ?? []), line]);
+    const forConversation = byConversation.get(key) ?? [];
+    forConversation.push(line);
+    byConversation.set(key, forConversation);
   }
 
   // A retry is the same tool called again, in the same conversation, straight after it failed.

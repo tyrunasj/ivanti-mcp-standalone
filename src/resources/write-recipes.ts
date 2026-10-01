@@ -31,8 +31,8 @@ A note is not an operation, it is a record in \`Journals\`. What is not guessabl
 Some objects refuse a create over fields whose metadata says \`nullable: true\`, and no API lists
 them. Read the 400: it names them, and the refusal resolves each display name to the field to set.
 
-Known on \`Task\`: \`TaskType\`, \`Owner\` and \`OwnerTeam\` — all three report \`nullable: true\`
-and all three are refused when absent.
+Known on \`Task\`: \`TaskType\` reports \`nullable: true\` and a create without it is refused
+(\`Required field Task.TaskType\`).
 
 ## Omitting a validated field is not skipping it
 
@@ -61,8 +61,8 @@ characteristic failure is answering 200 over a record that did not change, so a 
 ## Incident lifecycle
 
 Required fields are conditional: an incident reaches \`Logged\` with almost nothing, \`Active\`
-needs Category and Owner, and \`Resolved\` additionally needs CauseCode, Resolution, Description
-and Customer. A create that succeeded yesterday can be refused today because the status differs.
+needs Category, Owner and Team, and \`Resolved\` additionally needs CauseCode, Resolution,
+Description and Customer. A create that succeeded yesterday can be refused today because the status differs.
 
 Collect the fields before trying — \`IncidentNumber\` is allocated before validation, so a refused
 create still consumes one and the numbers are not contiguous.

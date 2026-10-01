@@ -71,7 +71,7 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
       'Create one of the subtypes instead.\n\n' +
       'A `validated` flag marks a field whose value comes from a picklist. It is a FLOOR, not a ' +
       'ceiling: it comes from `$metadata`, and a field without the flag may still be backed by a ' +
-      'list the form knows about — `Employee.Department` carries no flag and has 17 values. If a ' +
+      'list the form knows about — `Employee.Department` carries no flag and still has a list. If a ' +
       (registersFormTools(deps)
         ? 'field looks enumerable, try get_pick_list_values regardless of the flag rather than paging '
         : 'field looks enumerable, its values come from a list this credential cannot read — say so rather than paging ') +
