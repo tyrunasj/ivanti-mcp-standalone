@@ -1,6 +1,6 @@
 # Ivanti MCP (standalone) — Design
 
-**Status:** implemented, 0.2.3 · **Updated:** 2026-09-29 · Written 2026-09-10, before any code.
+**Status:** implemented, 0.2.3 · **Updated:** 2026-10-01 · Written 2026-09-10, before any code.
 
 What was decided, why, and — in §10 — what was rejected, so it is not re-litigated. How the
 result works is in [`architecture.md`](./architecture.md); traps in [`notes.md`](./notes.md).
@@ -15,6 +15,7 @@ result works is in [`architecture.md`](./architecture.md); traps in [`notes.md`]
 | 4 | Audiences | Two startup modes: `full` (IT staff) and `enduser` |
 | 5 | Identity | `act_as` once per conversation, gating every other tool; a token's claim replaces the question under `oauth` |
 | 6 | Permissions | No role system in the server — tool annotations and the client's harness; Ivanti's own roles apply under impersonation |
+| 7 | Metrics | Prometheus on a listener of its own, off by default (`METRICS_ON`), loopback by default, with an optional scrape-only token — never on the MCP port (§9e) |
 
 ## 1. Authentication modes
 
@@ -285,6 +286,29 @@ auth mode. Token propagation to Ivanti is settled by §11.
   The indirect cost — failed turns a description causes — is measured by the usage lines and judged
   version against version; see [`usage.md`](./usage.md).
 
+## 9e. Metrics on a port of their own (decided 2026-10-01)
+
+- **A separate listener, never the MCP port.** Every credential that guards the MCP port reaches the
+  tools: under `none` nothing guards it, under `bearer` the scraper would hold the token that calls
+  `update_record` and `delete_record`, and under `oauth` it would need a signed-in identity from the
+  IdP. And whatever fronts the MCP port — an ingress, a tunnel, a TLS proxy — must never route to
+  metrics, which a port of their own makes structural rather than a path rule someone has to keep.
+  `METRICS_PORT` equal to `MCP_PORT` with HTTP on is refused.
+- **Off by default, behind one toggle (`METRICS_ON`).** An internet-facing deployment turns metrics
+  off with one setting. Off, there is no listener, and the other `METRICS_*` settings are ignored
+  rather than refused, so turning them off never needs anything else changed.
+- **Loopback by default, and an optional token of its own.** What is served carries no person
+  names, filters, record ids or ticket text — only tool names, outcomes, HTTP methods and statuses,
+  and timings — but error rates by tool still say what a deployment is used for. `METRICS_BIND`
+  defaults to `127.0.0.1` like `MCP_BIND`; `METRICS_TOKEN` (32 characters or more) is a scrape-only
+  secret, refused when it equals `BEARER_TOKEN` or an Ivanti key, because a scraper must hold a
+  secret that reaches nothing else. Any request a browser sends (`Origin` or `Sec-Fetch-Site`) is
+  refused with 403, closing DNS rebinding from a web page the operator merely visits.
+- **No client library.** The registry is hand-written (`src/metrics/registry.ts`): counters, gauges
+  read at scrape time and histograms, in the text format. A library would be more code shipped,
+  another notice and another thing for a scanner to flag. Instruments are recorded whether or not
+  metrics are on; `METRICS_ON` decides only whether anything can read them.
+
 ## 10. Rejected alternatives
 
 | Rejected | Why |
@@ -314,6 +338,7 @@ auth mode. Token propagation to Ivanti is settled by §11.
 | Failing a pull request on manifest growth | A warning that prevents failed turns can be worth its characters; the usage report judges it, so CI's size check informs. The per-description caps still fail |
 | Pretty-printed JSON results | A third of every result was indentation, re-sent with every later request, and the reader is a model |
 | A release that checks and publishes in one job | The design until 2026-09-29, chosen to build `dist/` once. **Reversed:** `id-token: write` reaches every step of its job, and the checks run every devDependency, so any package in the tree could have signed as the release or pushed a tag. A read-only *Gate* and a *Publish* that installs no npm package, for a second checkout and one artifact hop — [`deployment.md`](./deployment.md#releasing) |
+| Metrics on the MCP port, behind its auth | Every credential that guards the MCP port reaches the tools: under `none` nothing guards it, under `bearer` the scraper holds the token that calls `delete_record`, under `oauth` it needs a signed-in identity from the IdP. And the ingress or proxy in front of the MCP port would route to metrics too. A port of its own (§9e) |
 | Scaling out by hashing `Mcp-Session-Id` at the ingress | Offered by the chart as `sessionAffinity` until 2026-09-29, and never able to work: the pod answering `initialize` mints the id, so the request that opens a session carries nothing to route by. The chart refuses it and more than one replica; scaling out needs a shared session store |
 
 ### Introspection — deferred

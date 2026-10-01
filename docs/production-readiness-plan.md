@@ -76,13 +76,18 @@ and the threat model is published.
 after two failures in a row; the chart's readiness probe uses it. 4, in part — the log lines worth
 an alert are in the Handbook's *Watching it*. 3 — `IVANTI_MAX_CONCURRENT_REQUESTS` caps requests in
 flight to the tenant (a request held back is never sent, and says so), and
-`MCP_MAX_CALLS_PER_MINUTE` limits each conversation (2026-10-01). Left: metrics, dashboards.
+`MCP_MAX_CALLS_PER_MINUTE` limits each conversation (2026-10-01). 2 — Prometheus metrics on a
+port of their own, off by default behind `METRICS_ON`, loopback by default with an optional scrape
+token; the chart renders a metrics Service, an optional ServiceMonitor and a NetworkPolicy rule of
+their own (2026-10-01). 4, further — example alert rules in PromQL, in the Handbook's *Watching it*.
+Left: dashboards, and the rest of the runbook.
 
 1. **Readiness that reflects the tenant (~2 wk):** `/ready` checks that the tenant answers and the
    session is valid, cached for a few seconds; `/health` stays liveness only. The chart's
    readiness probe moves to `/ready`.
 2. **Metrics (~2 wk):** tool calls by tool and outcome, refusals, Ivanti latency and status,
-   sessions active, evictions and 503s, in Prometheus format. Needs decision 2 below.
+   sessions active, evictions and 503s, in Prometheus format. Decision 2 below: a separate port.
+   **Done 2026-10-01.**
 3. **Rate limits and concurrency caps (~2 wk):** per person, and a global cap on concurrent Ivanti
    requests so the server cannot overload the tenant; `429` with `Retry-After`.
 4. **Runbook and alerts (~1 wk):** example alert rules — tenant down, error rate, 503s, restarts —
@@ -151,6 +156,8 @@ the unmeasured list is empty.
 ## Decisions still open
 
 1. **Scale:** deferred 2026-10-01 — one replica; stateless under OAuth if it is reopened.
-2. **Metrics:** a separate port bound inside the cluster, or the main port behind authentication?
+2. **Metrics:** decided 2026-10-01 — a separate port, off by default behind one switch
+   (`METRICS_ON`), loopback by default, with an optional scrape-only token; never the main port,
+   whose every credential reaches the tools. Recorded in `initial-design.md` §9e and §10.
 3. **Pilot:** which tenant — and can a public HTTPS hostname be arranged for Entra?
 4. **Load target:** how many concurrent users, and what latency is acceptable?

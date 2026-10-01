@@ -3,6 +3,7 @@
 
 import type { Logger } from '../../logger.js';
 import { SessionStore, type StoredSession } from './session-store.js';
+import { recordSessionEvicted, recordSessionRefused } from '../../metrics/server-metrics.js';
 
 export interface ClosableSession {
   close: () => void | Promise<void>;
@@ -173,6 +174,7 @@ export class SessionManager<T extends ClosableSession> {
         1,
         Math.ceil(this.store.msUntilIdleFor(this.evictionFloorMs) / 1000),
       );
+      recordSessionRefused();
       this.options.logger.warn('refusing new session, cap reached', {
         cap: this.options.maxSessions,
         retryAfterSeconds,
@@ -223,6 +225,7 @@ export class SessionManager<T extends ClosableSession> {
 
   private evict(victim: StoredSession<T>, reason: string): void {
     this.store.delete(victim.id);
+    recordSessionEvicted();
     this.options.logger.info('session evicted', {
       sessionId: victim.id,
       reason,

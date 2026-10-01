@@ -23,8 +23,14 @@ services:
     # settings belong: inside a container, loopback is the container's own, so
     # the server must listen on every interface OF THE CONTAINER. Who can reach
     # it is decided by the host address in `ports:` below, not by this.
+    #
+    # METRICS_BIND likewise, and inert until METRICS_ON=true in `.env`: off, there is
+    # no metrics listener and the server ignores it. On without METRICS_TOKEN, the
+    # server warns that metrics listen beyond this machine — here the machine is
+    # the container, and who reaches the port is still decided by `ports:` below.
     environment:
       MCP_BIND: 0.0.0.0
+      METRICS_BIND: 0.0.0.0
 
     # PUBLISHED ON THE HOST'S LOOPBACK ONLY, by default. A bare `3000:3000`
     # publishes on every host interface, and Docker writes its own iptables rules
@@ -40,6 +46,11 @@ services:
     # from), not a server setting: the server never reads it.
     ports:
       - '${MCP_PUBLISH_ADDR:-127.0.0.1}:${MCP_PORT:-3000}:${MCP_PORT:-3000}'
+      # Metrics, with METRICS_ON=true: uncomment to scrape from this host. Loopback
+      # by default for the same reason — Docker's rules sit ahead of ufw — and a
+      # scraper elsewhere is METRICS_PUBLISH_ADDR plus a METRICS_TOKEN, never the
+      # proxy in front of the MCP port: that one must not route to /metrics.
+      # - '${METRICS_PUBLISH_ADDR:-127.0.0.1}:${METRICS_PORT:-9464}:${METRICS_PORT:-9464}'
 
     # The API key as a file rather than an environment variable: `docker inspect`
     # and `/proc/<pid>/environ` both show the environment, a mounted secret shows

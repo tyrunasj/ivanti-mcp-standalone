@@ -94,13 +94,17 @@ oauth:
 secrets:
   # Recommended. Keys: ivanti-api-key, bearer-token (only for authMode=bearer),
   # ivanti-central-config-api-key (only with ivanti.configUrl — NOT the tenant key:
-  # it comes from the ConfigDB tenant's CentralConfigApiKey group).
+  # it comes from the ConfigDB tenant's CentralConfigApiKey group), metrics-token
+  # (only with metrics.token — a secret of its own, never one of the others).
   existingSecret: ""
   # Development only — puts the values in the release, and therefore in Helm history.
   create: false
   ivantiApiKey: ""
   bearerToken: ""
   centralConfigApiKey: ""
+  # The scrape token, with metrics.token. At least 32 characters, and none of the
+  # keys above: whatever scrapes holds it, so it must reach nothing but the metrics.
+  metricsToken: ""
   mountPath: /run/secrets
 
 # The tenant hostname must resolve INSIDE the pod, which is a different question
@@ -136,6 +140,29 @@ networkPolicy:
   from: []
   # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
   # - podSelector: { matchLabels: { app: my-agent } }
+
+# Prometheus metrics, on a port and a Service of their own — never the main ones.
+# Every credential that guards the MCP port reaches the tools, so a scraper must
+# not need one; and whatever fronts the MCP port (the ingress, a tunnel) must never
+# route to /metrics. The Ingress names the main Service only, so it cannot.
+# Counters name no person or record, but error rates by tool still say what a
+# deployment is used for: fence the port with `from`, or set `token`, or both.
+metrics:
+  enabled: false        # METRICS_ON. Off by default; leave it off on an internet-facing release unless something in-cluster scrapes it.
+  port: 9464            # METRICS_PORT. The pod binds METRICS_BIND=0.0.0.0; the Service below is ClusterIP only.
+  token: false          # true: mount key `metrics-token` from the secret as METRICS_TOKEN_FILE.
+  # NetworkPolicy peers allowed to reach the metrics port (e.g. the monitoring
+  # namespace). Empty = pods in the release's own namespace. A rule of its own:
+  # peers in networkPolicy.from reach the MCP port only, these the metrics port
+  # only. Applies only while the NetworkPolicy renders — `auto` still means
+  # authMode=none; set networkPolicy.enabled=true to fence metrics under bearer
+  # or oauth.
+  from: []
+  # - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+  serviceMonitor:
+    enabled: false      # needs the Prometheus Operator CRDs (monitoring.coreos.com/v1)
+    interval: 30s
+    labels: {}          # e.g. { release: kube-prometheus-stack }, whatever your Prometheus selects on
 
 # Measured (docs/handbook.html, "How much memory it needs"), the 0.3.1 image on
 # Linux: ~104 MiB resident idle, plus ~64 KiB per held session — 167 MiB at 1,000.

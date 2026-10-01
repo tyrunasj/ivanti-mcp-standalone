@@ -25,6 +25,7 @@ import { sendJson } from './http/respond.js';
 import { resolveRoute } from './http/resolve-route.js';
 import { SessionManager, type SessionSlot } from './http/session-manager.js';
 import { isOriginAllowed } from './http/validate-origin.js';
+import { recordHttpRejected } from '../metrics/server-metrics.js';
 
 const SWEEP_INTERVAL_MS = 30_000;
 
@@ -76,23 +77,29 @@ export class ListenError extends Error {
 }
 
 /** Why a bind failed, in the words of the setting that fixes it. */
-function explainListenFailure(error: NodeJS.ErrnoException, bind: string, port: number): string {
+export function explainListenFailure(
+  error: NodeJS.ErrnoException,
+  bind: string,
+  port: number,
+  /** Which settings to name: the metrics listener has its own. */
+  settings: { bind: string; port: string } = { bind: 'MCP_BIND', port: 'MCP_PORT' },
+): string {
   const where = `Cannot listen on ${bind}:${String(port)}`;
   switch (error.code) {
     case 'EADDRINUSE':
       return (
-        `${where}: the port is already in use. Stop whatever holds it, or set MCP_PORT to a ` +
-        'free one.'
+        `${where}: the port is already in use. Stop whatever holds it, or set ${settings.port} ` +
+        'to a free one.'
       );
     case 'EACCES':
       return (
         `${where}: permission denied. A port below 1024 needs privileges this server does not ` +
-        'have — the image runs as uid 65532 — so set MCP_PORT to 1024 or above.'
+        `have — the image runs as uid 65532 — so set ${settings.port} to 1024 or above.`
       );
     case 'EADDRNOTAVAIL':
       return (
-        `${where}: this host has no such address. Set MCP_BIND to one of its own addresses, or ` +
-        'to 0.0.0.0 inside a container.'
+        `${where}: this host has no such address. Set ${settings.bind} to one of its own ` +
+        'addresses, or to 0.0.0.0 inside a container.'
       );
     default:
       return `${where}: ${error.message}`;
@@ -160,6 +167,8 @@ export interface HttpServer {
   server: Server;
   /** Closes every session (which releases its Ivanti session), then stops the listener. */
   close: () => Promise<void>;
+  /** Sessions held now, for the metrics gauge. */
+  sessionCount: () => number;
 }
 
 export async function startHttp(
@@ -297,6 +306,7 @@ export async function startHttp(
 
           case 'mcp': {
             if (!isOriginAllowed(request.headers.origin, config.TRUSTED_ORIGINS)) {
+              recordHttpRejected('origin');
               logger.warn('rejected request with untrusted origin', {
                 origin: request.headers.origin,
               });
@@ -306,6 +316,7 @@ export async function startHttp(
 
             const authorization = await authorize(request);
             if (!authorization.authorized) {
+              recordHttpRejected('unauthorized');
               logger.warn('rejected unauthorized request', { reason: authorization.reason });
               if (authorization.challenge !== undefined) {
                 response.setHeader('WWW-Authenticate', authorization.challenge);
@@ -372,6 +383,7 @@ export async function startHttp(
 
   return {
     server: http,
+    sessionCount: () => sessions.size,
     async close(): Promise<void> {
       // Order matters. Closing the sessions ends their SSE streams, which is what lets
       // `http.close()` finish at all; doing it the other way round waits forever on the stream it

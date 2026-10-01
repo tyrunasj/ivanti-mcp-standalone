@@ -15,6 +15,7 @@ import {
 import { IvantiApiError } from '../ivanti/http/errors.js';
 import type { ImpersonatedSession } from '../ivanti/session/impersonated-session.js';
 import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
+import { sample } from '../metrics/sample.fixture.js';
 import { registerTools, selectTools } from './register-tools.js';
 import type { ToolDefinition } from './tool-definition.js';
 
@@ -130,6 +131,19 @@ describe('registerTools', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('counts every call by tool and outcome', async () => {
+    const registerTool = vi.fn();
+    registerTools({ registerTool } as unknown as McpServer, selectTools(config(), context), CALL, logger());
+    const callback = registerTool.mock.calls[0]?.[2] as (args: Record<string, unknown>) => Promise<unknown>;
+    const before = sample('ivanti_mcp_tool_calls_total', { tool: 'get_version', outcome: 'ok' });
+    const timed = sample('ivanti_mcp_tool_call_duration_seconds_count', { tool: 'get_version' });
+
+    await callback({});
+
+    expect(sample('ivanti_mcp_tool_calls_total', { tool: 'get_version', outcome: 'ok' })).toBe(before + 1);
+    expect(sample('ivanti_mcp_tool_call_duration_seconds_count', { tool: 'get_version' })).toBe(timed + 1);
   });
 
   it('audits every call without ever logging its arguments', async () => {

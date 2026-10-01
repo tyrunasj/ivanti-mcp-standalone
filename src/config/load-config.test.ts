@@ -50,6 +50,19 @@ describe('loadConfig', () => {
     expect(config.BEARER_TOKEN).toBe(FILE_TOKEN);
   });
 
+  it('reads the metrics token from a file, like the other secrets', () => {
+    const readFile = vi.fn().mockReturnValue(`${FILE_TOKEN}\n`);
+
+    const config = loadConfig({ METRICS_ON: 'true', METRICS_TOKEN_FILE: '/run/secrets/metrics-token' }, readFile);
+
+    expect(config.METRICS_TOKEN).toBe(FILE_TOKEN);
+    expect(config.METRICS_ON).toBe(true);
+  });
+
+  it('keeps metrics off unless asked', () => {
+    expect(loadConfig({}).METRICS_ON).toBe(false);
+  });
+
   it('reports schema problems as a ConfigError', () => {
     expect(() => loadConfig({ AUTH_MODE: 'nonsense' })).toThrow(ConfigError);
   });

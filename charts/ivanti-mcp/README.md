@@ -39,13 +39,18 @@ Full notes, including the secret-ownership and DNS traps, are in
 | `server.enduser.quickActions` | `[]` | The tenant's own quick-action names an end user may run, on their own open records. Empty means none. |
 | `ivanti.baseUrl` | — | **Required.** Tenant origin; the `/HEAT` prefix is probed. |
 | `ivanti.maxTier` | — | `odata`, `session` or `admin` — caps the server below what the key can do. |
-| `secrets.existingSecret` | — | Keys `ivanti-api-key`, `bearer-token`, and `ivanti-central-config-api-key` when `ivanti.configUrl` is set. Mounted `0400`. |
+| `secrets.existingSecret` | — | Keys `ivanti-api-key`, `bearer-token`, `ivanti-central-config-api-key` when `ivanti.configUrl` is set, and `metrics-token` when `metrics.token` is. Mounted `0400`. |
 | `ivanti.configUrl` | — | The ConfigDB tenant. With its key in the secret, `act_as` signs in to Ivanti AS the person and every surface follows them. |
 | `ivanti.impersonationRole` | — | `full` only. Pins the role an impersonated session opens under; refused when the person does not hold it. |
 | `server.enduser.role` | — | The self-service role an impersonated `enduser` session opens under; empty means the server default, `SelfServiceMobile`. |
 | `replicaCount` | `1` | Refused above 1 — sessions are in memory. `0` parks the release. |
 | `rolloutToken` | — | Change it to roll the pod after rotating a key in `existingSecret`; the key is read once, at startup. |
 | `networkPolicy.enabled` | `auto` | `auto` = on exactly when `authMode=none`. Admits `networkPolicy.from`, by default pods in the release namespace. |
+| `metrics.enabled` | `false` | `METRICS_ON`. Prometheus metrics on a port and a ClusterIP Service of their own, `<fullname>-metrics` — never the main Service, so the Ingress cannot route to them. Leave off on an internet-facing release unless something in-cluster scrapes it. |
+| `metrics.port` | `9464` | `METRICS_PORT`. Refused when equal to `server.port`. |
+| `metrics.token` | `false` | Mounts key `metrics-token` from the secret as `METRICS_TOKEN_FILE`: a scrape-only token, at least 32 characters, never one of the other keys. |
+| `metrics.from` | `[]` | NetworkPolicy peers admitted to the metrics port, and only to it; empty = pods in the release namespace. Applies only while the NetworkPolicy renders — `auto` still follows `authMode`. |
+| `metrics.serviceMonitor.enabled` | `false` | Needs the Prometheus Operator CRDs and `metrics.enabled`. Sends the token when `metrics.token` is set; `labels` for your Prometheus's selector. |
 | `server.maxSessionsPerSubject` | — | `MCP_MAX_SESSIONS_PER_SUBJECT`, `oauth` only. Past it, that person's least recently used session closes. |
 | `ivanti.timeoutMs` / `ivanti.writeTimeoutMs` | — | `IVANTI_TIMEOUT_MS` / `IVANTI_WRITE_TIMEOUT_MS`; empty = the server defaults, 10000 and 30000. |
 | `ivanti.maxConcurrentRequests` | — | `IVANTI_MAX_CONCURRENT_REQUESTS`: requests in flight to the tenant at once; empty = the server default (16) |

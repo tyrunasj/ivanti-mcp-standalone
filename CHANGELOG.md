@@ -31,6 +31,16 @@ full list of merged changes is on each [GitHub release](https://github.com/tyrun
 - **Filters Ivanti would misread are refused before sending**, with how to rewrite them: a group
   anywhere but the start, an `and` after an `or` in the same group, and `not`. Ivanti answers each
   with a 200 and the wrong rows — `not` with every row.
+- **Prometheus metrics, off by default.** `METRICS_ON=true` serves `GET /metrics` on a port of its
+  own (`METRICS_PORT`, 9464), never the MCP port, bound to `METRICS_BIND` (`127.0.0.1`), with an
+  optional scrape-only `METRICS_TOKEN` / `_FILE`. Tool calls by tool and outcome, Ivanti requests by
+  method and status, latencies, sessions, evictions and refusals, readiness, memory — never a
+  person, filter, record or ticket text. A browser's request is refused (403). Startup refuses a
+  metrics port equal to `MCP_PORT`, a token under 32 characters, and a token equal to another
+  secret, only while metrics are on. The chart gains `metrics.*`: a Service of its own the Ingress
+  never routes to, an optional ServiceMonitor, and a NetworkPolicy rule. Nothing changes on upgrade
+  unless you turn it on; leave it off on an internet-facing deployment unless something private
+  scrapes it.
 - `create_record` in `enduser` no longer credits Ivanti's session with the `CreatedBy` the server
   stamped itself. The third-party notices now include nested dependencies.
 

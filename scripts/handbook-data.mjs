@@ -23,9 +23,11 @@ import { connectionFixture } from '../src/ivanti/connection.fixture.js';
 import { selectTools } from '../src/tools/register-tools.js';
 import { registerResources, selectResources } from '../src/resources/register-resources.js';
 import { buildInstructions } from '../src/server/instructions.js';
+import { envSchema } from '../src/config/env-schema.js';
 
 const HANDBOOK = new URL('../docs/handbook.html', import.meta.url);
 const DATA_LINE = /^const DATA = (.*);$/m;
+const ENV_LINE = /^const ENV = (.*);$/m;
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
@@ -141,6 +143,16 @@ if (mode === '--write') {
 } else if (mode === '--check') {
   if (next !== html) {
     console.error('docs/handbook.html describes a different tool surface from the code. Run `pnpm handbook:sync`.');
+    process.exit(1);
+  }
+  // The settings reference is written by hand — it carries examples the schema cannot — so it is
+  // not regenerated, only held to the schema: every setting the server reads must be in it. Settings
+  // shipped without an entry went unnoticed until an admin asked where they were. One way only:
+  // the reference also documents Node's own variables, which the schema does not read.
+  const documented = new Set(JSON.parse(ENV_LINE.exec(html)?.[1] ?? '[]').flatMap((group) => group.vars.map((v) => v.name)));
+  const undocumented = Object.keys(envSchema.shape).filter((key) => !documented.has(key) && !documented.has(`${key}_FILE`));
+  if (undocumented.length > 0) {
+    console.error(`docs/handbook.html's settings reference (const ENV) lacks: ${undocumented.join(', ')}. Add an entry for each.`);
     process.exit(1);
   }
   console.log('handbook data matches the code');

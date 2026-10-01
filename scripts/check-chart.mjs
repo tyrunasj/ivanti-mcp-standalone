@@ -26,6 +26,10 @@ const BASE = {
 
 const LONG_TOKEN = 'x'.repeat(32);
 
+/** The development-secret path, valid as it stands: `secrets.create` with every key it needs. */
+const DEV_SECRET = { 'secrets.existingSecret': null, 'secrets.create': 'true', 'secrets.ivantiApiKey': 'k', 'secrets.bearerToken': LONG_TOKEN };
+const METRICS_TOKEN = 'm'.repeat(32);
+
 /**
  * `set`: values over BASE (`null` drops a BASE value). `refuses`: the guard's message
  * must match. `has` / `lacks`: strings the rendered manifests must / must not contain.
@@ -81,6 +85,46 @@ const CASES = [
   { name: 'optional server settings', set: { 'server.maxSessionsPerSubject': '5', 'ivanti.timeoutMs': '15000', 'ivanti.writeTimeoutMs': '45000',
     'ivanti.configUrl': 'https://config.example.com', 'ivanti.impersonationRequired': 'true' },
   has: ['MCP_MAX_SESSIONS_PER_SUBJECT', 'IVANTI_TIMEOUT_MS', 'IVANTI_WRITE_TIMEOUT_MS', 'IVANTI_IMPERSONATION_REQUIRED', 'IVANTI_CENTRAL_CONFIG_API_KEY_FILE'] },
+
+  // Metrics: a port, a Service and a NetworkPolicy rule of their own — never the MCP ones,
+  // since every credential guarding that port reaches the tools. Off, nothing renders and
+  // the other metrics.* values are ignored, as the server ignores METRICS_* when off.
+  { name: 'metrics off: nothing renders, other metrics values ignored',
+    set: { 'metrics.port': '3000', 'metrics.token': 'true', 'metrics.from[0].podSelector.matchLabels.app': 'prometheus' },
+    lacks: ['METRICS_', 'name: metrics', 'ivanti-mcp-metrics', 'kind: ServiceMonitor', 'metrics-token', 'app: prometheus'] },
+  { name: 'metrics on (bearer: the NetworkPolicy stays off, as auto says)', set: { 'metrics.enabled': 'true' },
+    has: ['METRICS_ON', 'METRICS_BIND', 'METRICS_PORT', '- name: metrics\n              containerPort: 9464', 'name: ivanti-mcp-metrics',
+      'app.kubernetes.io/component: metrics', 'targetPort: metrics'],
+    lacks: ['METRICS_TOKEN_FILE', 'kind: ServiceMonitor', 'kind: NetworkPolicy'] },
+  { name: 'metrics token from the existing secret', set: { 'metrics.enabled': 'true', 'metrics.token': 'true' },
+    has: ['METRICS_TOKEN_FILE, value: "/run/secrets/metrics-token"'] },
+  { name: 'metrics on the MCP port', set: { 'metrics.enabled': 'true', 'metrics.port': '3000' }, refuses: /metrics\.port and server\.port are both 3000/ },
+  { name: 'ServiceMonitor with metrics off', set: { 'metrics.serviceMonitor.enabled': 'true' }, refuses: /serviceMonitor\.enabled needs metrics\.enabled/ },
+  { name: 'ServiceMonitor with a token', set: { 'metrics.enabled': 'true', 'metrics.token': 'true', 'metrics.serviceMonitor.enabled': 'true',
+    'metrics.serviceMonitor.labels.release': 'kube-prometheus-stack' },
+  has: ['kind: ServiceMonitor', 'path: /metrics', 'interval: 30s', 'release: kube-prometheus-stack', 'type: Bearer',
+    'credentials:\n          name: ivanti-mcp-secrets\n          key: metrics-token'] },
+  { name: 'ServiceMonitor without a token', set: { 'metrics.enabled': 'true', 'metrics.serviceMonitor.enabled': 'true' },
+    has: ['kind: ServiceMonitor'], lacks: ['authorization:', 'metrics-token'] },
+
+  { name: 'dev secret, metrics token missing', set: { ...DEV_SECRET, 'metrics.enabled': 'true', 'metrics.token': 'true' },
+    refuses: /metrics\.token=true needs a scrape token/ },
+  { name: 'dev secret, short metrics token', set: { ...DEV_SECRET, 'metrics.enabled': 'true', 'metrics.token': 'true', 'secrets.metricsToken': 'change-me' },
+    refuses: /secrets\.metricsToken must be at least 32 characters/ },
+  { name: 'dev secret, metrics token is the bearer token', set: { ...DEV_SECRET, 'metrics.enabled': 'true', 'metrics.token': 'true', 'secrets.metricsToken': LONG_TOKEN },
+    refuses: /metricsToken is the same as secrets\.bearerToken/ },
+  { name: 'dev secret, metrics token', set: { ...DEV_SECRET, 'metrics.enabled': 'true', 'metrics.token': 'true', 'secrets.metricsToken': METRICS_TOKEN },
+    has: [`metrics-token: "${METRICS_TOKEN}"`, 'METRICS_TOKEN_FILE'] },
+
+  // Each rule pairs its own peers with its own port: whoever is admitted to the MCP port
+  // (the ingress controller) never reaches /metrics, and a scraper never reaches the tools.
+  { name: 'none + metrics: the metrics port has a rule of its own', set: { 'server.authMode': 'none', 'metrics.enabled': 'true',
+    'metrics.from[0].namespaceSelector.matchLabels.purpose': 'monitoring' },
+  has: ['kind: NetworkPolicy', '- podSelector: {}\n      ports:\n        - { protocol: TCP, port: 3000 }',
+    'purpose: monitoring\n      ports:\n        - { protocol: TCP, port: 9464 }'] },
+  { name: 'NetworkPolicy peers do not reach metrics', set: { 'networkPolicy.enabled': 'true', 'networkPolicy.from[0].namespaceSelector.matchLabels.team': 'agents',
+    'metrics.enabled': 'true' },
+  has: ['team: agents\n      ports:\n        - { protocol: TCP, port: 3000 }', '- podSelector: {}\n      ports:\n        - { protocol: TCP, port: 9464 }'] },
 ];
 
 function args(set = {}) {

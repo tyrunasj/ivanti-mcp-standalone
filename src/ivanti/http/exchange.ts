@@ -3,7 +3,7 @@
 
 import type { Logger } from '../../logger.js';
 import { countIvantiRequest } from '../../usage/call-usage.js';
-import type { RequestLimiter } from './request-limiter.js';
+import { IvantiBusyError, type RequestLimiter } from './request-limiter.js';
 import {
   IvantiApiError,
   type IvantiCredential,
@@ -11,6 +11,7 @@ import {
   ResponseTooLargeError,
   scrubErrorBody,
 } from './errors.js';
+import { recordIvantiRequest, recordIvantiRequestNotSent } from '../../metrics/server-metrics.js';
 
 export interface FetchResponse {
   ok: boolean;
@@ -92,7 +93,12 @@ export async function exchange<T>(
 ): Promise<{ status: number; body: T }> {
   if (context.limiter === undefined) return send(url, init, context, read);
   // The slot covers the whole exchange, body included: Ivanti is busy until the body is sent.
-  return context.limiter.run(() => send(url, init, context, read), timeoutFor(init.method, context));
+  return context.limiter
+    .run(() => send(url, init, context, read), timeoutFor(init.method, context))
+    .catch((error: unknown) => {
+      if (error instanceof IvantiBusyError) recordIvantiRequestNotSent();
+      throw error;
+    });
 }
 
 const timeoutFor = (method: string, context: ExchangeContext): number =>
@@ -110,7 +116,12 @@ async function send<T>(
   // Counted when sent, not when answered: a timeout cost the call as much as a reply did.
   countIvantiRequest();
 
-  const line = (status: number, error?: string): Record<string, unknown> => ({
+  // Every other way out logs exactly one `line`, so that is where the request is counted too.
+  const line = (status: number, error?: string): Record<string, unknown> => {
+    recordIvantiRequest(init.method, status, Date.now() - started);
+    return describe(status, error);
+  };
+  const describe = (status: number, error?: string): Record<string, unknown> => ({
     method: init.method,
     path: pathOf(url),
     ...queryOf(url, secrets),
@@ -171,8 +182,12 @@ async function send<T>(
   try {
     body = await read(response);
   } catch (cause) {
-    // Already says what went wrong — a transport that cannot read the body it was asked for.
-    if (cause instanceof IvantiApiError) throw cause;
+    // Already says what went wrong — a transport that cannot read the body it was asked for. It
+    // logs nothing here, so it is counted here: Ivanti did answer.
+    if (cause instanceof IvantiApiError) {
+      recordIvantiRequest(init.method, response.status, Date.now() - started);
+      throw cause;
+    }
     // Ivanti answered; the caller declined to hold that much. Not a failure to reach anyone.
     if (cause instanceof ResponseTooLargeError) {
       logger.debug('ivanti request', line(response.status, 'larger than the caller reads'));

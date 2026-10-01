@@ -43,5 +43,9 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   // real enduser deployment would run under.
   ENDUSER_ROLE: 'SelfServiceMobile',
   LOG_LEVEL: 'info',
+  METRICS_ON: false,
+  METRICS_BIND: '127.0.0.1',
+  METRICS_PORT: 9464,
+  METRICS_TOKEN: undefined,
   ...overrides,
 });
