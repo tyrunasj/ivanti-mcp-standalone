@@ -1,0 +1,33 @@
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
+# Needs the Prometheus Operator's CRDs (monitoring.coreos.com/v1); without them the
+# API server refuses this object, which is the answer you want. It selects the
+# -metrics Service by its component label, which the main Service does not carry.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "ivanti-mcp.metricsName" . }}
+  labels:
+    {{- include "ivanti-mcp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels: {{- include "ivanti-mcp.metricsLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      {{- if .Values.metrics.token }}
+      # `authorization`, not `bearerTokenSecret`, which the operator deprecates.
+      # The Secret is the release's own, in this namespace, as the operator requires.
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "ivanti-mcp.secretName" . }}
+          key: metrics-token
+      {{- end }}
+{{- end }}

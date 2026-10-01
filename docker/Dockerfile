@@ -94,6 +94,9 @@ COPY docker/healthcheck.mjs ./docker/healthcheck.mjs
 
 # Only meaningful with HTTP_TRANSPORT_ON=true; the stdio transport needs no port.
 EXPOSE 3000
+# Prometheus metrics: listens only with METRICS_ON=true (off by default). EXPOSE is
+# documentation — it publishes nothing.
+EXPOSE 9464
 
 # There is no shell, so this is the exec form against the image's own node.
 # The script exits 0 when the HTTP transport is off — a stdio deployment has

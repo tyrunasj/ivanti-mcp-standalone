@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../logger.js';
 import { EVICTION_FLOOR_MS, SessionManager } from './session-manager.js';
+import { sample } from '../../metrics/sample.fixture.js';
 
 const spyLogger = (): {
   logger: Logger;
@@ -133,9 +134,11 @@ describe('SessionManager', () => {
     const m = manager(1, HOUR, logger);
     m.register('a', session());
     clock += EVICTION_FLOOR_MS;
+    const before = sample('ivanti_mcp_sessions_evicted_total');
 
     m.admit();
 
+    expect(sample('ivanti_mcp_sessions_evicted_total')).toBe(before + 1);
     expect(info).toHaveBeenCalledWith(
       'session evicted',
       expect.objectContaining({ sessionId: 'a', reason: 'cap' }),
@@ -432,9 +435,11 @@ describe('SessionManager', () => {
     const { logger, warn } = spyLogger();
     const m = manager(1, HOUR, logger);
     m.register('a', session());
+    const before = sample('ivanti_mcp_sessions_refused_total');
 
     m.admit();
 
+    expect(sample('ivanti_mcp_sessions_refused_total')).toBe(before + 1);
     expect(warn).toHaveBeenCalledWith(
       'refusing new session, cap reached',
       expect.objectContaining({ cap: 1, retryAfterSeconds: EVICTION_FLOOR_MS / 1000 }),

@@ -51,6 +51,10 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.server.port }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
           env:
             # stdio is meaningless in a pod, and loopback inside a container is the
             # container's own — neither is a choice, so neither is a value.
@@ -124,6 +128,17 @@ spec:
             {{- end }}
             {{- with .Values.oauth.identityClaim }}
             - { name: OAUTH_IDENTITY_CLAIM, value: {{ . | quote }} }
+            {{- end }}
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            # A listener of its own, reached through the -metrics Service only. Every
+            # interface of the pod, as MCP_BIND: who reaches it is the NetworkPolicy's
+            # and metrics.token's business, and the Ingress never names that Service.
+            - { name: METRICS_ON,         value: "true" }
+            - { name: METRICS_BIND,       value: "0.0.0.0" }
+            - { name: METRICS_PORT,       value: {{ .Values.metrics.port | quote }} }
+            {{- if .Values.metrics.token }}
+            - { name: METRICS_TOKEN_FILE, value: "{{ .Values.secrets.mountPath }}/metrics-token" }
             {{- end }}
             {{- end }}
             {{- with .Values.extraEnv }}{{- toYaml . | nindent 12 }}{{- end }}

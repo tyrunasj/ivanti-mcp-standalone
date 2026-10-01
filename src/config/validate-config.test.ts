@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import type { Config } from './env-schema.js';
 import { describe, expect, it } from 'vitest';
 import { configFixture } from './config.fixture.js';
 import {
@@ -53,6 +54,38 @@ describe('canonicalUriProblems', () => {
 describe('validateConfig', () => {
   it('accepts a minimal stdio configuration', () => {
     expect(validateConfig(config())).toEqual([]);
+  });
+
+  describe('metrics', () => {
+    const LONG = 'a'.repeat(40);
+    const http: Partial<Config> = {
+      HTTP_TRANSPORT_ON: true,
+      AUTH_MODE: 'none',
+      MCP_PUBLIC_URL: 'http://127.0.0.1:3000/mcp',
+      TRUSTED_ORIGINS: ['http://127.0.0.1:3000'],
+    };
+
+    it('refuses the MCP port, which whatever fronts the MCP listener would reach', () => {
+      const problems = validateConfig(config({ ...http, METRICS_ON: true, METRICS_PORT: 3000 }));
+
+      expect(problems).toEqual([expect.stringContaining('METRICS_PORT and MCP_PORT are both 3000')]);
+    });
+
+    it('refuses a short token, and one that is also a key to the tools or the tenant', () => {
+      expect(validateConfig(config({ METRICS_ON: true, METRICS_TOKEN: 'short' }))).toEqual([
+        expect.stringContaining('METRICS_TOKEN is 5 characters'),
+      ]);
+      expect(
+        validateConfig(config({ METRICS_ON: true, METRICS_TOKEN: LONG, BEARER_TOKEN: LONG })),
+      ).toEqual([expect.stringContaining('METRICS_TOKEN is the same as BEARER_TOKEN')]);
+    });
+
+    // Turning metrics off is one setting: the rest may stay where it is.
+    it('judges nothing while off', () => {
+      expect(
+        validateConfig(config({ ...http, METRICS_ON: false, METRICS_PORT: 3000, METRICS_TOKEN: 'short' })),
+      ).toEqual([]);
+    });
   });
 
   it.each([

@@ -41,6 +41,20 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{/*
+  The metrics Service and ServiceMonitor. The base is cut to 55 so the suffix always
+  survives: truncating "-metrics" away instead would give the metrics Service the
+  main Service's name — the one the Ingress routes to.
+*/}}
+{{- define "ivanti-mcp.metricsName" -}}
+{{- printf "%s-metrics" (include "ivanti-mcp.fullname" . | trunc 55 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "ivanti-mcp.metricsLabels" -}}
+{{ include "ivanti-mcp.selectorLabels" . }}
+app.kubernetes.io/component: metrics
+{{- end -}}
+
 {{- define "ivanti-mcp.secretName" -}}
 {{- if .Values.secrets.existingSecret -}}
 {{- .Values.secrets.existingSecret -}}
@@ -158,4 +172,37 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 {{- $_ := include "ivanti-mcp.networkPolicyEnabled" . -}}
+{{- include "ivanti-mcp.validateMetrics" . -}}
+{{- end -}}
+
+{{/*
+  Metrics refusals. Off, the other metrics.* values are ignored rather than refused,
+  as the server ignores METRICS_* under METRICS_ON=false — turning metrics off is the
+  one toggle. The ServiceMonitor is the exception: it is a separate object, and one
+  that scrapes nothing would sit there looking like monitoring.
+*/}}
+{{- define "ivanti-mcp.validateMetrics" -}}
+{{- $m := .Values.metrics -}}
+{{- if and $m.serviceMonitor.enabled (not $m.enabled) -}}
+{{- fail "metrics.serviceMonitor.enabled needs metrics.enabled: with metrics off there is no listener and no Service for it to scrape." -}}
+{{- end -}}
+{{- if $m.enabled -}}
+{{- if eq (int $m.port) (int .Values.server.port) -}}
+{{- fail (printf "metrics.port and server.port are both %d. Metrics have a port of their own so that nothing in front of the MCP port — the ingress, a tunnel — reaches them; give metrics.port another one. The server refuses the same." (int $m.port)) -}}
+{{- end -}}
+{{- if and $m.token (not .Values.secrets.existingSecret) -}}
+{{- $t := toString (.Values.secrets.metricsToken | default "") -}}
+{{- if not $t -}}
+{{- fail "metrics.token=true needs a scrape token: set secrets.metricsToken, or provide it in secrets.existingSecret under the key metrics-token." -}}
+{{- end -}}
+{{- if lt (len $t) 32 -}}
+{{- fail "secrets.metricsToken must be at least 32 characters — the server refuses a shorter one. Generate it: openssl rand -hex 32" -}}
+{{- end -}}
+{{- range $k := list "ivantiApiKey" "bearerToken" "centralConfigApiKey" -}}
+{{- if eq $t (toString (index $.Values.secrets $k | default "")) -}}
+{{- fail (printf "secrets.metricsToken is the same as secrets.%s. Whatever scrapes holds the metrics token, so it must reach nothing but the metrics; generate one of its own. The server refuses the same." $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

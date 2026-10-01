@@ -514,6 +514,18 @@ the default and ignores every `ENDUSER_*` setting, so any of them set while the 
 refuses to start: the alternative is an employee deployment that serves the whole IT-staff surface
 because one line was forgotten.
 
+**Scraped by Prometheus** — off by default; a port of its own, never the MCP one.
+```bash
+METRICS_ON=true
+METRICS_BIND=0.0.0.0                              # loopback by default; 0.0.0.0 in a container or pod
+METRICS_PORT=9464
+METRICS_TOKEN_FILE=/run/secrets/metrics-token     # optional; set it once the port is reachable from beyond the machine
+```
+Leave it off on an internet-facing deployment unless something private scrapes it, and never route
+the metrics port through the proxy or ingress in front of MCP. `METRICS_ON=false` ignores every
+other `METRICS_*` setting, so the one line turns metrics off. What each shape publishes, and what
+is served, is in [`deployment.md`](./deployment.md) and the Handbook's *Watching it*.
+
 ---
 
 ## Reaching Ivanti
@@ -582,6 +594,12 @@ Ivanti's place is asked again on the next call.
 | `… is set, but MCP_MODE is full` | An `ENDUSER_*` setting in a `full` deployment, which would ignore it. Set `MCP_MODE=enduser` if the deployment is for employees; otherwise remove the setting. |
 | `… must use https://` | A URL that carries a key or decides which tokens are trusted was given as `http://`. Only a loopback host may use plain http. |
 | `BEARER_TOKEN is N characters` | Under 32. Generate one with `openssl rand -base64 32`. |
+| `METRICS_PORT and MCP_PORT are both N` | Metrics have a port of their own so nothing in front of the MCP port reaches them. Give `METRICS_PORT` another one — or `METRICS_ON=false`, which ignores every other `METRICS_*` setting. |
+| `METRICS_TOKEN is N characters` / `METRICS_TOKEN is the same as …` | The scrape token must be at least 32 characters and a secret of its own — never `BEARER_TOKEN` or an Ivanti key, which whatever scrapes would then hold. `openssl rand -base64 32`. |
+| `cannot listen for metrics`, exit `1` | `METRICS_PORT` is taken — under stdio, often by another client's copy of the server, each claiming the same port — or `METRICS_BIND` is not an address of this host. |
+| `metrics listen beyond this machine with no token` at **warn** | `METRICS_BIND` is not loopback and no `METRICS_TOKEN` is set. Expected in a container published on the host's `127.0.0.1`, or a pod behind a NetworkPolicy: the server sees only its own bind. Otherwise set a token. |
+| `/metrics` answers `403` in a browser | By design: a request with `Origin` or `Sec-Fetch-Site` is a browser's, refused so a web page cannot read metrics through DNS rebinding. Use `curl` or Prometheus. |
+| `/metrics` answers `401` | `METRICS_TOKEN` is set and the scraper sent none, or another. Prometheus: `authorization: { credentials_file: … }` pointing at a copy of the same token. |
 | `MCP_MAX_SESSIONS_PER_SUBJECT needs AUTH_MODE=oauth` | Only a verified token names a subject; under `none` and `bearer` every caller is the same one. Remove it, or use `oauth`. |
 | `Authorization server metadata at … names the signing keys at "http://…"` | The IdP's discovery document publishes its keys over plain http. Set `OAUTH_JWKS_URI` to their https address. |
 | `the IdP signing keys could not be refreshed; verifying with the last good set` at **warn** | The IdP is unreachable. Tokens keep verifying against the keys already loaded; one signed by a key those lack answers 503 until the IdP is back. |

@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../logger.js';
 import { IvantiApiError, ResponseTooLargeError } from './errors.js';
 import { exchange, readText, type FetchLike, type FetchResponse } from './exchange.js';
-import type { RequestLimiter } from './request-limiter.js';
+import { IvantiBusyError, type RequestLimiter } from './request-limiter.js';
+import { sample } from '../../metrics/sample.fixture.js';
 
 const reply = (status: number, body: string): FetchResponse => ({
   ok: status >= 200 && status < 300,
@@ -112,6 +113,36 @@ describe('exchange', () => {
     await send(() => Promise.resolve(reply(200, '{}')), logger, { method: 'POST', body: form });
 
     expect(debugged[0]?.fields).toEqual(['ObjectId', 'file']);
+  });
+
+  it('counts every request by method and status, and one never answered as status 0', async () => {
+    const { logger } = recorder();
+    const context = (fetchImpl: FetchLike) => ({ fetchImpl, logger, timeoutMs: 1_000, secrets: [] });
+    const refused = sample('ivanti_mcp_ivanti_requests_total', { method: 'DELETE', status: '423' });
+    const unanswered = sample('ivanti_mcp_ivanti_requests_total', { method: 'DELETE', status: '0' });
+
+    await exchange('https://t/x', { method: 'DELETE', headers: {} }, context(() => Promise.resolve(reply(423, 'locked'))), readText).catch(() => undefined);
+    await exchange('https://t/x', { method: 'DELETE', headers: {} }, context(() => Promise.reject(new Error('reset'))), readText).catch(() => undefined);
+
+    expect(sample('ivanti_mcp_ivanti_requests_total', { method: 'DELETE', status: '423' })).toBe(refused + 1);
+    expect(sample('ivanti_mcp_ivanti_requests_total', { method: 'DELETE', status: '0' })).toBe(unanswered + 1);
+  });
+
+  it('counts a request the cap held back as never sent, and not as a request', async () => {
+    const { logger } = recorder();
+    const busy: RequestLimiter = {
+      run: () => Promise.reject(new IvantiBusyError(1, 1_000)),
+      inFlight: 1,
+      waiting: 0,
+    };
+    const before = sample('ivanti_mcp_ivanti_requests_not_sent_total');
+    const fetchImpl = vi.fn<FetchLike>();
+
+    const failure = exchange('https://t/x', { method: 'GET', headers: {} }, { fetchImpl, logger, timeoutMs: 1_000, secrets: [], limiter: busy }, readText);
+
+    await expect(failure).rejects.toBeInstanceOf(IvantiBusyError);
+    expect(sample('ivanti_mcp_ivanti_requests_not_sent_total')).toBe(before + 1);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('sends through the shared cap, with the request\'s own timeout as how long it may wait', async () => {

@@ -97,6 +97,11 @@ export function isExposedToNetwork(config: Config): boolean {
   return !LOOPBACK_ADDRESSES.has(config.MCP_BIND);
 }
 
+/** Whether the metrics listener answers beyond this machine. */
+export function isMetricsExposedToNetwork(config: Config): boolean {
+  return !LOOPBACK_ADDRESSES.has(config.METRICS_BIND);
+}
+
 /**
  * MCP_PUBLIC_URL doubles as the OAuth resource identifier, which the spec requires to be a
  * canonical URI (RFC 8707 §2). A client sends this exact string as its `resource` parameter
@@ -274,6 +279,10 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
     );
   }
 
+  // Judged only while on. Off, the other METRICS_* settings may stay where they are — flipping the
+  // one toggle is the whole of turning metrics off, which is the safe direction.
+  if (config.METRICS_ON) problems.push(...metricsProblems(config));
+
   // A write cut off early is the costliest failure there is — it may have been applied — so it
   // must never be the one given less time.
   if (config.IVANTI_WRITE_TIMEOUT_MS < config.IVANTI_TIMEOUT_MS) {
@@ -354,6 +363,44 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
           `employee deployment set MCP_MODE=enduser; otherwise remove ${stray.length === 1 ? 'it' : 'them'}.`,
       );
     }
+  }
+
+  return problems;
+}
+
+function metricsProblems(config: Config): string[] {
+  const problems: string[] = [];
+
+  if (config.HTTP_TRANSPORT_ON && config.METRICS_PORT === config.MCP_PORT) {
+    problems.push(
+      `METRICS_PORT and MCP_PORT are both ${String(config.MCP_PORT)}. Metrics have a port of ` +
+        'their own so that nothing in front of the MCP port — an ingress, a tunnel — reaches ' +
+        'them; give METRICS_PORT another one.',
+    );
+  }
+
+  const token = config.METRICS_TOKEN;
+  if (token !== undefined && token.length < MIN_BEARER_TOKEN_LENGTH) {
+    problems.push(
+      `METRICS_TOKEN is ${String(token.length)} characters; it must be at least ` +
+        `${String(MIN_BEARER_TOKEN_LENGTH)}. Generate one with \`openssl rand -base64 32\`.`,
+    );
+  }
+
+  // The point of a scrape token is that leaking it leaks counters. One that is also a key to the
+  // tools or the tenant would hand those to everything that scrapes.
+  const reused = (
+    [
+      ['BEARER_TOKEN', config.BEARER_TOKEN],
+      ['IVANTI_API_KEY', config.IVANTI_API_KEY],
+      ['IVANTI_CENTRAL_CONFIG_API_KEY', config.IVANTI_CENTRAL_CONFIG_API_KEY],
+    ] as const
+  ).find(([, secret]) => token !== undefined && secret === token);
+  if (reused !== undefined) {
+    problems.push(
+      `METRICS_TOKEN is the same as ${reused[0]}. A scraper must hold a secret that reaches ` +
+        'nothing but the metrics; generate one of its own.',
+    );
   }
 
   return problems;

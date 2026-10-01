@@ -233,6 +233,21 @@ export const envSchema = z.object({
   ENDUSER_ROLE: z.string().min(1).default('SelfServiceMobile'),
 
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
+
+  /**
+   * Prometheus metrics, on a listener of their own. Off by default, and a toggle rather than
+   * implied by the port, so an internet-facing deployment turns it off with one setting and
+   * leaves the rest of its configuration alone.
+   *
+   * A separate port, never the MCP one: every credential that guards the MCP port reaches the
+   * tools, and a scraper should hold none of them. See docs/initial-design.md.
+   */
+  METRICS_ON: z.stringbool().default(false),
+  /** Loopback by default, like `MCP_BIND`: exposing it is a separate, explicit act. */
+  METRICS_BIND: z.string().default('127.0.0.1'),
+  METRICS_PORT: z.coerce.number().int().positive().max(65535).default(9464),
+  /** Optional. A scrape-only secret, which must not be any credential that reaches the tools. */
+  METRICS_TOKEN: z.string().min(1).optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;

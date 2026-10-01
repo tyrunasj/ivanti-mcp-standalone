@@ -20,6 +20,8 @@ import { readSdkVersion } from './version.js';
 import { startReadiness, type Readiness } from './server/http/readiness.js';
 import { ListenError, startHttp, type HttpServer } from './server/start-http.js';
 import { startStdio, type StdioServer } from './server/start-stdio.js';
+import { registry as metricsRegistry, watchServer } from './metrics/server-metrics.js';
+import { startMetrics, type MetricsServer } from './server/start-metrics.js';
 
 /**
  * How long a graceful shutdown gets before the process exits regardless.
@@ -162,6 +164,20 @@ async function main(): Promise<void> {
   // then exit. Bounded, because a shutdown that hangs is indistinguishable from one that crashed
   // and ends in SIGKILL either way. Installed for stdio too: without it SIGTERM killed a stdio-only
   // process outright, with the impersonated session still open on the tenant.
+  // Last, once there is something to report: the gauges read what was started above.
+  let metrics: MetricsServer | undefined;
+  if (config.METRICS_ON) {
+    const live = http;
+    watchServer({
+      version: SERVER_VERSION,
+      mcpMode: config.MCP_MODE,
+      ...(readiness === undefined ? {} : { ready: (): boolean => readiness.state().ready }),
+      ...(ivanti?.limiter === undefined ? {} : { limiter: ivanti.limiter }),
+      ...(live === undefined ? {} : { sessions: (): number => live.sessionCount() }),
+    });
+    metrics = await startMetrics(config, logger, metricsRegistry);
+  }
+
   let stopping = false;
   const shutdown = (reason: string): void => {
     if (stopping) return;
@@ -175,7 +191,7 @@ async function main(): Promise<void> {
     }, SHUTDOWN_GRACE_MS);
     deadline.unref();
 
-    void Promise.all([stdio?.close(), http?.close()]).then(
+    void Promise.all([stdio?.close(), http?.close(), metrics?.close()]).then(
       () => process.exit(0),
       (error: unknown) => {
         logger.error('shutdown failed', { error });

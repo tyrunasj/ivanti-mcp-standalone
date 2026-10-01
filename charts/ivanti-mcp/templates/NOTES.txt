@@ -33,6 +33,16 @@ rather than quietly narrowing what an end user may do.
    authentication in front of it, or turn the NetworkPolicy back on.
 {{- end }}
 {{- end }}
+{{- if .Values.metrics.enabled }}
+
+Metrics are on port {{ .Values.metrics.port }}, through svc/{{ include "ivanti-mcp.metricsName" . }} only — never the ingress:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "ivanti-mcp.metricsName" . }} {{ .Values.metrics.port }}:{{ .Values.metrics.port }}
+  curl -s {{ if .Values.metrics.token }}-H "Authorization: Bearer <metrics-token>" {{ end }}localhost:{{ .Values.metrics.port }}/metrics
+{{- if and (not .Values.metrics.token) (ne (include "ivanti-mcp.networkPolicyEnabled" .) "true") }}
+⚠  No metrics.token and no NetworkPolicy: every pod in the cluster can scrape it.
+   Set networkPolicy.enabled=true with metrics.from, or metrics.token.
+{{- end }}
+{{- end }}
 
 Keys are read once, at startup. After rotating one in the Secret, roll the pod:
   kubectl --namespace {{ .Release.Namespace }} rollout restart deploy/{{ include "ivanti-mcp.fullname" . }}

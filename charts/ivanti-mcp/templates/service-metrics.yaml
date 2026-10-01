@@ -1,0 +1,20 @@
+{{- if .Values.metrics.enabled }}
+# Metrics have a Service of their own, ClusterIP only. The Ingress names the main
+# Service, so nothing that fronts the MCP port can route here: every credential
+# guarding that port reaches the tools, and a scraper must hold none of them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ivanti-mcp.metricsName" . }}
+  labels:
+    {{- include "ivanti-mcp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  selector: {{- include "ivanti-mcp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

@@ -15,7 +15,9 @@ are in [`notes.md`](./notes.md). The directory map is in `CLAUDE.md`.
 9. [Transports and auth](#transports-and-auth)
 10. [The manifest, resources and instructions](#the-manifest-resources-and-instructions)
 11. [Server lifecycle](#server-lifecycle)
-12. [Invariants, in full](#invariants-in-full)
+12. [Logging](#logging)
+13. [Metrics](#metrics)
+14. [Invariants, in full](#invariants-in-full)
 
 ## Layout and composition
 
@@ -448,6 +450,47 @@ it needs a create form, which OData cannot see.
   same async-context route the log fields take. [`usage.md`](./usage.md) is how to read it.
 - **Errors are passed as fields, not flattened into strings.** The logger writes an `Error` with its
   name, message and stack, and an `IvantiApiError` by its `toJSON` — path, never URL.
+
+## Metrics
+
+Prometheus metrics on a listener of their own, off unless `METRICS_ON=true`. Why a separate port
+rather than the MCP one behind its auth is decided in
+[`initial-design.md` §9e](./initial-design.md#9e-metrics-on-a-port-of-their-own-decided-2026-10-01).
+
+- **The registry is hand-written** (`src/metrics/registry.ts`): counters, histograms and gauges,
+  rendered in the text format 0.0.4. No client library — more code shipped, another notice, another
+  thing for a scanner to flag, for what fits in one file of about 160 lines.
+- **What the server counts is one module** (`src/metrics/server-metrics.ts`), process-wide, with a
+  `record…` function per event. Label values are the server's own vocabulary — tool name, outcome,
+  HTTP method and status, a rejection reason — and never anything a request carried: a person or a
+  `$filter` in a label would reach whoever scrapes, and make every series unique besides.
+- **Instruments are recorded where the event already happens**, beside the log line that reports
+  it, so the two cannot disagree:
+  - the `tool finished` line in `registerTools` → `ivanti_mcp_tool_calls_total{tool,outcome}` and
+    the call's duration, with the same `outcome` as the usage line;
+  - `exchange()` → `ivanti_mcp_ivanti_requests_total{method,status}` and Ivanti's latency, counted
+    at the one `line` every exit logs (status `0` when nothing answered), plus
+    `…_not_sent_total` when `RequestLimiter` gives up on a slot;
+  - the session manager → `…_sessions_evicted_total` and `…_sessions_refused_total`;
+  - `start-http` → `ivanti_mcp_http_requests_rejected_total{reason}` for an untrusted origin or a
+    failed authorization.
+- **Gauges are read at scrape time, never cached.** `index.ts` wires them once through
+  `watchServer`, after the transports start: build info, readiness (`/ready`'s own state),
+  the limiter's in-flight and waiting counts, the session count, and process memory. A gauge with
+  nothing to report — readiness without HTTP or without Ivanti — is left out rather than written
+  as zero.
+- **Recorded always, readable only when on.** Counting costs an addition, and a branch at every
+  site would cost more; `METRICS_ON` decides only whether `src/server/start-metrics.ts` listens. That
+  listener answers `GET`/`HEAD /metrics` and nothing else (404, 405), refuses any request carrying
+  `Origin` or `Sec-Fetch-Site` with 403 — a browser, so DNS rebinding cannot read it — and with
+  `METRICS_TOKEN` set, answers 401 unless the bearer matches (hashed, then compared in constant
+  time). It warns at startup when bound beyond loopback with no token, and a bind failure names
+  `METRICS_PORT` or `METRICS_BIND` (exit 1), through the same `explainListenFailure` as the MCP
+  listener. Shutdown closes it with the transports.
+- **The rules are in `validateConfig`, judged only while `METRICS_ON`:** a port equal to `MCP_PORT`
+  with HTTP on, a token under 32 characters, and a token equal to `BEARER_TOKEN`, `IVANTI_API_KEY`
+  or `IVANTI_CENTRAL_CONFIG_API_KEY`. Off, the other settings are ignored rather than refused, so
+  the one toggle is the whole of turning metrics off.
 
 ## Invariants, in full
 

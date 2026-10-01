@@ -25,6 +25,13 @@ and **one audience** (`full` and `enduser` are different products — mixing the
 an analyst's tools). Every setting is in `.env.example`; an incomplete configuration exits **78**
 and lists every problem at once.
 
+**Prometheus metrics are off by default in every shape** (`METRICS_ON`). On, they are served on a
+port of their own (`9464`), never the MCP one — every credential guarding the MCP port reaches the
+tools, and whatever fronts it must never route to metrics ([design](./initial-design.md#9e-metrics-on-a-port-of-their-own-decided-2026-10-01)).
+Leave them off on an internet-facing deployment unless something private scrapes them; when on,
+keep the port close (loopback, or a NetworkPolicy) and set `METRICS_TOKEN` once it is reachable from
+beyond the machine. Each shape's settings are below; the Handbook's configurator writes them.
+
 In the commands below, set `VERSION` to a release from
 <https://github.com/tyrunasj/ivanti-mcp-standalone/releases>.
 
@@ -58,6 +65,7 @@ nodejs.org. Then, with the `.env` and `ivanti-mcp.service` the Handbook's config
    sudo install -m 0640 -o root -g ivanti-mcp .env /etc/ivanti-mcp/env
    read -rs -p 'Ivanti API key: ' k; printf %s "$k" | sudo install -m 0640 -o root -g ivanti-mcp /dev/stdin /etc/ivanti-mcp/secrets/ivanti-api-key; unset k
    openssl rand -hex 32 | tr -d '\n' | sudo install -m 0640 -o root -g ivanti-mcp /dev/stdin /etc/ivanti-mcp/secrets/bearer-token   # bearer only
+   openssl rand -hex 32 | tr -d '\n' | sudo install -m 0640 -o root -g ivanti-mcp /dev/stdin /etc/ivanti-mcp/secrets/metrics-token  # metrics with a token only
    ```
 
 4. **Install and start the service:**
@@ -87,6 +95,10 @@ read-only, with no capabilities and a syscall filter.
 - **`MemoryDenyWriteExecute` is deliberately not set** — Node's JIT needs writable-then-executable
   pages, and the failure looks like a segfault.
 - **`RestartPreventExitStatus=78`** — a configuration error will still be one in five seconds.
+- **Metrics:** `METRICS_ON=true` in the env file serves `127.0.0.1:9464`, for a Prometheus or agent
+  on the same host. For one elsewhere: `METRICS_BIND=0.0.0.0` (or one of the host's addresses),
+  `METRICS_TOKEN_FILE=/etc/ivanti-mcp/secrets/metrics-token`, and a firewall rule that admits that
+  Prometheus alone to 9464.
 
 From source: `pnpm install --frozen-lockfile && pnpm build && pnpm start`.
 
@@ -114,6 +126,15 @@ writes its own iptables rules ahead of ufw and firewalld — the host firewall d
 Publish on `127.0.0.1` and put a TLS proxy in front, or publish wider only with `bearer` or `oauth`.
 `docker/compose.yaml` publishes on `127.0.0.1` unless `MCP_PUBLISH_ADDR` (compose interpolation, not
 a server setting) says otherwise.
+
+**Metrics publish the same way.** With `METRICS_ON=true` the server must bind `METRICS_BIND=0.0.0.0`
+inside the container, which `docker/compose.yaml` sets, and the publish address decides who reaches
+port 9464 (the image `EXPOSE`s it). Its ports line is commented out:
+`${METRICS_PUBLISH_ADDR:-127.0.0.1}:${METRICS_PORT:-9464}:${METRICS_PORT:-9464}` keeps it on the
+host's loopback; a Prometheus container on the same Docker network scrapes `ivanti-mcp:9464` without
+publishing at all. Publish wider only with `METRICS_TOKEN_FILE=/run/secrets/metrics-token`. The
+startup warning `metrics listen beyond this machine with no token` is expected here: the server sees
+the `0.0.0.0` bind, not the publish address that decides.
 
 Multi-arch (`amd64`, `arm64`), distroless, uid 65532, no shell and no package manager. **~55 MB to
 pull**, of which 52.6 MB is the distroless Node base; the ~235 MB `docker images` prints is the
@@ -204,6 +225,9 @@ the failure to `helm install`:
 | `http://` for `ivanti.baseUrl`, `ivanti.configUrl`, `oauth.issuer` or `oauth.jwksUri`, except loopback | the server refuses them: anyone on the path reads the key, or swaps the keys tokens are verified against |
 | `secrets.bearerToken` under 32 characters | the server refuses it |
 | `authMode=none` with an ingress, a `LoadBalancer` or a `NodePort` | publishes the tool surface unauthenticated |
+| `metrics.port` equal to `server.port` | whatever fronts the MCP port must never reach the metrics |
+| `metrics.token` with `secrets.create` and a `secrets.metricsToken` that is empty, under 32 characters, or equal to another chart secret | the server refuses it — whatever scrapes holds it |
+| `metrics.serviceMonitor.enabled` while `metrics.enabled` is false | it would scrape a port nothing serves |
 
 `node scripts/check-chart.mjs` lints the chart and renders the defaults and every guard — a refusal
 that renders fails it, and so does a valid configuration that does not. It is in the shared check
@@ -222,17 +246,30 @@ list, so CI and the release gate both run it.
   kubelet's probes are not subject to it, and it is inert on a CNI that does not enforce policy
   (k3s, Calico and Cilium do; flannel alone does not). `true` turns it on under any mode — with an
   ingress, add the controller's namespace to `from`.
-- **Secrets:** `secrets.existingSecret` with keys `ivanti-api-key` and, for bearer auth,
-  `bearer-token`, mounted at `/run/secrets` (`0400`) with `fsGroup: 65532` so the image's user can
+- **Secrets:** `secrets.existingSecret` with keys `ivanti-api-key`, `bearer-token` for bearer auth,
+  and `metrics-token` with `metrics.token: true` — every key is mounted, at `/run/secrets` (`0400`) with `fsGroup: 65532` so the image's user can
   read them. `secrets.create=true` is for development — it puts the values in Helm history. They
   are read once, at startup: see *Rotating a key*. The chart can measure only
-  `secrets.bearerToken`; a `bearer-token` under 32 characters in an existing Secret passes the
-  render and exits 78 at boot.
+  `secrets.bearerToken` and `secrets.metricsToken`; a `bearer-token` or `metrics-token` under 32
+  characters in an existing Secret passes the render and exits 78 at boot.
 - **Probes:** plain `httpGet`, since the image has no shell. Startup and liveness ask `/health`,
   which is unauthenticated and 200 while the process is alive; readiness asks `/ready`, which
   answers 503 once the tenant has failed two checks in a row, a minute apart — the Service stops
   routing here without the pod being restarted. The startup probe allows two minutes, because boot
   probes the tenant and opens the ASMX session.
+- **Metrics** (`metrics.enabled: true`, port `metrics.port`, 9464): the pod binds
+  `METRICS_BIND=0.0.0.0`, and the chart renders a ClusterIP Service of their own,
+  `<release>-metrics`, which the Ingress never names. `metrics.token: true` mounts the Secret's
+  `metrics-token` as `METRICS_TOKEN_FILE`. `metrics.serviceMonitor.enabled` (with `interval` and
+  `labels`) renders a ServiceMonitor — it needs the Prometheus Operator's CRDs — that sends the token
+  as `authorization: { type: Bearer, credentials: { name: <secret>, key: metrics-token } }`.
+  **Under `bearer`, the default, and `oauth`, no NetworkPolicy renders** (`enabled: auto` means
+  `authMode=none`), so `metrics.from` does nothing and every pod in the cluster reaches the metrics
+  port — unless `metrics.token: true`, or `networkPolicy.enabled: true` with `metrics.from` set. Set
+  one whenever metrics are on; the chart's notes warn when neither is. Once the policy renders, the
+  metrics port has a rule of its own: peers from `metrics.from` (empty means the release's own
+  namespace) reach it and nothing else, so the ingress controller in `networkPolicy.from` cannot
+  read metrics and a scraper cannot reach the MCP port.
 
 ## 4. Windows host
 
@@ -264,14 +301,19 @@ server logs as a clean `SIGINT` shutdown; and a restart about 10 s after the pro
   (Node 22.15 or later) — Node does not read the Windows certificate store otherwise.
 - **On the Ivanti application server itself**, keep `MCP_BIND=127.0.0.1` and put IIS in front for
   TLS if clients on other machines need it.
+- **Metrics:** `METRICS_ON=true` in the `env` file serves `127.0.0.1:9464`. For a Prometheus on
+  another machine, `METRICS_BIND=0.0.0.0`, a token in `secrets\metrics-token` (the generated script
+  writes one), and a Windows Firewall rule naming that Prometheus:
+  `New-NetFirewallRule -DisplayName 'Ivanti MCP metrics' -Direction Inbound -Protocol TCP -LocalPort 9464 -RemoteAddress <prometheus> -Action Allow`.
 
 ## Rotating a key
 
-Every secret — the Ivanti API key, the bearer token, the ConfigDB key — is read **once, at
-startup**. Changing it where it lives does nothing until the process restarts, and nothing restarts
+Every secret — the Ivanti API key, the bearer token, the ConfigDB key, the metrics token — is read
+**once, at startup**. Changing it where it lives does nothing until the process restarts, and nothing restarts
 it for you. Rotate without an outage by overlapping: issue the new Ivanti key, deploy and restart
 on it, confirm the startup log reaches the tenant, *then* revoke the old one. A bearer token has no
-overlap — every client holding the old one fails once the server restarts, so change them together.
+overlap — every client holding the old one fails once the server restarts, so change them together;
+the metrics token likewise, with Prometheus's copy.
 
 | Shape | Replace the secret | Then |
 |---|---|---|

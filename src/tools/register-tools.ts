@@ -64,6 +64,7 @@ import { declaredArguments } from './strict-input.js';
 import type { ManifestFingerprint } from './manifest-fingerprint.js';
 import { errorResult } from './shared/result.js';
 import type { CallContext, ToolDefinition } from './tool-definition.js';
+import { recordToolCall } from '../metrics/server-metrics.js';
 
 /** The one tool that answers before anyone is pinned, because it is what does the pinning. */
 const ACT_AS = 'act_as';
@@ -634,6 +635,8 @@ export function registerTools(
             // What this call put into the conversation, in characters — sizes and markers only,
             // never content. `pnpm usage:report` reads these back; see docs/development.md.
             const answered = result === undefined ? 'fault' : result.isError === true ? 'error' : 'ok';
+            const ms = Date.now() - started;
+            recordToolCall(tool.name, usage.outcome ?? answered, ms);
             logger.info('tool finished', {
               tool: tool.name,
               ...session(),
@@ -646,7 +649,7 @@ export function registerTools(
               ...callSize(args, result),
               ...(usage.rowsRead === undefined ? {} : { rowsRead: usage.rowsRead }),
               ivantiRequests: usage.ivantiRequests,
-              ms: Date.now() - started,
+              ms,
             });
           }
         }),
