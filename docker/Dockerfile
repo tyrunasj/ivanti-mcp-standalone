@@ -69,7 +69,7 @@ RUN find node_modules \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) \
 # digest still carried the OpenSSL and glibc that Debian had long since fixed
 # (docs/notes.md). The digest is the multi-arch index.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:5ef534d3db0ac0c43bee379af4ae49cfbfc0ef38a46c94c52d87c68f32f34d8a AS runtime
+FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:ec2313763dd43931543bd03830466e0c409ce73a487e8d46f10db72d3b816c1c AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production

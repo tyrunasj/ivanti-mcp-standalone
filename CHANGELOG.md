@@ -4,8 +4,21 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
-## Unreleased
+## 0.3.2 — 2026-10-05
 
+**Upgrading.** Nothing needs setting, but three things behave differently:
+
+- the Helm chart's readiness probe is now `/ready`, so a pod whose tenant stops answering leaves
+  rotation instead of taking traffic it cannot serve;
+- filters Ivanti misreads are refused with how to rewrite them — anything that sent a group after
+  the start, an `and` after an `or`, or `not` got wrong rows before and gets an error now;
+- requests to the tenant are capped at 16 in flight and tool calls at 120 a minute per
+  conversation; raise `IVANTI_MAX_CONCURRENT_REQUESTS` or `MCP_MAX_CALLS_PER_MINUTE` if a busy
+  deployment hits them (the `ivanti request cap reached` and `tool call rate limited` warnings).
+
+- **Runtime base rebuilt:** `gcr.io/distroless/nodejs22-debian13` now carries `libssl3t64`
+  `3.5.7-1~deb13u3`, for CVE-2026-75804 and CVE-2026-84782. A scan of the image finds nothing
+  critical or high.
 - **`/ready`**, beside `/health`: 503 once the tenant has failed two checks in a row, a minute
   apart, and 200 again on the first that passes. The Helm chart's readiness probe uses it; startup
   and liveness stay on `/health`, so a tenant outage takes a pod out of rotation without
