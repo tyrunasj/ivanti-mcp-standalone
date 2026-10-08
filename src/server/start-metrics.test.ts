@@ -5,6 +5,7 @@ import { createServer as createNetServer, type AddressInfo, type Server as NetSe
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { configFixture } from '../config/config.fixture.js';
 import type { Config } from '../config/env-schema.js';
+import { ConfigError } from '../config/load-config.js';
 import type { Logger } from '../logger.js';
 import { createRegistry } from '../metrics/registry.js';
 import { ListenError } from './start-http.js';
@@ -106,6 +107,16 @@ describe('startMetrics', () => {
 
     await expect(failure).rejects.toBeInstanceOf(ListenError);
     await expect(failure).rejects.toThrow(/already in use.*METRICS_PORT/);
+    expect(logger.info).not.toHaveBeenCalledWith('serving metrics', expect.anything());
+  });
+
+  it('refuses to start without a port rather than pick one', async () => {
+    const logger = spyLogger();
+
+    const failure = startMetrics(metricsConfig({ METRICS_PORT: undefined }), logger, createRegistry());
+
+    await expect(failure).rejects.toBeInstanceOf(ConfigError);
+    await expect(failure).rejects.toThrow(/METRICS_PORT is required/);
     expect(logger.info).not.toHaveBeenCalledWith('serving metrics', expect.anything());
   });
 });

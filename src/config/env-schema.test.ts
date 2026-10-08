@@ -13,7 +13,9 @@ describe('envSchema', () => {
     expect(config.AUTH_MODE).toBeUndefined();
     expect(config.MCP_MODE).toBe('full');
     expect(config.MCP_BIND).toBe('127.0.0.1');
-    expect(config.MCP_PORT).toBe(3000);
+    // No port is assumed: `validateConfig` requires one wherever a listener is on.
+    expect(config.MCP_PORT).toBeUndefined();
+    expect(config.METRICS_PORT).toBeUndefined();
     expect(config.LOG_LEVEL).toBe('info');
     expect(config.TRUSTED_ORIGINS).toEqual([]);
   });

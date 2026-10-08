@@ -8,6 +8,7 @@ import { createImpersonationSlot } from '../auth/impersonation.js';
 import type { TokenVerifier } from '../auth/oauth/verify-token.js';
 import { configFixture } from '../config/config.fixture.js';
 import type { Config } from '../config/env-schema.js';
+import { ConfigError } from '../config/load-config.js';
 import { impersonatedSessionFixture } from '../ivanti/session/impersonated-session.fixture.js';
 import type { Logger } from '../logger.js';
 import { releaseOnClose, type McpConnection } from './create-server.js';
@@ -187,6 +188,17 @@ describe('startHttp: binding', () => {
       'cannot listen on http',
       expect.objectContaining({ code: 'EADDRINUSE', port: taken }),
     );
+    expect(logger.info).not.toHaveBeenCalledWith('listening on http', expect.anything());
+  });
+
+  // `listen(undefined)` would bind a random port and report success.
+  it('refuses to start without a port rather than pick one', async () => {
+    const logger = spyLogger();
+
+    const failure = startHttp(httpConfig({ MCP_PORT: undefined }), logger, deps());
+
+    await expect(failure).rejects.toBeInstanceOf(ConfigError);
+    await expect(failure).rejects.toThrow(/MCP_PORT is required/);
     expect(logger.info).not.toHaveBeenCalledWith('listening on http', expect.anything());
   });
 

@@ -4,6 +4,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Config } from '../config/env-schema.js';
+import { ConfigError } from '../config/load-config.js';
 import { isMetricsExposedToNetwork } from '../config/validate-config.js';
 import type { Logger } from '../logger.js';
 import type { Registry } from '../metrics/registry.js';
@@ -35,6 +36,10 @@ export async function startMetrics(
   logger: Logger,
   registry: Registry,
 ): Promise<MetricsServer> {
+  // Refused by `validateConfig` already; see `startHttp` for why it is checked again.
+  const port = config.METRICS_PORT;
+  if (port === undefined) throw new ConfigError(['METRICS_PORT is required with METRICS_ON=true.']);
+
   const token = config.METRICS_TOKEN;
   const server = createServer((request, response) => {
     answer(request, response, registry, token);
@@ -52,13 +57,13 @@ export async function startMetrics(
   await new Promise<void>((resolve, reject) => {
     const onError = (error: NodeJS.ErrnoException): void => {
       server.off('listening', onListening);
-      const reason = explainListenFailure(error, config.METRICS_BIND, config.METRICS_PORT, {
+      const reason = explainListenFailure(error, config.METRICS_BIND, port, {
         bind: 'METRICS_BIND',
         port: 'METRICS_PORT',
       });
       logger.error('cannot listen for metrics', {
         bind: config.METRICS_BIND,
-        port: config.METRICS_PORT,
+        port,
         code: error.code,
         reason,
       });
@@ -70,13 +75,13 @@ export async function startMetrics(
     };
     server.once('error', onError);
     server.once('listening', onListening);
-    server.listen(config.METRICS_PORT, config.METRICS_BIND);
+    server.listen(port, config.METRICS_BIND);
   });
 
   const address = server.address();
   logger.info('serving metrics', {
     bind: config.METRICS_BIND,
-    port: typeof address === 'object' && address !== null ? address.port : config.METRICS_PORT,
+    port: typeof address === 'object' && address !== null ? address.port : port,
     path: METRICS_PATH,
     token: token !== undefined,
   });
