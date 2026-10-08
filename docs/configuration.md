@@ -594,6 +594,8 @@ Ivanti's place is asked again on the next call.
 | `… is set, but MCP_MODE is full` | An `ENDUSER_*` setting in a `full` deployment, which would ignore it. Set `MCP_MODE=enduser` if the deployment is for employees; otherwise remove the setting. |
 | `… must use https://` | A URL that carries a key or decides which tokens are trusted was given as `http://`. Only a loopback host may use plain http. |
 | `BEARER_TOKEN is N characters` | Under 32. Generate one with `openssl rand -base64 32`. |
+| `MCP_PORT is required for HTTP transports`, exit `78` | There is no default port. Set `MCP_PORT`, and keep it equal to the port in `MCP_PUBLIC_URL`, the client's URL and whatever publishes or proxies it. Under `pnpm dev`, `.env` is read once at start: restart after editing it. |
+| `METRICS_PORT is required with METRICS_ON=true`, exit `78` | No default here either. Set `METRICS_PORT` to the port your scraper targets, or `METRICS_ON=false`. |
 | `METRICS_PORT and MCP_PORT are both N` | Metrics have a port of their own so nothing in front of the MCP port reaches them. Give `METRICS_PORT` another one — or `METRICS_ON=false`, which ignores every other `METRICS_*` setting. |
 | `METRICS_TOKEN is N characters` / `METRICS_TOKEN is the same as …` | The scrape token must be at least 32 characters and a secret of its own — never `BEARER_TOKEN` or an Ivanti key, which whatever scrapes would then hold. `openssl rand -base64 32`. |
 | `cannot listen for metrics`, exit `1` | `METRICS_PORT` is taken — under stdio, often by another client's copy of the server, each claiming the same port — or `METRICS_BIND` is not an address of this host. |

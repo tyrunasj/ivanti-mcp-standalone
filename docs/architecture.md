@@ -487,7 +487,8 @@ rather than the MCP one behind its auth is decided in
   time). It warns at startup when bound beyond loopback with no token, and a bind failure names
   `METRICS_PORT` or `METRICS_BIND` (exit 1), through the same `explainListenFailure` as the MCP
   listener. Shutdown closes it with the transports.
-- **The rules are in `validateConfig`, judged only while `METRICS_ON`:** a port equal to `MCP_PORT`
+- **The rules are in `validateConfig`, judged only while `METRICS_ON`:** `METRICS_PORT` unset (there
+  is no default port, for metrics or MCP — `MCP_PORT` is likewise required with HTTP on), a port equal to `MCP_PORT`
   with HTTP on, a token under 32 characters, and a token equal to `BEARER_TOKEN`, `IVANTI_API_KEY`
   or `IVANTI_CENTRAL_CONFIG_API_KEY`. Off, the other settings are ignored rather than refused, so
   the one toggle is the whole of turning metrics off.

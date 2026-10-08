@@ -26,7 +26,7 @@ an analyst's tools). Every setting is in `.env.example`; an incomplete configura
 and lists every problem at once.
 
 **Prometheus metrics are off by default in every shape** (`METRICS_ON`). On, they are served on a
-port of their own (`9464`), never the MCP one — every credential guarding the MCP port reaches the
+port of their own (`METRICS_PORT`, required when on; 9464 throughout these examples), never the MCP one — every credential guarding the MCP port reaches the
 tools, and whatever fronts it must never route to metrics ([design](./initial-design.md#9e-metrics-on-a-port-of-their-own-decided-2026-10-01)).
 Leave them off on an internet-facing deployment unless something private scrapes them; when on,
 keep the port close (loopback, or a NetworkPolicy) and set `METRICS_TOKEN` once it is reachable from
@@ -95,7 +95,7 @@ read-only, with no capabilities and a syscall filter.
 - **`MemoryDenyWriteExecute` is deliberately not set** — Node's JIT needs writable-then-executable
   pages, and the failure looks like a segfault.
 - **`RestartPreventExitStatus=78`** — a configuration error will still be one in five seconds.
-- **Metrics:** `METRICS_ON=true` in the env file serves `127.0.0.1:9464`, for a Prometheus or agent
+- **Metrics:** `METRICS_ON=true` with `METRICS_PORT=9464` in the env file serves `127.0.0.1:9464`, for a Prometheus or agent
   on the same host. For one elsewhere: `METRICS_BIND=0.0.0.0` (or one of the host's addresses),
   `METRICS_TOKEN_FILE=/etc/ivanti-mcp/secrets/metrics-token`, and a firewall rule that admits that
   Prometheus alone to 9464.
@@ -125,13 +125,14 @@ listen on `0.0.0.0`; a bare `-p 3000:3000` then publishes it on every host inter
 writes its own iptables rules ahead of ufw and firewalld — the host firewall does not narrow it.
 Publish on `127.0.0.1` and put a TLS proxy in front, or publish wider only with `bearer` or `oauth`.
 `docker/compose.yaml` publishes on `127.0.0.1` unless `MCP_PUBLISH_ADDR` (compose interpolation, not
-a server setting) says otherwise.
+a server setting) says otherwise, on `MCP_PORT` read from the same `.env` — run it with
+`--env-file .env`; there is no default port, so without one compose refuses to start.
 
 **Metrics publish the same way.** With `METRICS_ON=true` the server must bind `METRICS_BIND=0.0.0.0`
 inside the container, which `docker/compose.yaml` sets, and the publish address decides who reaches
-port 9464 (the image `EXPOSE`s it). Its ports line is commented out:
-`${METRICS_PUBLISH_ADDR:-127.0.0.1}:${METRICS_PORT:-9464}:${METRICS_PORT:-9464}` keeps it on the
-host's loopback; a Prometheus container on the same Docker network scrapes `ivanti-mcp:9464` without
+`METRICS_PORT` (required with `METRICS_ON=true`; the image `EXPOSE`s 9464). Its ports line is
+commented out: `${METRICS_PUBLISH_ADDR:-127.0.0.1}:${METRICS_PORT:?…}:${METRICS_PORT:?…}` keeps it
+on the host's loopback; a Prometheus container on the same Docker network scrapes `ivanti-mcp:9464` without
 publishing at all. Publish wider only with `METRICS_TOKEN_FILE=/run/secrets/metrics-token`. The
 startup warning `metrics listen beyond this machine with no token` is expected here: the server sees
 the `0.0.0.0` bind, not the publish address that decides.
@@ -173,7 +174,7 @@ context is the repository root**, and `.dockerignore` stays there:
 
 ```bash
 docker build -f docker/Dockerfile -t ivanti-mcp .
-docker compose -f docker/compose.yaml up
+docker compose --env-file .env -f docker/compose.yaml up
 ```
 
 Three stages: build → production dependencies → distroless runtime. Alpine is not smaller —
@@ -301,7 +302,7 @@ server logs as a clean `SIGINT` shutdown; and a restart about 10 s after the pro
   (Node 22.15 or later) — Node does not read the Windows certificate store otherwise.
 - **On the Ivanti application server itself**, keep `MCP_BIND=127.0.0.1` and put IIS in front for
   TLS if clients on other machines need it.
-- **Metrics:** `METRICS_ON=true` in the `env` file serves `127.0.0.1:9464`. For a Prometheus on
+- **Metrics:** `METRICS_ON=true` with `METRICS_PORT=9464` in the `env` file serves `127.0.0.1:9464`. For a Prometheus on
   another machine, `METRICS_BIND=0.0.0.0`, a token in `secrets\metrics-token` (the generated script
   writes one), and a Windows Firewall rule naming that Prometheus:
   `New-NetFirewallRule -DisplayName 'Ivanti MCP metrics' -Direction Inbound -Protocol TCP -LocalPort 9464 -RemoteAddress <prometheus> -Action Allow`.

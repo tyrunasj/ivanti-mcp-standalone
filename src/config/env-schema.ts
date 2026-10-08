@@ -40,7 +40,12 @@ export const envSchema = z.object({
 
   // Loopback by default: exposing the server to a network is a separate, explicit act.
   MCP_BIND: z.string().default('127.0.0.1'),
-  MCP_PORT: z.coerce.number().int().positive().max(65535).default(3000),
+  /**
+   * No default: required whenever HTTP is on (`validateConfig`). A built-in port had to be
+   * repeated by hand in MCP_PUBLIC_URL, the client and the published ports, and when one copy
+   * moved and the others did not, the server answered somewhere nobody was looking.
+   */
+  MCP_PORT: z.coerce.number().int().positive().max(65535).optional(),
   MCP_PUBLIC_URL: z.url().optional(),
   TRUSTED_ORIGINS: commaSeparated.default([]),
 
@@ -245,7 +250,8 @@ export const envSchema = z.object({
   METRICS_ON: z.stringbool().default(false),
   /** Loopback by default, like `MCP_BIND`: exposing it is a separate, explicit act. */
   METRICS_BIND: z.string().default('127.0.0.1'),
-  METRICS_PORT: z.coerce.number().int().positive().max(65535).default(9464),
+  /** No default, like `MCP_PORT`: required whenever METRICS_ON is. */
+  METRICS_PORT: z.coerce.number().int().positive().max(65535).optional(),
   /** Optional. A scrape-only secret, which must not be any credential that reaches the tools. */
   METRICS_TOKEN: z.string().min(1).optional(),
 });

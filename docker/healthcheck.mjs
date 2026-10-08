@@ -22,7 +22,13 @@
 const httpOn = /^(true|1|yes|on|y|enabled)$/i.test(process.env.HTTP_TRANSPORT_ON ?? '');
 if (!httpOn) process.exit(0);
 
-const port = process.env.MCP_PORT ?? '3000';
+// No fallback port: the server refuses to start without MCP_PORT (exit 78), and polling a guess
+// would only report a different listener's health. Empty is unset, as it is to the server.
+const port = process.env.MCP_PORT?.trim();
+if (!port) {
+  process.stderr.write('health: MCP_PORT is not set\n');
+  process.exit(1);
+}
 const timeout = Number(process.env.HEALTHCHECK_TIMEOUT_MS ?? '4000');
 
 try {

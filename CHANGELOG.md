@@ -4,6 +4,19 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
+## Unreleased
+
+**Upgrading.** `MCP_PORT` no longer defaults to 3000, nor `METRICS_PORT` to 9464. A deployment
+with HTTP on and no `MCP_PORT`, or with `METRICS_ON=true` and no `METRICS_PORT`, now refuses to
+start (exit 78) and names the setting. Set it to the port you were using. The Helm chart always
+sets both, so a chart deployment needs nothing.
+
+- **No built-in ports.** Every port comes from configuration: the server, the container health
+  check and `docker/compose.yaml`, which now reads `MCP_PORT` from the same `.env` as the container
+  (`docker compose --env-file .env -f docker/compose.yaml up`) and refuses to start without it.
+  A default port had to be repeated by hand in `MCP_PUBLIC_URL`, the client and the published
+  ports, and changing one copy left the server answering where nothing was looking.
+
 ## 0.3.2 — 2026-10-05
 
 **Upgrading.** Nothing needs setting, but three things behave differently:

@@ -160,6 +160,13 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
   }
 
   if (isHttpTransport(config)) {
+    if (config.MCP_PORT === undefined) {
+      problems.push(
+        'MCP_PORT is required for HTTP transports. There is no built-in port: it has to agree ' +
+          'with MCP_PUBLIC_URL and with whatever publishes or proxies it, so it is set once, here.',
+      );
+    }
+
     if (config.MCP_PUBLIC_URL !== undefined) {
       problems.push(...canonicalUriProblems(config.MCP_PUBLIC_URL));
     }
@@ -371,7 +378,18 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
 function metricsProblems(config: Config): string[] {
   const problems: string[] = [];
 
-  if (config.HTTP_TRANSPORT_ON && config.METRICS_PORT === config.MCP_PORT) {
+  if (config.METRICS_PORT === undefined) {
+    problems.push(
+      'METRICS_PORT is required with METRICS_ON=true. There is no built-in port, for the same ' +
+        'reason as MCP_PORT: it has to agree with whatever scrapes it.',
+    );
+  }
+
+  if (
+    config.HTTP_TRANSPORT_ON &&
+    config.METRICS_PORT !== undefined &&
+    config.METRICS_PORT === config.MCP_PORT
+  ) {
     problems.push(
       `METRICS_PORT and MCP_PORT are both ${String(config.MCP_PORT)}. Metrics have a port of ` +
         'their own so that nothing in front of the MCP port — an ingress, a tunnel — reaches ' +

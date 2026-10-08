@@ -710,7 +710,7 @@ Get-Content "$env:ProgramData\ivanti-mcp\secrets\metrics-token"  <span class="cm
       </div>
 
       <h3>Metrics</h3>
-      <p><b>Off by default.</b> <code>METRICS_ON=true</code> opens a listener of its own: <code>GET /metrics</code> in Prometheus text format, on port <code>9464</code>, bound to <code>127.0.0.1</code> unless <code>METRICS_BIND</code> says otherwise. It is never the MCP port — every credential guarding that port reaches the tools, so a scraper would have to hold one, and whatever fronts it must never route here. The <a href="#config">configurator</a> writes the settings for each shape.</p>
+      <p><b>Off by default.</b> <code>METRICS_ON=true</code> opens a listener of its own: <code>GET /metrics</code> in Prometheus text format, on <code>METRICS_PORT</code> (required when on — there is no default; 9464 throughout this page), bound to <code>127.0.0.1</code> unless <code>METRICS_BIND</code> says otherwise. It is never the MCP port — every credential guarding that port reaches the tools, so a scraper would have to hold one, and whatever fronts it must never route here. The <a href="#config">configurator</a> writes the settings for each shape.</p>
       <div class="tablewrap">
         <table>
           <thead><tr><th>Shape</th><th>Turn it on</th><th>Prometheus scrapes</th></tr></thead>

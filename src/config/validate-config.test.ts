@@ -71,6 +71,12 @@ describe('validateConfig', () => {
       expect(problems).toEqual([expect.stringContaining('METRICS_PORT and MCP_PORT are both 3000')]);
     });
 
+    it('requires a port while on, having no default to fall back on', () => {
+      expect(validateConfig(config({ METRICS_ON: true, METRICS_PORT: undefined }))).toEqual([
+        expect.stringContaining('METRICS_PORT is required with METRICS_ON=true'),
+      ]);
+    });
+
     it('refuses a short token, and one that is also a key to the tools or the tenant', () => {
       expect(validateConfig(config({ METRICS_ON: true, METRICS_TOKEN: 'short' }))).toEqual([
         expect.stringContaining('METRICS_TOKEN is 5 characters'),
@@ -117,6 +123,24 @@ describe('validateConfig', () => {
     );
 
     expect(problems).toEqual([]);
+  });
+
+  it('requires MCP_PORT for HTTP, having no default to fall back on', () => {
+    const problems = validateConfig(
+      config({
+        HTTP_TRANSPORT_ON: true,
+        AUTH_MODE: 'none',
+        MCP_PORT: undefined,
+        MCP_PUBLIC_URL: 'http://127.0.0.1:3000/mcp',
+        TRUSTED_ORIGINS: ['https://claude.ai'],
+      }),
+    );
+
+    expect(problems).toEqual([expect.stringContaining('MCP_PORT is required for HTTP transports')]);
+  });
+
+  it('needs no port under stdio alone, which listens on none', () => {
+    expect(validateConfig(config({ MCP_PORT: undefined, METRICS_PORT: undefined }))).toEqual([]);
   });
 
   it('requires an explicit auth mode before serving on a socket', () => {

@@ -41,6 +41,7 @@ describe('loadConfig', () => {
         HTTP_TRANSPORT_ON: 'true',
         AUTH_MODE: 'bearer',
         BEARER_TOKEN_FILE: '/run/secrets/bearer',
+        MCP_PORT: '3000',
         MCP_PUBLIC_URL: 'https://mcp.example.com',
         TRUSTED_ORIGINS: 'https://claude.ai',
       },
@@ -53,7 +54,10 @@ describe('loadConfig', () => {
   it('reads the metrics token from a file, like the other secrets', () => {
     const readFile = vi.fn().mockReturnValue(`${FILE_TOKEN}\n`);
 
-    const config = loadConfig({ METRICS_ON: 'true', METRICS_TOKEN_FILE: '/run/secrets/metrics-token' }, readFile);
+    const config = loadConfig(
+      { METRICS_ON: 'true', METRICS_PORT: '9464', METRICS_TOKEN_FILE: '/run/secrets/metrics-token' },
+      readFile,
+    );
 
     expect(config.METRICS_TOKEN).toBe(FILE_TOKEN);
     expect(config.METRICS_ON).toBe(true);
@@ -84,6 +88,23 @@ describe('loadConfig', () => {
       expect(error).toBeInstanceOf(ConfigError);
       expect((error as ConfigError).problems.join(' ')).toContain('MCP_PUBLIC_URL');
     }
+  });
+
+  // No default port: one built in had to be repeated by hand in MCP_PUBLIC_URL, the client and
+  // the published ports, and changing one copy left the server answering where nobody looked.
+  it.each([
+    ['unset', {}],
+    ['set to nothing', { MCP_PORT: '' }],
+  ])('refuses HTTP with MCP_PORT %s', (_, port) => {
+    expect(() =>
+      loadConfig({
+        HTTP_TRANSPORT_ON: 'true',
+        AUTH_MODE: 'none',
+        MCP_PUBLIC_URL: 'http://127.0.0.1:3000/mcp',
+        TRUSTED_ORIGINS: 'http://localhost',
+        ...port,
+      }),
+    ).toThrow(/MCP_PORT is required for HTTP transports/);
   });
 
   it('collects every schema problem rather than only the first', () => {
@@ -135,6 +156,7 @@ describe('loadConfig', () => {
         {
           AUTH_MODE: 'bearer',
           HTTP_TRANSPORT_ON: 'true',
+          MCP_PORT: '3000',
           MCP_PUBLIC_URL: 'https://mcp.example.com',
           TRUSTED_ORIGINS: 'https://mcp.example.com',
           BEARER_TOKEN: '',

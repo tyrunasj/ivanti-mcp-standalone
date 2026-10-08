@@ -13,6 +13,7 @@ import {
 import type { CallerIdentity } from '../auth/identity.js';
 import type { TokenVerifier } from '../auth/oauth/verify-token.js';
 import type { Config } from '../config/env-schema.js';
+import { ConfigError } from '../config/load-config.js';
 import { isExposedToNetwork } from '../config/validate-config.js';
 import type { Logger } from '../logger.js';
 import type { CallContext } from '../tools/tool-definition.js';
@@ -176,6 +177,11 @@ export async function startHttp(
   logger: Logger,
   deps: HttpDeps,
 ): Promise<HttpServer> {
+  // `validateConfig` already refuses HTTP without a port. Checked again here so that a config
+  // which skipped it fails as configuration, never as `listen(undefined)` on a random port.
+  const port = config.MCP_PORT;
+  if (port === undefined) throw new ConfigError(['MCP_PORT is required for HTTP transports.']);
+
   const sessions = new SessionManager<Session>({
     maxSessions: config.MCP_MAX_SESSIONS,
     idleTtlMs: config.MCP_SESSION_IDLE_TTL_SECONDS * 1000,
@@ -347,10 +353,10 @@ export async function startHttp(
   await new Promise<void>((resolve, reject) => {
     const onError = (error: NodeJS.ErrnoException): void => {
       http.off('listening', onListening);
-      const reason = explainListenFailure(error, config.MCP_BIND, config.MCP_PORT);
+      const reason = explainListenFailure(error, config.MCP_BIND, port);
       logger.error('cannot listen on http', {
         bind: config.MCP_BIND,
-        port: config.MCP_PORT,
+        port,
         code: error.code,
         reason,
       });
@@ -362,14 +368,14 @@ export async function startHttp(
     };
     http.once('error', onError);
     http.once('listening', onListening);
-    http.listen(config.MCP_PORT, config.MCP_BIND);
+    http.listen(port, config.MCP_BIND);
   });
 
   const address = http.address();
   logger.info('listening on http', {
     bind: config.MCP_BIND,
     // The port actually bound, which is the configured one unless that was 0.
-    port: typeof address === 'object' && address !== null ? address.port : config.MCP_PORT,
+    port: typeof address === 'object' && address !== null ? address.port : port,
     authMode: config.AUTH_MODE,
     mcpMode: config.MCP_MODE,
     maxSessions: config.MCP_MAX_SESSIONS,
