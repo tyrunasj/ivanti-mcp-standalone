@@ -43,7 +43,8 @@ What a deployment exposes is decided by independent axes, all fixed at startup:
 - **`main` is protected, admins included:** a PR, with `Checks` and `Image` green. `/ship` runs
   the whole flow.
 - **A tool-surface change is verified by driving it** against the live tenant through
-  `ivanti-dev` — unit tests have passed while the manifest misled a model.
+  `ivanti-http`, the k3s deployment, once it is released and deployed — unit tests have passed
+  while the manifest misled a model.
 - **When driving the tools, verify names first.** Fields, objects, relationships and picklist
   values come from metadata or the form, never from memory.
 

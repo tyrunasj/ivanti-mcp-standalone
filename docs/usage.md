@@ -192,11 +192,12 @@ calls that failed, and the share of context that was waste — grouped by `manif
    on the mistake), trimming a result, sharpening the description that failed to warn, and only
    then adding text every request pays for.
 4. **Check the direct cost:** `pnpm manifest:size --compare` locally; the PR summary shows it too.
-5. **Check the behaviour on the live tenant** through `ivanti-dev`
-   ([`development.md`](./development.md#testing-against-the-live-tenant)): drive the case that was
-   failing, then run the report over that session's log.
-6. **Ship, deploy, collect again.** The report's version table now has two rows — before and after
-   — with the same client.
+5. **Ship, deploy, then check the behaviour on the live tenant** through `ivanti-http`, the k3s
+   deployment: drive the case that was failing, then run the report over that session's log. To
+   check before shipping, run a local server instead
+   ([`development.md`](./development.md#testing-against-the-live-tenant)).
+6. **Collect again.** The report's version table now has two rows — before and after — with the
+   same client.
 7. **Keep it or revert it** on the waste share and the failed share, not on the manifest size. Write
    down *what* changed and *why* in [`notes.md`](./notes.md); leave the figures out — they go stale.
 
