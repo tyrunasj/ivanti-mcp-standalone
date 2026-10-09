@@ -4,7 +4,7 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
-## Unreleased
+## 0.3.3 — 2026-10-09
 
 **Upgrading.** `MCP_PORT` no longer defaults to 3000, nor `METRICS_PORT` to 9464. A deployment
 with HTTP on and no `MCP_PORT`, or with `METRICS_ON=true` and no `METRICS_PORT`, now refuses to
