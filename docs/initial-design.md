@@ -227,8 +227,8 @@ Designed here and **not built**: `ALLOWED_CIDRS` (an IP allowlist modifier) and
 - **TypeScript**, on `gcr.io/distroless/nodejs22-debian13` (Debian 12 until 0.3.1). Pinned to 6.x by `typescript-eslint`.
 - **pnpm**, for its strict layout: importing something undeclared fails the build — which is how
   the transitive-`express` trap is caught. Lockfile committed, version pinned.
-- **`@modelcontextprotocol/sdk` 1.30.0**, which implements protocol **`2025-11-25`**, not
-  `2026-07-28` (it shipped a day before). Check `LATEST_PROTOCOL_VERSION` before building to a newer
+- **`@modelcontextprotocol/sdk` 1.31.0**, which implements protocol **`2025-11-25`**, not
+  `2026-07-28` (1.30.0 shipped a day before it; 1.31.0 did not move it). Check `LATEST_PROTOCOL_VERSION` before building to a newer
   requirement.
 - **Zod v4, imported from the root.** The SDK is v4-first; importing `zod/v3` sends it down a legacy
   JSON-schema path where the types stop matching.

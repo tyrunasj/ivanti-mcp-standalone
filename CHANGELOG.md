@@ -11,6 +11,8 @@ with HTTP on and no `MCP_PORT`, or with `METRICS_ON=true` and no `METRICS_PORT`,
 start (exit 78) and names the setting. Set it to the port you were using. The Helm chart always
 sets both, so a chart deployment needs nothing.
 
+- **MCP SDK 1.31.0**, from 1.30.0, for CVE-2026-104850 (high). The protocol version is
+  unchanged, `2025-11-25`, so clients see no difference.
 - **No built-in ports.** Every port comes from configuration: the server, the container health
   check and `docker/compose.yaml`, which now reads `MCP_PORT` from the same `.env` as the container
   (`docker compose --env-file .env -f docker/compose.yaml up`) and refuses to start without it.
