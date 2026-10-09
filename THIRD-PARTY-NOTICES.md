@@ -22,7 +22,7 @@ tree — 100 components, resolved exactly as the image resolves them.
 | Component | Version | Licence | Copyright |
 |---|---|---|---|
 | `@hono/node-server` | 2.1.1 | MIT | Copyright (c) 2022 - present, Yusuke Wada and Hono contributors |
-| `@modelcontextprotocol/sdk` | 1.30.0 | MIT | Copyright (c) 2024 Anthropic, PBC |
+| `@modelcontextprotocol/sdk` | 1.31.0 | MIT | Copyright (c) 2024 Anthropic, PBC |
 | `@nodable/entities` | 3.0.0 | MIT | — |
 | `accepts` | 2.0.0 | MIT | Copyright (c) 2014 Jonathan Ong <me@jongleberry.com> |
 | `ajv` | 8.20.0 | MIT | Copyright (c) 2015-2021 Evgeny Poberezkin |

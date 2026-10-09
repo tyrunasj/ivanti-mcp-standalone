@@ -115,7 +115,7 @@ collect the logs, and the loop for tuning a description against them: [`usage.md
 - **Zod v4 only.** The MCP SDK is v4-first internally (`zod/v4`, `zod/v4-mini`, and public
   types in `z.core.*`). Never import `zod/v3` — the SDK's `zod-json-schema-compat` shim then
   takes its legacy branch and schema types stop matching the SDK's.
-- **SDK 1.30.0 implements protocol `2025-11-25`, not `2026-07-28`.** Requirements from the
+- **SDK 1.31.0 implements protocol `2025-11-25`, not `2026-07-28`.** Requirements from the
   newer spec revision are not implementable here yet; check `LATEST_PROTOCOL_VERSION` before
   assuming otherwise.
 - **`express` arrives transitively via the SDK.** Declare it in `package.json` before

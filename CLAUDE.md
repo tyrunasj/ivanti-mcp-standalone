@@ -101,7 +101,7 @@ tokenizers are not — see [`docs/usage.md`](docs/usage.md).
 
 - **TypeScript is pinned to 6.x** — `typescript-eslint` still requires `<6.1.0`.
 - **Zod v4 only; never import `zod/v3`** — the SDK's schema shim silently takes its legacy path.
-- **MCP SDK 1.30.0 implements protocol `2025-11-25`**, not `2026-07-28`.
+- **MCP SDK 1.31.0 implements protocol `2025-11-25`**, not `2026-07-28`.
 - **`express` is not a dependency** — it arrives transitively; declare it before importing it.
 
 ## Architecture at a glance

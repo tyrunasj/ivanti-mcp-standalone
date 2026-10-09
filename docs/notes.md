@@ -141,8 +141,8 @@ Its `exports` map has a `./*` entry that resolves that specifier to `dist/cjs/pa
 which contains only `{"type":"commonjs"}` — so you get `undefined` rather than an error. Resolve
 a real module and walk up to the package root instead (`readSdkVersion()` in `src/version.ts`).
 
-**SDK 1.30.0 implements protocol `2025-11-25`, not `2026-07-28`.**
-It shipped one day before that revision. Check `LATEST_PROTOCOL_VERSION` before assuming a
+**SDK 1.31.0 implements protocol `2025-11-25`, not `2026-07-28`.**
+1.30.0 shipped one day before that revision, and 1.31.0 did not move it. Check `LATEST_PROTOCOL_VERSION` before assuming a
 2026-07-28 requirement is buildable in TypeScript.
 
 ---
