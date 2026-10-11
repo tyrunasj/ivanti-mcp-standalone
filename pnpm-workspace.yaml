@@ -1,2 +1,5 @@
 onlyBuiltDependencies:
   - esbuild
+overrides:
+  # GHSA-68fv-2mgg-jv7q: event-loop DoS in source-map-js < 1.2.2, reached only through the coverage tool.
+  source-map-js: ">=1.2.2"

@@ -92,6 +92,30 @@ app.kubernetes.io/component: metrics
 {{- end -}}
 
 {{/*
+  Whether an optional value was given: "true" or "" (empty). Helm's `with` and `if` treat a
+  numeric 0 as unset, so `--set x=0` silently fell back to the server default and no range
+  rule could see it; this tests for absence, not falsiness.
+*/}}
+{{- define "ivanti-mcp.isSet" -}}
+{{- if and (not (kindIs "invalid" .)) (ne (toString .) "") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+  A whole number inside [min, max] when given. Called with (list "<value name>" <value> <min> <max>);
+  the bounds are the server's own (validate-config.ts), and scripts/check-chart.mjs holds the
+  chart to the server's verdict at both edges.
+*/}}
+{{- define "ivanti-mcp.requireRange" -}}
+{{- $name := index . 0 -}}
+{{- $v := index . 1 -}}
+{{- if include "ivanti-mcp.isSet" $v -}}
+{{- if or (not (regexMatch "^[0-9]+$" (toString $v))) (lt (int64 $v) (int64 (index . 2))) (gt (int64 $v) (int64 (index . 3))) -}}
+{{- fail (printf "%s=%s is outside %d-%d. The server refuses the same at boot." $name (toString $v) (int64 (index . 2)) (int64 (index . 3))) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
   Refusals, evaluated before anything renders.
 
   The server itself fails closed and exits 78 on an incomplete configuration. Doing
@@ -101,6 +125,9 @@ app.kubernetes.io/component: metrics
 {{- define "ivanti-mcp.validate" -}}
 {{- if not .Values.server.publicUrl -}}
 {{- fail "server.publicUrl is required: it is matched verbatim against the OAuth token audience and the RFC 9728 metadata document, and is never derived from the request." -}}
+{{- end -}}
+{{- if contains "#" .Values.server.publicUrl -}}
+{{- fail "server.publicUrl must not contain a fragment — it is the OAuth resource identifier, compared verbatim." -}}
 {{- end -}}
 {{- if hasSuffix "/" .Values.server.publicUrl -}}
 {{- fail "server.publicUrl must not end with a trailing slash — the resource identifier is compared verbatim, and a stray slash surfaces as a client bug." -}}
@@ -170,6 +197,29 @@ app.kubernetes.io/component: metrics
 {{- if has .Values.service.type (list "LoadBalancer" "NodePort") -}}
 {{- fail (printf "server.authMode=none with service.type=%s publishes the entire tool surface unauthenticated beyond the cluster, just as an ingress would. Keep service.type=ClusterIP, or choose bearer or oauth." .Values.service.type) -}}
 {{- end -}}
+{{- end -}}
+{{- $sub := .Values.server.maxSessionsPerSubject -}}
+{{- if include "ivanti-mcp.isSet" $sub -}}
+{{- if ne .Values.server.authMode "oauth" -}}
+{{- fail "server.maxSessionsPerSubject needs server.authMode=oauth: only a verified token names a subject, and without one every caller counts as the same person. The server refuses the same." -}}
+{{- end -}}
+{{- if gt (int64 $sub) (int64 .Values.server.maxSessions) -}}
+{{- fail (printf "server.maxSessionsPerSubject=%s is above server.maxSessions=%v, so it could never apply. The server refuses the same." (toString $sub) .Values.server.maxSessions) -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.ivanti.impersonationRequired (not .Values.ivanti.configUrl) -}}
+{{- fail "ivanti.impersonationRequired=true needs ivanti.configUrl (and its key): requiring what was never configured would start, then refuse at the probe. The server refuses the same." -}}
+{{- end -}}
+{{- /* The bounds are validate-config.ts's TIMEOUT_BOUNDS_MS and its two inline ranges. */ -}}
+{{- include "ivanti-mcp.requireRange" (list "ivanti.timeoutMs" .Values.ivanti.timeoutMs 1000 300000) -}}
+{{- include "ivanti-mcp.requireRange" (list "ivanti.writeTimeoutMs" .Values.ivanti.writeTimeoutMs 1000 300000) -}}
+{{- include "ivanti-mcp.requireRange" (list "ivanti.maxConcurrentRequests" .Values.ivanti.maxConcurrentRequests 1 256) -}}
+{{- include "ivanti-mcp.requireRange" (list "server.maxCallsPerMinute" .Values.server.maxCallsPerMinute 1 10000) -}}
+{{- /* Effective values: an unset one is the server default, and a write must never get less time than a read. */ -}}
+{{- $readMs := ternary (int64 .Values.ivanti.timeoutMs) (int64 10000) (eq (include "ivanti-mcp.isSet" .Values.ivanti.timeoutMs) "true") -}}
+{{- $writeMs := ternary (int64 .Values.ivanti.writeTimeoutMs) (int64 30000) (eq (include "ivanti-mcp.isSet" .Values.ivanti.writeTimeoutMs) "true") -}}
+{{- if lt $writeMs $readMs -}}
+{{- fail (printf "ivanti.writeTimeoutMs (%d) is shorter than ivanti.timeoutMs (%d). A write runs the tenant's workflow before it answers, and one cut off may still have been applied; leave the one you did not mean to change unset only if its default (10000 read, 30000 write) fits. The server refuses the same." $writeMs $readMs) -}}
 {{- end -}}
 {{- $_ := include "ivanti-mcp.networkPolicyEnabled" . -}}
 {{- include "ivanti-mcp.validateMetrics" . -}}

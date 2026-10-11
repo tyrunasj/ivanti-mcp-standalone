@@ -12,12 +12,14 @@ import {
 } from '../../ivanti/http/errors.js';
 import { IvantiBusyError } from '../../ivanti/http/request-limiter.js';
 import { isReadMethod } from '../../ivanti/http/exchange.js';
-import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
-import { noteOutcome, notePersonRefused } from '../../usage/call-usage.js';
+import { MetadataUnavailableError, UnknownEntityError } from '../../ivanti/metadata/catalog.js';
+import { noteOutcome } from '../../usage/call-usage.js';
+import { noteIfPersonRefused } from './try-read.js';
 import { UnsupportedFilterError } from '../../ivanti/odata/filter.js';
 import {
   ValidatedValueError,
   WriteNotStoredError,
+  WriteUnconfirmedError,
 } from '../../ivanti/write/validated-write.js';
 import { FieldNameError } from './explain-field-error.js';
 import { RequiredFieldsError } from './explain-required-fields.js';
@@ -41,6 +43,139 @@ import {
   ParentNotFoundError,
 } from '../../ivanti/attachments/upload.js';
 import { errorResult } from './result.js';
+
+export type RefusalLevel = 'debug' | 'info' | 'warn' | 'error';
+
+/**
+ * One row per refusal class: how loudly it is logged, under what line, and what the model reads.
+ *
+ * A class missing here falls through to `tool failed` at error level and is counted as a fault of
+ * this server, so `run-tool.refusals.test.ts` walks the source for every exported `...Error` and
+ * requires it to be a row, a subclass of a row, or named as handled elsewhere.
+ * Subclasses need no row of their own; a row for a subclass must precede its base.
+ *
+ * Levels: `debug` is the caller's mistake, `info` an ordinary answer the operator may want to
+ * count, `warn` something the operator should see, `error` an outcome nobody asked for.
+ * Fields never carry what the caller sent.
+ */
+interface Refusal<E extends Error = Error> {
+  refusal: abstract new (...args: never[]) => E;
+  level: RefusalLevel;
+  log: string;
+  fields?: (error: E) => Record<string, unknown>;
+  reply?: (error: E) => string;
+}
+
+const refuse = <E extends Error>(entry: Refusal<E>): Refusal => entry as unknown as Refusal;
+
+export const REFUSALS: readonly Refusal[] = [
+  // Refused here, never sent: the caller's query was the problem — a rejection, not a failure.
+  refuse({
+    refusal: UnsupportedFilterError,
+    level: 'debug',
+    log: 'tool refused a filter',
+    fields: (e) => ({ kind: e.unsupported.kind }),
+  }),
+  refuse({
+    refusal: ObjectNotAllowedError,
+    level: 'debug',
+    log: 'tool refused an object',
+    fields: (e) => ({ ref: e.ref }),
+  }),
+  refuse({ refusal: ActionNotAllowedError, level: 'debug', log: 'tool refused an action' }),
+  // Who is asking: the conversation has not said, or has tried to become someone else. Ordinary
+  // answers, so none is an error; the name that was claimed is never recorded.
+  ...[IdentityRequiredError, IdentityConflictError, VerifiedSessionError].map((refusal) =>
+    refuse({
+      refusal,
+      level: 'info',
+      log: 'tool refused on identity',
+      fields: (e: Error) => ({ reason: e.name }),
+    }),
+  ),
+  // A closed record is final. Ivanti marks it read-only and then accepts the write anyway, so
+  // this refusal is the only thing between a caller and a silently-edited closed ticket.
+  refuse({ refusal: RecordClosedError, level: 'debug', log: 'write refused, record closed' }),
+  refuse({
+    refusal: NotYourQueueError,
+    level: 'info',
+    log: 'tool refused a question about someone else',
+  }),
+  refuse({
+    refusal: NotYourRecordError,
+    level: 'info',
+    log: "tool refused a record that is not the caller's",
+  }),
+  refuse({
+    refusal: UnscopableObjectError,
+    level: 'warn',
+    log: 'object has no person link',
+    fields: (e) => ({ object: e.object }),
+  }),
+  // Refused before anything was written: the value was not on the list.
+  refuse({
+    refusal: ValidatedValueError,
+    level: 'debug',
+    log: 'tool refused a validated value',
+    fields: (e) => ({ field: e.field }),
+  }),
+  // The write happened and did not take. The one failure that must never read as success, so it
+  // is logged at error level even though the caller can act on it.
+  refuse({ refusal: WriteNotStoredError, level: 'error', log: 'ivanti write did not store' }),
+  // The write was accepted and only the read-back failed. Whatever the cause (busy, timeout,
+  // gateway, refusal), the record exists: never "nothing was changed", never "try again". Listed
+  // ahead of IvantiBusyError's reply, which says the opposite.
+  refuse({ refusal: WriteUnconfirmedError, level: 'warn', log: 'ivanti write sent, read-back failed' }),
+  // Ivanti refused the submit inside a 200 and created nothing.
+  refuse({ refusal: SubmitRefusedError, level: 'debug', log: 'service request refused' }),
+  // The tenant refused the extension, which is a rename rather than a retry.
+  refuse({ refusal: AttachmentTypeRefusedError, level: 'debug', log: 'upload refused, file type' }),
+  // Nothing was sent: the record the file would hang off is not there.
+  refuse({ refusal: ParentNotFoundError, level: 'debug', log: 'upload refused, no such parent' }),
+  // The file is in Ivanti and on no record; someone has to clean it up.
+  refuse({
+    refusal: OrphanedAttachmentError,
+    level: 'error',
+    log: 'attachment uploaded but not attached',
+    fields: (e) => ({ attachmentId: e.attachmentId }),
+  }),
+  refuse({
+    refusal: RequiredFieldsError,
+    level: 'debug',
+    log: 'tool reported required fields',
+    fields: (e) => ({ fields: e.fields.length }),
+  }),
+  refuse({
+    refusal: FieldNameError,
+    level: 'debug',
+    log: 'tool rejected a field name',
+    fields: (e) => ({ fields: e.fields.length }),
+  }),
+  refuse({
+    refusal: UnknownEntityError,
+    level: 'debug',
+    log: 'tool rejected a name',
+    fields: (e) => ({ entity: e.entity }),
+  }),
+  // The schema could not be read just now: whether the name exists is unknown, and nothing was
+  // written. A transient outage, so the model is told to try again, not to rename anything.
+  refuse({ refusal: MetadataUnavailableError, level: 'warn', log: 'ivanti metadata unavailable' }),
+  // Never sent: this server's own cap on requests to the tenant stayed full. Not Ivanti's
+  // failure, and not a write that may have been applied — the model is told to try again.
+  refuse({
+    refusal: IvantiBusyError,
+    level: 'warn',
+    log: 'ivanti request cap reached; request not sent',
+    fields: (e) => ({ limit: e.limit }),
+    reply: (e) => `${e.message} Nothing was changed. Try again in a moment.`,
+  }),
+  // Ivanti answered, with more than the caller agreed to hold. Nothing failed.
+  refuse({
+    refusal: ResponseTooLargeError,
+    level: 'debug',
+    log: 'tool refused a response too large to read',
+  }),
+];
 
 /**
  * Turns a thrown failure into a result the model can read and recover from.
@@ -70,130 +205,14 @@ export async function runTool(
     );
     // Only the person's own credential: a 401 on the service account's key says nothing about the
     // person's session, and re-opening that over it throws away a session that was fine.
-    if (error instanceof IvantiApiError && error.status === 401 && error.credential === 'person') {
-      notePersonRefused();
-    }
+    noteIfPersonRefused(error);
+    if (error instanceof WriteUnconfirmedError) noteIfPersonRefused(error.cause);
 
-    // Refused here, never sent: the caller's query was the problem, so this is a rejection
-    // rather than a failure and does not belong in the error log.
-    if (error instanceof UnsupportedFilterError) {
-      logger.debug('tool refused a filter', { tool, kind: error.unsupported.kind });
-      return errorResult(error.message);
-    }
-
-    if (error instanceof ObjectNotAllowedError) {
-      logger.debug('tool refused an object', { tool, ref: error.ref });
-      return errorResult(error.message);
-    }
-
-    if (error instanceof ActionNotAllowedError) {
-      logger.debug('tool refused an action', { tool });
-      return errorResult(error.message);
-    }
-
-    // Refusals about who is asking. All of them are ordinary answers the model can act on — the
-    // conversation has not said who it is helping, or has tried to become someone else — so none
-    // of them is an error in the log. The one thing recorded is that it happened, never the name
-    // that was claimed.
-    if (
-      error instanceof IdentityRequiredError ||
-      error instanceof IdentityConflictError ||
-      error instanceof VerifiedSessionError
-    ) {
-      logger.info('tool refused on identity', { tool, reason: error.name });
-      return errorResult(error.message);
-    }
-
-    // A closed record is final. Ivanti marks it read-only and then accepts the write anyway, so
-    // this refusal is the only thing between a caller and a silently-edited closed ticket.
-    if (error instanceof RecordClosedError) {
-      logger.debug('write refused, record closed', { tool });
-      return errorResult(error.message);
-    }
-
-    if (error instanceof NotYourQueueError) {
-      logger.info('tool refused a question about someone else', { tool });
-      return errorResult(error.message);
-    }
-
-    if (error instanceof NotYourRecordError) {
-      logger.info('tool refused a record that is not the caller\'s', { tool });
-      return errorResult(error.message);
-    }
-
-    if (error instanceof UnscopableObjectError) {
-      logger.warn('object has no person link', { tool, object: error.object });
-      return errorResult(error.message);
-    }
-
-    // Refused before anything was written: the value was not on the list.
-    if (error instanceof ValidatedValueError) {
-      logger.debug('tool refused a validated value', { tool, field: error.field });
-      return errorResult(error.message);
-    }
-
-    // The write happened and did not take. This is the one failure that must never read as
-    // success, so it is logged at error level even though the caller can act on it.
-    if (error instanceof WriteNotStoredError) {
-      logger.error('ivanti write did not store', { tool });
-      return errorResult(error.message);
-    }
-
-    // Ivanti refused the submit inside a 200 and created nothing. The caller can fix it from
-    // the message, so it is a rejection rather than a failure.
-    if (error instanceof SubmitRefusedError) {
-      logger.debug('service request refused', { tool });
-      return errorResult(error.message);
-    }
-
-    // The tenant refused the extension, which is a rename rather than a retry.
-    if (error instanceof AttachmentTypeRefusedError) {
-      logger.debug('upload refused, file type', { tool });
-      return errorResult(error.message);
-    }
-
-    // Nothing was sent: the record the file would hang off is not there.
-    if (error instanceof ParentNotFoundError) {
-      logger.debug('upload refused, no such parent', { tool });
-      return errorResult(error.message);
-    }
-
-    // The file is in Ivanti and on no record. Logged at error level because nobody asked for
-    // that outcome and someone has to clean it up.
-    if (error instanceof OrphanedAttachmentError) {
-      logger.error('attachment uploaded but not attached', {
-        tool,
-        attachmentId: error.attachmentId,
-      });
-      return errorResult(error.message);
-    }
-
-    if (error instanceof RequiredFieldsError) {
-      logger.debug('tool reported required fields', { tool, fields: error.fields.length });
-      return errorResult(error.message);
-    }
-
-    if (error instanceof FieldNameError) {
-      logger.debug('tool rejected a field name', { tool, fields: error.fields.length });
-      return errorResult(error.message);
-    }
-
-    if (error instanceof UnknownEntityError) {
-      logger.debug('tool rejected a name', { tool, entity: error.entity });
-      return errorResult(error.message);
-    }
-
-    // Never sent: this server's own cap on requests to the tenant stayed full. Not Ivanti's
-    // failure, and not a write that may have been applied — the model is told to try again.
-    if (error instanceof IvantiBusyError) {
-      logger.warn('ivanti request cap reached; request not sent', { tool, limit: error.limit });
-      return errorResult(`${error.message} Nothing was changed. Try again in a moment.`);
-    }
-
-    // Ivanti answered, with more than the caller agreed to hold. Nothing failed.
-    if (error instanceof ResponseTooLargeError) {
-      logger.debug('tool refused a response too large to read', { tool });
-      return errorResult(error.message);
+    const refusal = REFUSALS.find((entry) => error instanceof entry.refusal);
+    if (refusal !== undefined && error instanceof Error) {
+      const fields = refusal.fields?.(error);
+      logger[refusal.level](refusal.log, { tool, ...fields });
+      return errorResult(refusal.reply?.(error) ?? error.message);
     }
 
     if (error instanceof IvantiApiError) {
@@ -254,7 +273,7 @@ export async function runTool(
  * "Ivanti refused the request (0)", a create that ran past the timeout read as a refusal; the
  * model tried again and filed the ticket twice. For a write the only safe next step is to look.
  */
-const isUnanswered = (error: IvantiApiError): boolean =>
+export const isUnanswered = (error: IvantiApiError): boolean =>
   error.status === 0 || error.status === 502 || error.status === 504;
 
 function noAnswer(error: IvantiApiError): string {

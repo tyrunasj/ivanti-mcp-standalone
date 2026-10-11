@@ -265,11 +265,11 @@ describe('records that share a login', () => {
   const HAROLD_AGAIN = { ...HAROLD, RecId: 'e7', Department: 'Finance' };
 
   /** A directory that matches only the login it was asked for — never a RecId. */
-  function directory(rows: Record<string, unknown>[]) {
+  function directory(rows: Record<string, unknown>[], claimed = 'hsanders') {
     const { connection } = connectionFixture({ entities: { employee: {} } });
     const find = vi.fn((claim: string) =>
       Promise.resolve(
-        claim.toLowerCase() === 'hsanders'
+        claim.toLowerCase() === claimed
           ? rows.map((row) => ({
               recId: String(row['RecId']),
               category: 'employee',
@@ -300,6 +300,39 @@ describe('records that share a login', () => {
     const result = await tool.handler({ person: 'HSanders' }, context);
 
     expect(body(result)['pinned']).toBe(true);
+    expect(context.pin?.person()?.recId).toBe('e1');
+  });
+
+  const OTHER = { ...HAROLD, RecId: 'e5', DisplayName: 'Harold Davis', LoginID: 'HDavis', PrimaryEmail: 'hdavis@example.com' };
+
+  it('asks when the only Active record belongs to a different person than the New one', async () => {
+    const { tool } = directory([HAROLD, { ...OTHER, Status: 'New' }], 'harold');
+    const context = ctx();
+
+    const result = body(await tool.handler({ person: 'Harold' }, context));
+
+    expect(result['pinned']).toBe(false);
+    expect(result['matches']).toHaveLength(2);
+    expect(context.pin?.person()).toBeUndefined();
+  });
+
+  it('asks rather than refusing or switching when the other person is Terminated', async () => {
+    const { tool } = directory([HAROLD, { ...OTHER, Status: 'Terminated' }], 'harold');
+    const context = ctx();
+
+    const result = body(await tool.handler({ person: 'Harold' }, context));
+
+    expect(result['pinned']).toBe(false);
+    expect(result['matches']).toHaveLength(2);
+  });
+
+  it('still pins the Active record when the stale one shares its login and is On Leave', async () => {
+    const { tool } = directory([{ ...HAROLD, RecId: 'e0', Status: 'On Leave' }, HAROLD]);
+    const context = ctx();
+
+    const result = body(await tool.handler({ person: 'HSanders' }, context));
+
+    expect(result['pinned']).toBe(true);
     expect(context.pin?.person()?.recId).toBe('e1');
   });
 

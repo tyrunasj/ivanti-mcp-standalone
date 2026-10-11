@@ -6,7 +6,6 @@ import {
   ALL_FIELDS,
   COMPACT_ROW_FIELDS,
   compactFieldsFor,
-  compactMissedObject,
   resolveRowFields,
 } from './compact-fields.js';
 
@@ -31,30 +30,18 @@ describe('resolveRowFields', () => {
   });
 });
 
-describe('compactMissedObject', () => {
-  it('says nothing when the compact set identifies the object', () => {
-    expect(
-      compactMissedObject([
-        { RecId: 'r1', IncidentNumber: 10244, Subject: 'Printer', CreatedDateTime: 'x' },
-      ]),
-    ).toBeUndefined();
-  });
+describe('compactFieldsFor', () => {
+  it('names the populated fields the fallback left out, and only those', () => {
+    // An object that shares none of the ticket names, with more populated columns than are shown.
+    const row: Record<string, unknown> = { RecId: 'r1', Empty: null };
+    for (let i = 1; i <= 12; i += 1) row[`Col${String(i)}`] = i;
 
-  it('names the usable fields when the compact set matched only audit columns', () => {
-    // Measured: `attachment` shares none of the ticket field names, so the rows came back as a
-    // RecId and two timestamps and one row was indistinguishable from the next.
-    const missed = compactMissedObject([
-      {
-        RecId: 'r1',
-        CreatedDateTime: 'x',
-        CreatedBy: 'y',
-        LastModDateTime: 'z',
-        ATTACHNAME: 'plan.doc',
-        AttachmentSize: 489,
-      },
-    ]);
+    const { fields, fellBack, rest } = compactFieldsFor([row]);
 
-    expect(missed).toEqual(['ATTACHNAME', 'AttachmentSize']);
+    expect(fellBack).toBe(true);
+    expect(rest.length).toBeGreaterThan(0);
+    expect(rest).not.toContain('Empty');
+    for (const name of rest) expect(fields).not.toContain(name);
   });
 
   it('treats a present-but-null ticket column as no match at all', () => {
@@ -70,8 +57,6 @@ describe('compactMissedObject', () => {
       AuditHistoryDescription: '[Status] changed from [Active] to [Closed]',
       AuditHistoryUser: 'JSmith',
     };
-
-    expect(compactMissedObject([auditRow])).toContain('AuditHistoryDescription');
 
     const { fields, fellBack } = compactFieldsFor([auditRow]);
     expect(fellBack).toBe(true);

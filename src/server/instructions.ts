@@ -2,7 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { AuthMode } from '../config/env-schema.js';
-import type { Capability } from '../ivanti/session/capability.js';
+import { TIER_CAPPED_REASON, type Capability } from '../ivanti/session/capability.js';
 
 export interface InstructionsInput {
   capability: Capability | undefined;
@@ -101,8 +101,11 @@ export function buildInstructions(input: InstructionsInput): string | undefined 
 
   if (capability.tier === 'odata') {
     lines.push(
-      'This deployment is read-only against OData: the API key could not open a session, so ' +
-        'the tools needing one are absent.',
+      capability.reason === TIER_CAPPED_REASON
+        ? 'This deployment is read-only against OData: it is configured not to open a session, ' +
+            'so the tools needing one are absent.'
+        : 'This deployment is read-only against OData: the API key could not open a session, so ' +
+            'the tools needing one are absent.',
     );
   }
 

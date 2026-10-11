@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { describe, expect, it, vi } from 'vitest';
 import { configFixture } from '../../config/config.fixture.js';
 import type { FetchLike } from './discover-metadata.js';
@@ -99,5 +102,48 @@ describe('createOAuthSetup', () => {
   it('gives that timeout a bound short enough to fail a startup rather than hang it', () => {
     expect(DISCOVERY_TIMEOUT_MS).toBeGreaterThan(0);
     expect(DISCOVERY_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
+  });
+});
+
+describe('createOAuthSetup: OAUTH_REQUIRE_TYP', () => {
+  const issue = async (typ: string): Promise<{ token: string; jwks: string }> => {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const jwk = { ...(await exportJWK(publicKey)), alg: 'RS256', use: 'sig', kid: 'k1' };
+    const token = await new SignJWT({})
+      .setProtectedHeader({ alg: 'RS256', kid: 'k1', typ })
+      .setIssuer('https://id.example.com')
+      .setAudience('https://mcp.example.com/mcp')
+      .setSubject('u')
+      .setExpirationTime('5m')
+      .sign(privateKey);
+    return { token, jwks: JSON.stringify({ keys: [jwk] }) };
+  };
+
+  const serve = async (body: string): Promise<{ url: string; close: () => void }> => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' }).end(body);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return {
+      url: `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/keys`,
+      close: () => void server.close(),
+    };
+  };
+
+  it('hands the setting to the verifier it builds', async () => {
+    const { token, jwks } = await issue('JWT');
+    const keys = await serve(jwks);
+    try {
+      const open = await createOAuthSetup({ ...oauthConfig, OAUTH_JWKS_URI: keys.url }, vi.fn());
+      const strict = await createOAuthSetup(
+        { ...oauthConfig, OAUTH_JWKS_URI: keys.url, OAUTH_REQUIRE_TYP: true },
+        vi.fn(),
+      );
+
+      expect((await open.verifier(token)).ok).toBe(true);
+      expect(await strict.verifier(token)).toMatchObject({ ok: false, status: 401 });
+    } finally {
+      keys.close();
+    }
   });
 });

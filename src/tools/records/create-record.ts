@@ -7,16 +7,18 @@ import {
   readBackReport,
   resolveValidatedWrite,
   toObjectId,
+  WriteNotStoredError,
 } from '../../ivanti/write/validated-write.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { referencedFieldNames } from '../../ivanti/odata/filter.js';
-import { describeSubtypes, findSubtypes } from '../../ivanti/metadata/subtypes.js';
+import { describeSubtypes, findSubtypes, isBaseTypeRefusal } from '../../ivanti/metadata/subtypes.js';
 import { registersFormTools, registersLinkTools, type IvantiToolDeps } from '../shared/deps.js';
 import { explainFieldError } from '../shared/explain-field-error.js';
+import { impersonatedAs } from '../shared/zero-note.js';
 import { explainRequiredFields } from '../shared/explain-required-fields.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { ownershipFields } from '../shared/own-records.js';
+import { ownerLinkField, ownershipFields } from '../shared/own-records.js';
 import { knownObjectNames } from '../shared/object-names.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
@@ -134,13 +136,16 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
           .request<OdataRecord>(url, { method: 'POST', body })
           .catch(async (error: unknown) => {
             // A create aimed at a base type answers 500 with an empty message, which explains
-            // nothing. The subtypes do.
-            const subtypes = findSubtypes(await knownObjectNames(deps.connection), entity.name);
-            if (subtypes.length > 0) {
-              throw new Error(
-                `${describeSubtypes(entity.name, subtypes)} (Ivanti refused this create: ` +
-                  `${error instanceof Error ? error.message : 'unknown error'})`,
-              );
+            // nothing. The subtypes do. Only that signature: a timeout, a 401 or a required-field
+            // refusal on an object with subtypes is its own failure, and keeps its own wording.
+            if (isBaseTypeRefusal(error)) {
+              const subtypes = findSubtypes(await knownObjectNames(deps.connection), entity.name);
+              if (subtypes.length > 0) {
+                throw new Error(
+                  `${describeSubtypes(entity.name, subtypes)} (Ivanti refused this create: ` +
+                    `${error instanceof Error ? error.message : 'unknown error'})`,
+                );
+              }
             }
 
             // Required-field rules name display names, and some of them are links; the form is
@@ -164,30 +169,58 @@ export function createCreateRecordTool(deps: IvantiToolDeps): ToolDefinition {
         }
 
         // Throws when a value did not take: the record exists, but not as asked.
+        // The ownership stamp is compared too: a tenant rule that sets the customer from the
+        // session would otherwise store the service account while this reports the person.
         const readBack = await confirmWrite({
           connection,
           entitySet,
           recId,
           resolved,
-          written: fields,
+          written: { ...fields, ...owner },
           entity,
           form: writeForm,
           transport,
+        }).catch((error: unknown) => {
+          const link = ownerLinkField(owner);
+          if (
+            error instanceof WriteNotStoredError &&
+            link !== undefined &&
+            error.fields.some((field) => field.toLowerCase() === link.toLowerCase())
+          ) {
+            error.message +=
+              ' The record exists but is NOT the person\'s own, so they cannot see or edit it: ' +
+              'tell them, and do not file it again.';
+          }
+          throw error;
         });
 
         deps.logger.info('ivanti record created', { object: entitySet });
 
         // Named from the stored record, never from a list of field names: `Owner` is this
         // tenant's spelling of the assignment and another tenant's is its own.
-        const acting = context.impersonation?.session()?.loginId ?? context.pin?.person()?.loginId;
+        const acting = impersonatedAs(context) ?? context.pin?.person()?.loginId;
         // The server's own ownership stamp counts as written: in `enduser` it sends `CreatedBy`
         // itself, and crediting that to Ivanti's session told the model nothing had asked for it.
-        const stamped = sessionStampedFields(created, [...written, ...Object.keys(owner)], acting);
+        const stamped = sessionStampedFields(readBack.stored ?? created, [...written, ...Object.keys(owner)], acting);
+
+        // From the record, not the pin: named only when the stored link holds the person's RecId.
+        const person = context.pin?.person();
+        const link = ownerLinkField(owner);
+        const storedLink =
+          link === undefined || readBack.stored === undefined
+            ? undefined
+            : Object.entries(readBack.stored).find(([name]) => name.toLowerCase() === link.toLowerCase())?.[1];
+        const filedFor =
+          person !== undefined &&
+          typeof storedLink === 'string' &&
+          storedLink.toUpperCase() === person.recId.toUpperCase()
+            ? person.displayName
+            : undefined;
 
         return jsonResult({
           object: entitySet,
           recId,
-          ...(Object.keys(owner).length === 0 ? {} : { filedFor: context.pin?.person()?.displayName }),
+          ...(filedFor === undefined ? {} : { filedFor }),
           ...(stamped.length === 0 || acting === undefined
             ? {}
             : { stampedFromTheSession: stamped, note: sessionStampNote(stamped, acting) }),

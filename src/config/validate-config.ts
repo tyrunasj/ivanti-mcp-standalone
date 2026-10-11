@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import { metadataUrl } from '../auth/oauth/protected-resource-metadata.js';
+import { MAX_CHALLENGE_CHARS, sanitiseHeaderValue } from '../auth/oauth/www-authenticate.js';
 import { envSchema, type Config } from './env-schema.js';
 
 const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', 'localhost']);
@@ -23,6 +25,25 @@ export const MIN_BEARER_TOKEN_LENGTH = 32;
  * client is still waiting.
  */
 export const TIMEOUT_BOUNDS_MS = { min: 1_000, max: 300_000 } as const;
+
+/** Zero would send nothing; past a few hundred it no longer protects the tenant. */
+export const CONCURRENCY_BOUNDS = { min: 1, max: 256 } as const;
+
+/** Zero would refuse every call; past the top it limits nothing a model could do. */
+export const CALLS_PER_MINUTE_BOUNDS = { min: 1, max: 10_000 } as const;
+
+/** Every `OAUTH_*` setting the schema knows — read only under `AUTH_MODE=oauth`. */
+const OAUTH_SETTINGS = Object.keys(envSchema.shape).filter((key) => key.startsWith('OAUTH_'));
+
+/**
+ * Whether the operator wrote this setting. For settings with no default: a defaulted scalar is
+ * always "set", and an empty list is the default of the list ones.
+ */
+function isWritten(config: Config, provided: ReadonlySet<string>, key: string): boolean {
+  const value: unknown = config[key as keyof Config];
+  if (Array.isArray(value)) return provided.has(key) || value.length > 0;
+  return provided.has(key) || value !== undefined;
+}
 
 /**
  * Why a URL is not acceptable as a place to send a credential or fetch a trust decision from, or
@@ -74,15 +95,48 @@ export function isHttpTransport(config: Config): boolean {
   return config.HTTP_TRANSPORT_ON;
 }
 
+/**
+ * What the 401 challenge advertises verbatim — the scope list and the metadata URL — must survive
+ * the header sanitiser unchanged and fit in one header. A quote, a backslash or a non-ASCII
+ * character becomes a space there, which splits a scope token or alters a URL, and the client
+ * then requests or fetches something else.
+ */
+function challengeProblems(config: Config): string[] {
+  const problems: string[] = [];
+  const advertised: [string, string][] = config.OAUTH_REQUIRED_SCOPES.map((scope) => [
+    'OAUTH_REQUIRED_SCOPES',
+    scope,
+  ]);
+  if (config.MCP_PUBLIC_URL !== undefined) {
+    try {
+      advertised.push(['MCP_PUBLIC_URL (the metadata URL derived from it)', metadataUrl(config.MCP_PUBLIC_URL)]);
+    } catch {
+      // Not a URL: `canonicalUriProblems` already says so.
+    }
+  }
+  for (const [setting, value] of advertised) {
+    if (sanitiseHeaderValue(value) !== value) {
+      problems.push(
+        `${setting} carries "${value}", which cannot appear in a WWW-Authenticate header ` +
+          '(printable ASCII only, no quote or backslash), so the challenge ' +
+          'would advertise a different value than the one configured.',
+      );
+    }
+  }
+  const length = advertised.reduce((total, [, value]) => total + value.length + 1, 0);
+  if (length > MAX_CHALLENGE_CHARS) {
+    problems.push(
+      `The 401 challenge would be about ${String(length)} characters (OAUTH_REQUIRED_SCOPES and ` +
+        `MCP_PUBLIC_URL), past the ${String(MAX_CHALLENGE_CHARS)} a proxy in front will pass.`,
+    );
+  }
+  return problems;
+}
+
 export function isStdioTransport(config: Config): boolean {
   return config.STDIO_TRANSPORT_ON;
 }
 
-/**
- * Open mode binds loopback by default, so reaching the network takes a second deliberate
- * key (`MCP_BIND`). That is allowed — it is the intended corporate-network deployment —
- * but the caller is expected to say so loudly in the startup log.
- */
 /**
  * The audiences a token may name. Defaults to the resource identifier, which is what the spec
  * assumes, but real IdPs mint their own — so it is overridable, and is a list because a
@@ -212,6 +266,26 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
     );
   }
 
+  // Settings of an axis that is not in use are refused, not ignored: a leftover from the mode
+  // an operator moved away from is dead config, and a deployment that believes it is in force
+  // is worse off than one that failed to start.
+  if (config.AUTH_MODE !== 'bearer' && isWritten(config, provided, 'BEARER_TOKEN')) {
+    problems.push(
+      `BEARER_TOKEN (or BEARER_TOKEN_FILE) is set, but AUTH_MODE is ${config.AUTH_MODE ?? 'not set'}, ` +
+        'which never reads it. Set AUTH_MODE=bearer, or remove it.',
+    );
+  }
+  if (config.AUTH_MODE !== 'oauth') {
+    const stray = OAUTH_SETTINGS.filter((key) => isWritten(config, provided, key));
+    if (stray.length > 0) {
+      problems.push(
+        `${stray.join(', ')} ${stray.length === 1 ? 'is' : 'are'} set, but AUTH_MODE is ` +
+          `${config.AUTH_MODE ?? 'not set'}, which never reads ${stray.length === 1 ? 'it' : 'them'}. ` +
+          `Set AUTH_MODE=oauth, or remove ${stray.length === 1 ? 'it' : 'them'}.`,
+      );
+    }
+  }
+
   if (config.AUTH_MODE === 'bearer' && config.BEARER_TOKEN === undefined) {
     problems.push('AUTH_MODE=bearer requires BEARER_TOKEN or BEARER_TOKEN_FILE.');
   }
@@ -273,16 +347,24 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
     }
   }
 
-  if (config.IVANTI_MAX_CONCURRENT_REQUESTS < 1 || config.IVANTI_MAX_CONCURRENT_REQUESTS > 256) {
+  if (
+    config.IVANTI_MAX_CONCURRENT_REQUESTS < CONCURRENCY_BOUNDS.min ||
+    config.IVANTI_MAX_CONCURRENT_REQUESTS > CONCURRENCY_BOUNDS.max
+  ) {
     problems.push(
       `IVANTI_MAX_CONCURRENT_REQUESTS=${String(config.IVANTI_MAX_CONCURRENT_REQUESTS)} is outside ` +
-        '1–256. Zero would send nothing; past a few hundred it no longer protects the tenant.',
+        `${String(CONCURRENCY_BOUNDS.min)}–${String(CONCURRENCY_BOUNDS.max)}. Zero would send ` +
+        'nothing; past a few hundred it no longer protects the tenant.',
     );
   }
-  if (config.MCP_MAX_CALLS_PER_MINUTE < 1 || config.MCP_MAX_CALLS_PER_MINUTE > 10_000) {
+  if (
+    config.MCP_MAX_CALLS_PER_MINUTE < CALLS_PER_MINUTE_BOUNDS.min ||
+    config.MCP_MAX_CALLS_PER_MINUTE > CALLS_PER_MINUTE_BOUNDS.max
+  ) {
     problems.push(
-      `MCP_MAX_CALLS_PER_MINUTE=${String(config.MCP_MAX_CALLS_PER_MINUTE)} is outside 1–10000. ` +
-        'Zero would refuse every call; past that it limits nothing a model could do.',
+      `MCP_MAX_CALLS_PER_MINUTE=${String(config.MCP_MAX_CALLS_PER_MINUTE)} is outside ` +
+        `${String(CALLS_PER_MINUTE_BOUNDS.min)}–${String(CALLS_PER_MINUTE_BOUNDS.max)}. Zero ` +
+        'would refuse every call; past that it limits nothing a model could do.',
     );
   }
 
@@ -303,6 +385,7 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
   if (config.AUTH_MODE === 'oauth' && config.OAUTH_ISSUER === undefined) {
     problems.push('AUTH_MODE=oauth requires OAUTH_ISSUER.');
   }
+  if (config.AUTH_MODE === 'oauth') problems.push(...challengeProblems(config));
 
   // Half a connection is a misconfiguration, not a degraded mode: it would start, look healthy,
   // and fail on the first Ivanti call.
@@ -329,12 +412,32 @@ export function validateConfig(config: Config, provided: ReadonlySet<string> = n
     );
   }
 
+  // Every Ivanti setting needs the tenant. A cap on a tier nobody probes is dead config that reads
+  // as if it were in force.
+  if (isWritten(config, provided, 'IVANTI_MAX_TIER') && !hasBaseUrl && !hasKey) {
+    problems.push(
+      'IVANTI_MAX_TIER is set, but no tenant is configured (IVANTI_BASE_URL and IVANTI_API_KEY), ' +
+        'so there is no tier to cap.',
+    );
+  }
+
   // Impersonation acts on the tenant. Without one there is nothing to impersonate against, and
   // the setting would sit there looking as though it did something.
   if (hasConfigUrl && hasConfigKey && !hasBaseUrl) {
     problems.push(
       'IVANTI_CONFIG_URL and IVANTI_CENTRAL_CONFIG_API_KEY configure impersonation against a ' +
         'tenant, so IVANTI_BASE_URL and IVANTI_API_KEY must be set too.',
+    );
+  }
+
+  // The pinned role is applied when `act_as` opens the person's own session, which needs the
+  // ConfigDB pair. Without it sessions run under the service account's role, while the operator
+  // believes they were narrowed.
+  if (config.IVANTI_IMPERSONATION_ROLE !== undefined && !(hasConfigUrl && hasConfigKey)) {
+    problems.push(
+      'IVANTI_IMPERSONATION_ROLE is set, but impersonation is not configured: it needs ' +
+        'IVANTI_CONFIG_URL and IVANTI_CENTRAL_CONFIG_API_KEY (or IVANTI_CENTRAL_CONFIG_API_KEY_FILE). ' +
+        "Without them nothing is pinned and sessions run under the service account's own role.",
     );
   }
 

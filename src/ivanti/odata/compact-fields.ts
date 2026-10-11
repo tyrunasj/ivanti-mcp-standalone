@@ -119,7 +119,7 @@ function preferenceMatches(rows: readonly Record<string, unknown>[]): string[] {
 export function compactFieldsFor(
   rows: readonly Record<string, unknown>[],
   extras: readonly string[] = [],
-): { fields: string[]; fellBack: boolean } {
+): { fields: string[]; fellBack: boolean; rest: string[] } {
   const populated = new Set<string>();
   for (const row of rows) {
     for (const [field, value] of Object.entries(row)) {
@@ -135,23 +135,23 @@ export function compactFieldsFor(
   ];
 
   if (identifying.length >= MIN_IDENTIFYING) {
-    return { fields: [...new Set([...COMPACT_ROW_FIELDS, ...identifying])], fellBack: false };
+    return {
+      fields: [...new Set([...COMPACT_ROW_FIELDS, ...identifying])],
+      fellBack: false,
+      rest: [],
+    };
   }
 
   const own = [...populated].filter((name) => !AUDIT_FIELDS.has(name.toLowerCase()));
+  const fields = [...COMPACT_ROW_FIELDS, ...own.slice(0, FALLBACK_FIELDS)];
+  const shown = new Set(fields.map((name) => name.toLowerCase()));
   return {
-    fields: [...COMPACT_ROW_FIELDS, ...own.slice(0, FALLBACK_FIELDS)],
+    fields,
     fellBack: own.length > 0,
+    // The populated fields the fallback left out, for the caller to name. Derived here, from the
+    // same `own` the projection used, so what is shown and what is offered cannot disagree.
+    rest: own.filter((name) => !shown.has(name.toLowerCase())),
   };
-}
-
-export function compactMissedObject(
-  rows: readonly Record<string, unknown>[],
-): string[] | undefined {
-  if (preferenceMatches(rows).length >= MIN_IDENTIFYING) return undefined;
-  const names = new Set<string>();
-  for (const row of rows) for (const field of Object.keys(row)) names.add(field);
-  return [...names].filter((name) => !AUDIT_FIELDS.has(name.toLowerCase()));
 }
 
 /**

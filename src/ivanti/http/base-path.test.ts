@@ -2,7 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { describe, expect, it, vi } from 'vitest';
-import { probeBasePath, type ProbeFetch } from './base-path.js';
+import { TenantRefusedError, probeBasePath, type ProbeFetch } from './base-path.js';
 
 const CSDL = '<?xml version="1.0"?><edmx:Edmx Version="1.0"><edmx:DataServices/></edmx:Edmx>';
 
@@ -17,23 +17,25 @@ const tenant = (...serves: string[]): ProbeFetch =>
     });
   });
 
+const TIMEOUT_MS = 1_000;
+
 describe('probeBasePath', () => {
   it('finds the /HEAT prefix when the tenant uses it', async () => {
-    const probe = await probeBasePath('https://t', 'k', tenant('/HEAT/'));
+    const probe = await probeBasePath('https://t', 'k', tenant('/HEAT/'), TIMEOUT_MS);
 
     expect(probe.basePath).toBe('/HEAT');
     expect(probe.metadataUrl).toBe('https://t/HEAT/api/odata/incidents/$metadata');
   });
 
   it('falls back to the root when the tenant has no prefix', async () => {
-    const probe = await probeBasePath('https://t', 'k', tenant('https://t/api/odata'));
+    const probe = await probeBasePath('https://t', 'k', tenant('https://t/api/odata'), TIMEOUT_MS);
 
     expect(probe.basePath).toBe('');
     expect(probe.attempted[0]?.status).toBe(404); // /HEAT tried first
   });
 
   it('walks the CSDL ladder when the entity-scoped graph is the one that is disabled', async () => {
-    const probe = await probeBasePath('https://t', 'k', tenant('/businessobject/$metadata'));
+    const probe = await probeBasePath('https://t', 'k', tenant('/businessobject/$metadata'), TIMEOUT_MS);
 
     expect(probe.metadataUrl).toBe('https://t/HEAT/api/odata/businessobject/$metadata');
     expect(probe.basePath).toBe('/HEAT');
@@ -46,7 +48,7 @@ describe('probeBasePath', () => {
       return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(CSDL) });
     };
 
-    await probeBasePath('https://t', 'super-secret', spy);
+    await probeBasePath('https://t', 'super-secret', spy, TIMEOUT_MS);
 
     expect(seen[0]?.Accept).toBe('application/xml');
     expect(seen[0]?.Authorization).toBe('rest_api_key=super-secret');
@@ -60,7 +62,13 @@ describe('probeBasePath', () => {
         text: () => Promise.resolve('<html><body>Sign in</body></html>'),
       });
 
-    await expect(probeBasePath('https://t', 'k', html)).rejects.toThrow(/Could not reach Ivanti/);
+    await expect(probeBasePath('https://t', 'k', html, TIMEOUT_MS)).rejects.toThrow(
+      /not a \$metadata document[\s\S]*IVANTI_BASE_URL/,
+    );
+    // It answered, so it must not be reported as unreachable.
+    await expect(probeBasePath('https://t', 'k', html, TIMEOUT_MS)).rejects.not.toThrow(
+      /Could not reach/,
+    );
   });
 
   it('keeps probing after a transport error', async () => {
@@ -69,7 +77,7 @@ describe('probeBasePath', () => {
       .mockRejectedValueOnce(new Error('ECONNRESET'))
       .mockResolvedValueOnce({ ok: true, status: 200, text: () => Promise.resolve(CSDL) });
 
-    const probe = await probeBasePath('https://t', 'k', flaky);
+    const probe = await probeBasePath('https://t', 'k', flaky, TIMEOUT_MS);
 
     expect(probe.attempted[0]?.status).toBe('error');
     expect(probe.metadataUrl).toBe('https://t/HEAT/api/odata/$metadata');
@@ -84,8 +92,9 @@ describe('probeBasePath', () => {
       });
 
     // A 401 proves the tenant is there and answered; only the credential is wrong.
-    await expect(probeBasePath('https://t', 'k', refuses)).rejects.toThrow(/refused the API key/);
-    await expect(probeBasePath('https://t', 'k', refuses)).rejects.not.toThrow(
+    await expect(probeBasePath('https://t', 'k', refuses, TIMEOUT_MS)).rejects.toThrow(/refused the API key/);
+    await expect(probeBasePath('https://t', 'k', refuses, TIMEOUT_MS)).rejects.toBeInstanceOf(TenantRefusedError);
+    await expect(probeBasePath('https://t', 'k', refuses, TIMEOUT_MS)).rejects.not.toThrow(
       /Could not reach/,
     );
   });
@@ -105,7 +114,7 @@ describe('probeBasePath', () => {
         }),
       );
 
-    await expect(probeBasePath('https://tneant.example.com', 'k', unresolvable)).rejects.toThrow(
+    await expect(probeBasePath('https://tneant.example.com', 'k', unresolvable, TIMEOUT_MS)).rejects.toThrow(
       /ENOTFOUND tneant\.example\.com/,
     );
   });
@@ -113,7 +122,7 @@ describe('probeBasePath', () => {
   it('never lets the key into the reason', async () => {
     const echoes: ProbeFetch = () => Promise.reject(new Error('refused while sending secret-key'));
 
-    await expect(probeBasePath('https://t', 'secret-key', echoes)).rejects.not.toThrow(
+    await expect(probeBasePath('https://t', 'secret-key', echoes, TIMEOUT_MS)).rejects.not.toThrow(
       /secret-key/,
     );
   });
@@ -137,7 +146,7 @@ describe('probeBasePath', () => {
   it('reports every URL it tried when nothing works', async () => {
     const dead = tenant('never-matches');
 
-    await expect(probeBasePath('https://t', 'k', dead)).rejects.toThrow(
+    await expect(probeBasePath('https://t', 'k', dead, TIMEOUT_MS)).rejects.toThrow(
       /\/HEAT\/api\/odata\/incidents[\s\S]*\/api\/odata\/businessobject/,
     );
   });

@@ -11,6 +11,8 @@ import {
   isImpersonationConfigured,
   isIvantiConfigured,
   requiredImpersonationProblems,
+  CALLS_PER_MINUTE_BOUNDS,
+  CONCURRENCY_BOUNDS,
   validateConfig,
 } from './validate-config.js';
 
@@ -83,7 +85,7 @@ describe('validateConfig', () => {
       ]);
       expect(
         validateConfig(config({ METRICS_ON: true, METRICS_TOKEN: LONG, BEARER_TOKEN: LONG })),
-      ).toEqual([expect.stringContaining('METRICS_TOKEN is the same as BEARER_TOKEN')]);
+      ).toContainEqual(expect.stringContaining('METRICS_TOKEN is the same as BEARER_TOKEN'));
     });
 
     // Turning metrics off is one setting: the rest may stay where it is.
@@ -275,6 +277,14 @@ describe('validateConfig', () => {
  * the path reads the API key, or swaps the signing keys a token is checked against.
  */
 describe('settings that must not travel in clear text', () => {
+  /** The OAUTH_* settings are only legal under oauth. */
+  const OAUTH_MODE = {
+    HTTP_TRANSPORT_ON: true,
+    AUTH_MODE: 'oauth' as const,
+    MCP_PUBLIC_URL: 'https://mcp.example.com/mcp',
+    TRUSTED_ORIGINS: ['https://mcp.example.com'],
+  };
+
   /** What each setting needs alongside it, so the only problem left is the scheme. */
   const PAIRS = {
     IVANTI_BASE_URL: { IVANTI_API_KEY: 'k' },
@@ -283,8 +293,8 @@ describe('settings that must not travel in clear text', () => {
       IVANTI_API_KEY: 'k',
       IVANTI_CENTRAL_CONFIG_API_KEY: 'c',
     },
-    OAUTH_ISSUER: {},
-    OAUTH_JWKS_URI: {},
+    OAUTH_ISSUER: { ...OAUTH_MODE },
+    OAUTH_JWKS_URI: { ...OAUTH_MODE, OAUTH_ISSUER: 'https://idp.example.com' },
   } as const;
 
   it.each(Object.keys(PAIRS) as (keyof typeof PAIRS)[])('refuses http:// for %s', (setting) => {
@@ -302,18 +312,22 @@ describe('settings that must not travel in clear text', () => {
     'http://[::1]:8443',
   ])('allows http:// to a loopback host (%s), where there is no network to cross', (url) => {
     expect(validateConfig(config({ IVANTI_BASE_URL: url, IVANTI_API_KEY: 'k' }))).toEqual([]);
-    expect(validateConfig(config({ OAUTH_ISSUER: url }))).toEqual([]);
+    expect(validateConfig(config({ ...OAUTH_MODE, OAUTH_ISSUER: url }))).toEqual([]);
   });
 
   it.each(['http://127.0.0.1.example.com', 'http://localhost.example.com', 'http://10.0.0.5'])(
     'does not take %s for loopback',
     (url) => {
-      expect(validateConfig(config({ OAUTH_JWKS_URI: url }))).toHaveLength(1);
+      expect(
+        validateConfig(config({ ...OAUTH_MODE, OAUTH_ISSUER: 'https://idp.example.com', OAUTH_JWKS_URI: url })),
+      ).toHaveLength(1);
     },
   );
 
   it('refuses a scheme that is not http at all', () => {
-    expect(validateConfig(config({ OAUTH_ISSUER: 'ftp://idp.example.com' }))).toHaveLength(1);
+    expect(
+      validateConfig(config({ ...OAUTH_MODE, OAUTH_ISSUER: 'ftp://idp.example.com' })),
+    ).toHaveLength(1);
   });
 });
 
@@ -492,5 +506,111 @@ describe('requiredImpersonationProblems', () => {
     expect(
       requiredImpersonationProblems(config({ ...TENANT, ...CONFIG_DB }), { canImpersonate: false }),
     ).toEqual([]);
+  });
+});
+
+describe('settings of an axis that is not in use', () => {
+  const HTTP = {
+    HTTP_TRANSPORT_ON: true,
+    MCP_PUBLIC_URL: 'https://mcp.example.com/mcp',
+    TRUSTED_ORIGINS: ['https://mcp.example.com'],
+  };
+  const TENANT_ONLY = { IVANTI_BASE_URL: 'https://t.ivanticloud.com', IVANTI_API_KEY: 'k' };
+
+  it('refuses IVANTI_IMPERSONATION_ROLE without the ConfigDB pair, where nothing would pin it', () => {
+    const problems = validateConfig(config({ ...TENANT_ONLY, IVANTI_IMPERSONATION_ROLE: 'Admin' }));
+
+    expect(problems).toEqual([expect.stringContaining('IVANTI_IMPERSONATION_ROLE is set')]);
+  });
+
+  it.each(['none', 'bearer'] as const)('refuses OAUTH_* settings under AUTH_MODE=%s', (mode) => {
+    const problems = validateConfig(
+      config({
+        ...HTTP,
+        AUTH_MODE: mode,
+        BEARER_TOKEN: 'b'.repeat(32),
+        OAUTH_ISSUER: 'https://id.example.com',
+        OAUTH_REQUIRED_SCOPES: ['mcp'],
+      }),
+      new Set(['OAUTH_ISSUER']),
+    );
+
+    const oauth = problems.filter((problem) => problem.includes('OAUTH_ISSUER'));
+    expect(oauth).toHaveLength(1);
+    expect(oauth[0]).toContain('OAUTH_REQUIRED_SCOPES');
+  });
+
+  it('refuses a provided OAUTH_* setting even when its value is the default', () => {
+    const problems = validateConfig(
+      config({ ...HTTP, AUTH_MODE: 'none' }),
+      new Set(['OAUTH_AUDIENCE']),
+    );
+
+    expect(problems).toEqual([expect.stringContaining('OAUTH_AUDIENCE is set')]);
+  });
+
+  it.each(['none', 'oauth'] as const)('refuses BEARER_TOKEN under AUTH_MODE=%s', (mode) => {
+    const problems = validateConfig(
+      config({
+        ...HTTP,
+        AUTH_MODE: mode,
+        BEARER_TOKEN: 'b'.repeat(32),
+        ...(mode === 'oauth' ? { OAUTH_ISSUER: 'https://id.example.com' } : {}),
+      }),
+    );
+
+    expect(problems).toEqual([expect.stringContaining('BEARER_TOKEN')]);
+  });
+
+  it('refuses IVANTI_MAX_TIER with no tenant', () => {
+    const problems = validateConfig(config({ IVANTI_MAX_TIER: 'odata' }));
+
+    expect(problems).toEqual([expect.stringContaining('IVANTI_MAX_TIER is set')]);
+    expect(validateConfig(config({ ...TENANT_ONLY, IVANTI_MAX_TIER: 'odata' }))).toEqual([]);
+  });
+
+  it('accepts the settings under the mode that reads them', () => {
+    expect(
+      validateConfig(
+        config({ ...HTTP, AUTH_MODE: 'oauth', OAUTH_ISSUER: 'https://id.example.com' }),
+      ),
+    ).toEqual([]);
+    expect(
+      validateConfig(config({ ...HTTP, AUTH_MODE: 'bearer', BEARER_TOKEN: 'b'.repeat(32) })),
+    ).toEqual([]);
+  });
+});
+
+describe('AUTH_MODE=oauth', () => {
+  it('requires OAUTH_ISSUER, refused at configuration time with the rest', () => {
+    const problems = validateConfig(
+      config({
+        HTTP_TRANSPORT_ON: true,
+        AUTH_MODE: 'oauth',
+        MCP_PUBLIC_URL: 'https://mcp.example.com/mcp',
+        TRUSTED_ORIGINS: ['https://mcp.example.com'],
+      }),
+    );
+
+    expect(problems).toEqual(['AUTH_MODE=oauth requires OAUTH_ISSUER.']);
+  });
+});
+
+describe('numeric bounds', () => {
+  it('states the same range it checks, for both limits', () => {
+    for (const [setting, bounds] of [
+      ['IVANTI_MAX_CONCURRENT_REQUESTS', CONCURRENCY_BOUNDS],
+      ['MCP_MAX_CALLS_PER_MINUTE', CALLS_PER_MINUTE_BOUNDS],
+    ] as const) {
+      const range = `${String(bounds.min)}–${String(bounds.max)}`;
+      for (const value of [bounds.min - 1, bounds.max + 1]) {
+        expect(validateConfig(config({ [setting]: value }))).toEqual([
+          expect.stringContaining(`is outside ${range}`),
+        ]);
+      }
+      for (const value of [bounds.min, bounds.max]) {
+        expect(validateConfig(config({ [setting]: value }))).toEqual([]);
+      }
+    }
   });
 });

@@ -3,16 +3,17 @@
 
 import { z } from 'zod';
 import { projectRows } from '../../ivanti/odata/projection.js';
-import { MAX_TOP } from '../../ivanti/odata/query.js';
+import { MAX_TOP, readTotal } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
+import { impersonatedAs } from '../shared/zero-note.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { answersForSignedInAccount } from './list-saved-searches.js';
-import { rowFields } from './row-fields.js';
+import { compactRows } from '../shared/compact-rows.js';
 import { transportFor } from '../shared/transport-for.js';
 
 export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
@@ -53,7 +54,7 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
       runTool('saved_search', deps.logger, async () => {
         const transport = transportFor(deps.connection.transport, context);
         // Whose session Ivanti will resolve "my" against — the person, where one is open.
-        const impersonating = context.impersonation?.session()?.loginId;
+        const impersonating = impersonatedAs(context);
         const { entity, entitySet } = await resolveObject(deps, args.object);
 
         // `$select` is useless here in a way that looks like it worked: Ivanti keeps every key
@@ -70,17 +71,17 @@ export function createSavedSearchTool(deps: IvantiToolDeps): ToolDefinition {
         const payload = await transport.request<OdataRecord>(url);
         // A saved search matching nothing answers 204 with an empty body.
         const rows = readRows<OdataRecord>(payload, url);
-        const total = payload?.['@odata.count'];
+        const total = readTotal(payload, rows.length);
 
         // Decided against this search's own rows: the fixed preference list alone left a
         // tenant's own object with rows that were a RecId and two timestamps.
-        const shown = rowFields(rows, args.fields, entity);
+        const shown = compactRows(rows, args.fields, entity);
 
         return jsonResult({
           object: entity.name,
           search: args.name,
           returned: rows.length,
-          ...(typeof total === 'number' ? { total } : {}),
+          ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),
           // "My …" resolves against the SESSION, and under impersonation the session IS the
           // person — `transportFor` sends only their SID, so Ivanti resolves "my" as them and the
           // rows really are theirs. Saying otherwise told the model to disregard an answer that

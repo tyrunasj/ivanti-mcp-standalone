@@ -66,6 +66,7 @@ export async function createOAuthSetup(
       issuer,
       audience: audiences,
       requiredScopes: config.OAUTH_REQUIRED_SCOPES,
+      requireAccessTokenTyp: config.OAUTH_REQUIRE_TYP === true,
       keyResolver: createRemoteKeyResolver(jwksUri, logger === undefined ? {} : { logger }),
       ...(logger === undefined ? {} : { logger }),
     }),

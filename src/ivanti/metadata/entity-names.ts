@@ -62,6 +62,25 @@ export function toCsdlEntity(ref: string): string {
 }
 
 /**
+ * The CSDL name (or any other spelling) back to the AdminUI id the session services take.
+ *
+ * `incident` → `incident#`, `ci__computer` → `ci#computer`. A **subtype keeps no trailing `#`**:
+ * `CI#Computer` is the whole id, while a base object is `Incident#`. A bare name is taken as the
+ * CSDL entity it is: `ci__address` ends in a real `s`, which `toCsdlEntity` would strip. This is
+ * the one conversion; workspaces key on this form and `servesEntity` compares against it.
+ */
+export function toObjectId(name: string): string {
+  const hashed = hashForm(name);
+  const bare = hashed.includes('#') ? stripHash(hashed) : name;
+  return bare.includes('__') ? bare.replace(/__/g, '#') : `${bare}#`;
+}
+
+/** An AdminUI id back to the lowercase CSDL name: `CI#Computer` → `ci__computer`, `Incident#` → `incident`. */
+export function fromObjectId(id: string): string {
+  return stripHash(id).toLowerCase();
+}
+
+/**
  * → the lowercase entity set that `$metadata` and full-text search demand, guessing the plural
  * when given a bare singular.
  *
@@ -89,12 +108,12 @@ export function toGuessedEntitySet(ref: string): string {
 export function servesEntity(requested: string, served: string | undefined): boolean {
   if (served === undefined || served === '') return false;
 
-  const want = requested.toLowerCase();
-  const got = served.toLowerCase();
+  // One trailing `#` is a spelling of the same id (`Task#` / `Task`), never a different object.
+  const want = requested.toLowerCase().replace(/#$/, '');
+  const got = served.toLowerCase().replace(/#$/, '');
   if (want === got) return true;
 
-  const [wantBase = '', wantSub = ''] = want.split('#');
-  return wantSub === '' && wantBase === got.split('#')[0];
+  return !want.includes('#') && want === got.split('#')[0];
 }
 
 /**

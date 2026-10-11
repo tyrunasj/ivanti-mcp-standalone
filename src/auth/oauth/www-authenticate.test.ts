@@ -69,4 +69,18 @@ describe('buildWwwAuthenticate', () => {
 
     expect(header).toContain('error_description="bad token"');
   });
+
+  // Values the client acts on verbatim: cut short they are a different scope and a 404 URL.
+  it('does not truncate the scope list or the metadata URL', () => {
+    const scopes = ['Read', 'Write', 'Delete', 'Attach'].map(
+      (name) => `api://11111111-2222-3333-4444-555555555555/Ivanti.${name}`,
+    );
+    const longUrl = `https://${'a'.repeat(280)}.example.com/.well-known/oauth-protected-resource/mcp`;
+
+    const header = buildWwwAuthenticate({ resourceMetadataUrl: longUrl, scope: scopes });
+
+    expect(scopes.join(' ').length).toBeGreaterThan(200);
+    expect(header).toContain(`scope="${scopes.join(' ')}"`);
+    expect(header).toContain(`resource_metadata="${longUrl}"`);
+  });
 });

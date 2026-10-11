@@ -41,3 +41,19 @@ export function ignoredFieldsNote(ignored: readonly string[]): string {
     'the value as absent. Call get_object_metadata with a `search` for the right name.'
   );
 }
+
+/**
+ * The payload keys for it, computed once: `ignoredFields` and `fieldsNote`, or nothing.
+ *
+ * Every tool that projects rows spread `ignoredFieldNames(...)` three times over to build these,
+ * and `get_record` re-implemented it inline with a different sentence under a different key.
+ */
+export function ignoredFieldsPayload(
+  rows: readonly OdataRecord[],
+  requested: readonly string[] | undefined,
+): { ignoredFields?: string[]; fieldsNote?: string } {
+  const ignored = ignoredFieldNames(rows, requested);
+  return ignored.length === 0
+    ? {}
+    : { ignoredFields: ignored, fieldsNote: ignoredFieldsNote(ignored) };
+}

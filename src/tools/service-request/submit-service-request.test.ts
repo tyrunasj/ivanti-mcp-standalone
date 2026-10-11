@@ -84,6 +84,27 @@ const WITH_FILE = {
 };
 
 describe('submit_service_request, with files', () => {
+  it('refuses a garbled attachment among good ones before staging anything', async () => {
+    const { submit, urls } = filing({});
+
+    const result = await submit.handler(
+      {
+        ...WITH_FILE,
+        attachments: [
+          ...WITH_FILE.attachments,
+          { filename: 'bad.txt', contentBase64: 'aGVsbG8=!!!d29ybGQ=' },
+        ],
+      },
+      pinned(),
+    );
+
+    expect(result.isError).toBe(true);
+    const message = JSON.stringify(result.content);
+    expect(message).toContain('Nothing was submitted');
+    expect(message).toContain('bad.txt');
+    expect(urls.some((url) => url.includes('GetUploadTicket') || url.includes('SubmitRequest'))).toBe(false);
+  });
+
   it('reports the files the request carries, read back — not the ones staged for it', async () => {
     // `attached` used to echo the staged list, so a file the submit did not bind was still
     // reported as on the request.

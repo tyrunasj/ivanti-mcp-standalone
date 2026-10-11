@@ -200,7 +200,7 @@ export function createSearchTool(deps: IvantiToolDeps): ToolDefinition {
                     : `This searched only ${scopedTo}'s own records, so an empty answer is TWO ` +
                       'claims at once: not in the indexed text, AND not theirs. Say the second ' +
                       'one — a record belonging to someone else answers zero here too. ') +
-                  noHitsNote(args.query) +
+                  noHitsNote(args.query, context) +
                   ` Searched ${String(searched.length)} Business Object(s) of the ` +
                   `${String(objects.length)} asked for; the tenant has far more.`,
               }

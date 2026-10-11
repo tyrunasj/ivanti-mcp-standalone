@@ -2,11 +2,12 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Logger } from '../../logger.js';
-import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
-import { exchange, readText, type ExchangeContext } from '../http/exchange.js';
+import { IvantiApiError } from '../http/errors.js';
+import type { ExchangeContext } from '../http/exchange.js';
 import type { RequestLimiter } from '../http/request-limiter.js';
 import type { FetchLike } from '../http/transport.js';
 import type { IvantiRoutes } from '../odata/url.js';
+import { createAsmxCalls } from './asmx-calls.js';
 
 /**
  * Ivanti's **second** authentication protocol.
@@ -57,8 +58,6 @@ export interface IvantiSession {
   uploadToHandler: (handlerPath: string, form: FormData) => Promise<string>;
   /** Establishes the session if needed and reports who it belongs to. */
   identity: () => Promise<SessionIdentity>;
-  /** The identity only if a session already exists — never worth a handshake just to label a row. */
-  identityIfKnown: () => SessionIdentity | undefined;
 }
 
 export interface SessionOptions {
@@ -116,43 +115,7 @@ export function createSession(options: SessionOptions): IvantiSession {
     ...(options.limiter === undefined ? {} : { limiter: options.limiter }),
   });
 
-  const postJson = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {
-    const { body: text } = await exchange(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          // No `Authorization` header: the SID cookie and CSRF token are the credential here,
-          // and sending the API key as well confuses some deployments.
-          'Content-Type': 'application/json; charset=UTF-8',
-          Accept: 'application/json',
-          ...(sid === undefined ? {} : { Cookie: `SID=${sid}` }),
-        },
-        body: JSON.stringify(body),
-      },
-      contextFor(sid),
-      readText,
-    );
-
-    let parsed: { d?: T };
-    try {
-      parsed = JSON.parse(text) as { d?: T };
-    } catch {
-      throw new IvantiApiError(
-        { status: 200, method: 'POST', url, body: scrubErrorBody(text, ...secretsFor(sid)) },
-        'Ivanti session call answered 200 with a body that is not JSON',
-      );
-    }
-
-    // ASMX wraps every answer in `{ "d": … }`.
-    if (parsed.d === undefined) {
-      throw new IvantiApiError(
-        { status: 200, method: 'POST', url, body: scrubErrorBody(text, ...secretsFor(sid)) },
-        'Ivanti session call answered without the expected `d` envelope',
-      );
-    }
-    return parsed.d;
-  };
+  const { postJson, callService, postForm, postMultipart } = createAsmxCalls(contextFor, routes);
 
   const handshake = async (): Promise<Handshake> => {
     // `tenantId` is the host, not a name someone chose — the same string that is in the URL.
@@ -166,7 +129,7 @@ export function createSession(options: SessionOptions): IvantiSession {
     const status = await postJson<SessionStatus>(
       routes.service('Services/Session.asmx/InitializeSession'),
       { _csrfToken: null },
-      sid,
+      { sid },
     );
 
     const csrf = status.SessionCsrfToken;
@@ -188,7 +151,7 @@ export function createSession(options: SessionOptions): IvantiSession {
       const user = await postJson<UserData>(
         routes.service('Services/Session.asmx/GetUserData'),
         { _csrfToken: csrf, tzoffset: 0 },
-        sid,
+        { sid },
       );
       if (user.UserRole !== undefined && user.UserRole !== '') identity.role = user.UserRole;
       if (user.DisplayName !== undefined && user.DisplayName !== '') {
@@ -242,82 +205,19 @@ export function createSession(options: SessionOptions): IvantiSession {
     }
   };
 
-  const callOnce = <T>(
-    { sid, csrf }: Handshake,
-    servicePath: string,
-    method: string,
-    args: Record<string, unknown>,
-  ): Promise<T> =>
-    postJson<T>(
-      routes.service(`${servicePath}/${method}`),
-      // `.asmx` wants the token in the BODY. The `.ashx` handlers want it as a lowercase header
-      // instead, which is why they do not share this path.
-      { _csrfToken: csrf, ...args },
-      sid,
-    );
-
-  const postForm = async (
-    { sid, csrf }: Handshake,
-    url: string,
-    form: Record<string, string>,
-  ): Promise<string> => {
-    const { body } = await exchange(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Cookie: `SID=${sid}`,
-          // Lowercase, and a header: the `.asmx` services want `_csrfToken` in the body instead.
-          _csrftoken: csrf,
-        },
-        body: new URLSearchParams(form).toString(),
-      },
-      contextFor(sid),
-      readText,
-    );
-    return body;
-  };
-
-  const postMultipart = async (
-    { sid, csrf }: Handshake,
-    url: string,
-    form: FormData,
-  ): Promise<string> => {
-    const { body } = await exchange(
-      url,
-      {
-        method: 'POST',
-        headers: {
-          Cookie: `SID=${sid}`,
-          // Mixed-case here. The same token is `_csrftoken` on a form-urlencoded handler and
-          // `_csrfToken` in an `.asmx` body — three spellings, one session.
-          _csrfToken: csrf,
-        },
-        body: form,
-      },
-      contextFor(sid),
-      readText,
-    );
-    return body;
-  };
-
   return {
     uploadToHandler(handlerPath: string, form: FormData): Promise<string> {
-      const url = routes.service(handlerPath);
-      return withSession((handshake) => postMultipart(handshake, url, form));
+      return withSession((handshake) => postMultipart(handshake, handlerPath, form));
     },
 
     callHandler(handlerPath: string, form: Record<string, string>): Promise<string> {
-      const url = routes.service(`handlers/${handlerPath}`);
-      return withSession((handshake) => postForm(handshake, url, form));
+      return withSession((handshake) => postForm(handshake, handlerPath, form));
     },
 
     call<T>(servicePath: string, method: string, args: Record<string, unknown> = {}): Promise<T> {
-      return withSession((handshake) => callOnce<T>(handshake, servicePath, method, args));
+      return withSession((handshake) => callService<T>(handshake, servicePath, method, args));
     },
 
     identity: async () => (await ensure()).identity,
-    identityIfKnown: () => session?.identity,
   };
 }

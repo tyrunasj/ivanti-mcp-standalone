@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import type { CallContext } from '../tool-definition.js';
+import { impersonatedAs, impersonatedZeroSentence } from '../shared/zero-note.js';
+
 /**
  * What Ivanti's `$search` actually does with more than one word — all measured live against
  * `incidents` on 2026-09-12:
@@ -62,7 +65,7 @@ function narrowedByMultipleWords(query: string): boolean {
  * of the model — and an empty payload reads as a clean negative. Two testers reported "there is
  * no such record" from a query that was merely too narrow.
  */
-export function noHitsNote(query: string): string {
+export function noHitsNote(query: string, call: CallContext): string {
   const narrowed =
     narrowedByMultipleWords(query)
       ? 'This query has more than one word, and a space means AND — every word had to appear in ' +
@@ -70,11 +73,14 @@ export function noHitsNote(query: string): string {
         'BEFORE concluding nothing matches. '
       : '';
 
+  const impersonating = impersonatedAs(call);
+
   return (
     `${narrowed}No match IN THE INDEXED TEXT — the subject, description and notes. This is not ` +
     'the same as no such record: a value held in a structured field (a category, a chassis type, ' +
     'a filename) does not match here even when it is exactly the word searched. Measured: ' +
     '`laptop` finds neither computer whose ChassisType is literally "Laptop". Confirm with ' +
-    'list_records and an `eq` filter before reporting none.'
+    'list_records and an `eq` filter before reporting none.' +
+    (impersonating === undefined ? '' : ` ${impersonatedZeroSentence(impersonating)}`)
   );
 }

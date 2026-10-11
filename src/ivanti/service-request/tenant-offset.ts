@@ -27,7 +27,15 @@ import { readCollection, type OdataRecord } from '../odata/response.js';
 /** Objects worth asking, most-likely-to-be-active first. */
 const SOURCES = ['servicereqs', 'incidents', 'employees'];
 
-const OFFSET = /[+-]\d{2}:\d{2}$/;
+/** The widest real UTC offset, +14:00 (Kiribati). Nothing beyond it is a time zone. */
+export const MAX_UTC_OFFSET_HOURS = 14;
+
+/** A rendered datetime and nothing else: free text that happens to end in `-12:30` is not one. */
+const RENDERED_DATETIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?([+-])(\d{2}):(\d{2})$/;
+
+/** Fields that are the row's own clock come first; any other field is the last resort. */
+const PREFERRED_FIELDS = ['LastModDateTime', 'CreatedDateTime'];
 
 export interface TenantOffset {
   /** Minutes east of UTC — `+120` for a tenant on UTC+2. */
@@ -41,18 +49,27 @@ export interface TenantOffsetReader {
   get: () => Promise<TenantOffset | undefined>;
 }
 
+function offsetOf(value: unknown): TenantOffset | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = RENDERED_DATETIME.exec(value);
+  if (match === null) return undefined;
+
+  const hours = Number(match[2]);
+  const minutes = Number(match[3]);
+  if (hours > MAX_UTC_OFFSET_HOURS || minutes >= 60) return undefined;
+  if (hours === MAX_UTC_OFFSET_HOURS && minutes > 0) return undefined;
+
+  return { minutes: (match[1] === '-' ? -1 : 1) * (hours * 60 + minutes), observedAt: value };
+}
+
 function parseOffset(row: OdataRecord): TenantOffset | undefined {
+  for (const name of PREFERRED_FIELDS) {
+    const offset = offsetOf(row[name]);
+    if (offset !== undefined) return offset;
+  }
   for (const value of Object.values(row)) {
-    if (typeof value !== 'string') continue;
-    const match = OFFSET.exec(value);
-    if (match === null) continue;
-
-    const sign = match[0].startsWith('-') ? -1 : 1;
-    const hours = Number(match[0].slice(1, 3));
-    const minutes = Number(match[0].slice(4, 6));
-    if (Number.isNaN(hours) || Number.isNaN(minutes)) continue;
-
-    return { minutes: sign * (hours * 60 + minutes), observedAt: value };
+    const offset = offsetOf(value);
+    if (offset !== undefined) return offset;
   }
   return undefined;
 }
@@ -84,12 +101,17 @@ export function createTenantOffsetReader(
         });
       }
     }
+    logger.warn('tenant utc offset not found', { sources: SOURCES.join(',') });
     return undefined;
   };
 
   return {
     get(): Promise<TenantOffset | undefined> {
-      found ??= discover();
+      // Only an answer is remembered: one transient failure must not stand until restart.
+      found ??= discover().then((offset) => {
+        if (offset === undefined) found = undefined;
+        return offset;
+      });
       return found;
     },
   };

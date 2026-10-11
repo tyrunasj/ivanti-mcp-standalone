@@ -19,7 +19,6 @@ const workspaces: WorkspaceCatalog = {
 const session = (formDef: unknown): IvantiSession =>
   ({
     identity: () => Promise.resolve({ role: 'Admin' }),
-    identityIfKnown: () => ({ role: 'Admin' }),
     callHandler: () => Promise.reject(new Error('unused')),
     uploadToHandler: () => Promise.reject(new Error('no handler in this fixture')),
     call: (_service: string, method: string) =>
@@ -137,5 +136,35 @@ describe('required and read-only rules', () => {
     ).get('Incident#');
 
     expect(form?.readOnlyFields).toEqual([]);
+  });
+});
+
+/** A subtype's workspace id is Ivanti's `Base#Sub`; the object id the tools pass keeps no trailing `#`. */
+describe('a subtype object', () => {
+  it('resolves the form of the workspace that serves it, and asks for that workspace', async () => {
+    const calls: { method: string; ObjectId?: unknown }[] = [];
+    const subtypeSession = {
+      identity: () => Promise.resolve({ role: 'Admin' }),
+      identityIfKnown: () => ({ role: 'Admin' }),
+      call: (_service: string, method: string, body: { ObjectId?: unknown }) => {
+        calls.push({ method, ObjectId: body.ObjectId });
+        return Promise.resolve(
+          method === 'GetWorkspaceData'
+            ? { LayoutData: { newRecordViews: { 'CI#Computer': 'v' } } }
+            : { formDef: { FormMeta: { Name: 'Computer form' }, TableMeta: { TableRef: 'CI#Computer', ValidatedFields: { Status: {} } } } },
+        ) as Promise<never>;
+      },
+    } as unknown as IvantiSession;
+    const catalog: WorkspaceCatalog = {
+      list: () =>
+        Promise.resolve([
+          { id: 'CI#Computer', object: 'ci__computer', displayName: 'Computer', layoutName: 'L' },
+        ]),
+    };
+
+    const form = await createFormContext(subtypeSession, catalog, logger()).get('ci#computer');
+
+    expect(form).toBeDefined();
+    expect(calls.find((call) => call.method === 'GetWorkspaceData')?.ObjectId).toBe('CI#Computer');
   });
 });

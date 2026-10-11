@@ -43,16 +43,3 @@ export function assertNullFilterTypes(filter: string | undefined, entity: Entity
     );
   }
 }
-
-/**
- * The other half of the trap, which no refusal can catch: Ivanti stores many "empty" values as the
- * empty STRING, and `ne '$NULL'` counts those as present.
- *
- * Measured: `ChassisType ne '$NULL'` returns 42 CIs, of which 13 hold `""`. A tester used the same
- * idiom to establish that 157 of 628 employees have a manager — a ceiling, not a count, and
- * Harold Sanders' own value is `""` rather than null.
- */
-export const NULL_FILTER_CAVEAT =
-  "`$NULL` matches SQL NULL only. Ivanti stores many empty values as the empty string, which " +
-  "`ne '$NULL'` counts as PRESENT — measured: rows that passed that test held `''`. To " +
-  "exclude both, add `and <field> ne ''`.";

@@ -8,6 +8,7 @@ import { ANONYMOUS, verifiedIdentity } from '../../auth/identity.js';
 import type { Logger } from '../../logger.js';
 import type { AuthorizationResult } from './authorize-request.js';
 import { createMcpHandler, type McpSession } from './mcp-handler.js';
+import { BodyBudget } from './read-body.js';
 import { EVICTION_FLOOR_MS, SessionManager } from './session-manager.js';
 
 const silentLogger = (): Logger => ({
@@ -475,5 +476,51 @@ describe('createMcpHandler', () => {
     );
 
     expect(session.handled).toHaveBeenCalled();
+  });
+
+  describe('request body bounds', () => {
+    // An initialize is read before any session exists, so it was the unbounded door.
+    it('refuses an oversized initialize with 413, before any session is admitted', async () => {
+      const { handler, created } = setup();
+      const res = response();
+      const big = { ...INITIALIZE, params: { ...INITIALIZE.params, padding: 'x'.repeat(100_000) } };
+
+      await handler(request('POST', {}, big), res, authorized);
+
+      expect(res.status).toBe(413);
+      expect(created).toHaveLength(0);
+    });
+
+    it('still lets a call on an admitted session carry a large body', async () => {
+      const { handler, created, sessions } = setup();
+      await handler(request('POST', {}, INITIALIZE), response(), authorized);
+      const id = created[0]?.transport.sessionId ?? '';
+      sessions.register(id, created[0] as FakeSession);
+      const res = response();
+      const big = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { pad: 'x'.repeat(100_000) } };
+
+      await handler(request('POST', { 'mcp-session-id': id }, big), res, authorized);
+
+      expect(res.status).not.toBe(413);
+      expect(created[0]?.handled).toHaveBeenCalled();
+    });
+
+    it('answers 503 with Retry-After when the process is already buffering its budget', async () => {
+      const bodyBudget = new BodyBudget(10, 4);
+      const logger = silentLogger();
+      const sessions = new SessionManager<FakeSession>({ maxSessions: 10, idleTtlMs: 60_000, logger });
+      const handler = createMcpHandler<FakeSession>({
+        sessions,
+        logger,
+        createSession: () => fakeSession(),
+        bodyBudget,
+      });
+      const res = response();
+
+      await handler(request('POST', {}, INITIALIZE), res, authorized);
+
+      expect(res.status).toBe(503);
+      expect(res.headers['Retry-After']).toBe('1');
+    });
   });
 });

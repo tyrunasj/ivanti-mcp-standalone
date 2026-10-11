@@ -4,6 +4,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, entityFixture, field } from '../connection.fixture.js';
 import type { Logger } from '../../logger.js';
+import { IvantiApiError } from '../http/errors.js';
+import { IvantiBusyError } from '../http/request-limiter.js';
 import { formFixture } from '../session/form.fixture.js';
 import {
   confirmWrite,
@@ -12,6 +14,7 @@ import {
   toObjectId,
   ValidatedValueError,
   WriteNotStoredError,
+  WriteUnconfirmedError,
 } from './validated-write.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
@@ -70,7 +73,8 @@ describe('toObjectId', () => {
     // case-insensitive here (verified live), so only the `#` structure has to be right.
     expect(toObjectId('incident')).toBe('incident#');
     expect(toObjectId('ci__computer')).toBe('ci#computer');
-    expect(toObjectId('Incidents')).toBe('Incident#');
+    expect(toObjectId('Incident#')).toBe('Incident#');
+    expect(toObjectId('ci__address')).toBe('ci#address');
   });
 });
 
@@ -301,6 +305,95 @@ describe('confirmWrite', () => {
       confirmWrite({ connection, entitySet: 'incidents', recId: 'abc', resolved: resolved() }),
     ).resolves.toEqual({ ignoredByIvanti: {}, notConfirmed: [] });
     expect(urls).toHaveLength(0);
+  });
+
+
+  describe('a validated field this server could not resolve', () => {
+    // No form, or the field is not on the role's form: `values` is empty, the caller's spelling is
+    // what was sent, and Ivanti matches its lists case-insensitively.
+    const unresolved = (confirm: Record<string, unknown>) => resolved(confirm, {}, {});
+
+    it('passes when Ivanti stored it in the list\'s own case', async () => {
+      await expect(
+        confirmOn({ Status: 'Active' }, { resolved: unresolved({ Status: 'active' }) }),
+      ).resolves.toMatchObject({ notConfirmed: [] });
+    });
+
+    it('still fails when it stored something else', async () => {
+      const failure = confirmOn({ Status: 'Logged' }, { resolved: unresolved({ Status: 'active' }) });
+
+      await expect(failure).rejects.toThrow(WriteNotStoredError);
+      await expect(failure).rejects.toThrow(/wrote 'active', stored 'Logged'/);
+    });
+
+    it('compares what was resolved exactly while the rest is case-folded', async () => {
+      await expect(
+        confirmOn(
+          { Status: 'ACTIVE', Category: 'connectivity' },
+          { resolved: resolved({ Status: 'Active', Category: 'Connectivity' }, {}, { Status: 'Active' }) },
+        ),
+      ).rejects.toThrow(/Status: wrote 'Active', stored 'ACTIVE'/);
+
+      await expect(
+        confirmOn(
+          { Status: 'Active', Category: 'connectivity' },
+          { resolved: resolved({ Status: 'Active', Category: 'Connectivity' }, {}, { Status: 'Active' }) },
+        ),
+      ).resolves.toMatchObject({ notConfirmed: [] });
+    });
+  });
+
+  describe('a record that cannot be read after the write', () => {
+    it('files validated fields and identifiers under notConfirmed, never as not stored', async () => {
+      const readBack = await confirmOn(undefined, {
+        resolved: resolved({ Status: 'Active' }, { Status_Valid: 'rec-active' }, { Status: 'Active' }),
+      });
+
+      expect(readBack.notConfirmed).toEqual([
+        'Status — the record could not be read back',
+        'Status_Valid — the record could not be read back',
+      ]);
+    });
+
+    it('is not reported as unconfirmed when the request answered empty', async () => {
+      await expect(
+        confirmOn(undefined, { resolved: resolved({ Status: 'active' }, {}, {}) }),
+      ).resolves.toMatchObject({ notConfirmed: ['Status — the record could not be read back'] });
+    });
+  });
+
+  describe('a read-back that fails', () => {
+    const failing = (error: unknown) => {
+      const { connection } = stored({});
+      const transport = { ...connection.transport, request: () => Promise.reject(error instanceof Error ? error : new Error(String(error))) };
+      return confirmWrite({
+        connection,
+        entitySet: 'incidents',
+        recId: 'abc',
+        resolved: resolved({ Status: 'Active' }),
+        transport: transport,
+      });
+    };
+
+    it.each([
+      ['busy', new IvantiBusyError(16, 30000)],
+      ['no answer', new IvantiApiError({ status: 0, method: 'GET', url: 'u', body: 'timeout' })],
+      ['a gateway timeout', new IvantiApiError({ status: 504, method: 'GET', url: 'u', body: '' })],
+    ])('is a WriteUnconfirmedError when %s, naming the record and not repeating the write', async (_l, error) => {
+      const failure = failing(error);
+
+      await expect(failure).rejects.toThrow(WriteUnconfirmedError);
+      await expect(failure).rejects.toThrow(/incidents\('abc'\)/);
+      await expect(failure).rejects.toThrow(/do not repeat the write/);
+    });
+
+    it('never carries an echoed body', async () => {
+      const failure = failing(
+        new IvantiApiError({ status: 400, method: 'GET', url: 'u', body: 'SECRET-ECHO' }),
+      );
+
+      await expect(failure).rejects.not.toThrow(/SECRET-ECHO/);
+    });
   });
 
   describe('a free field', () => {

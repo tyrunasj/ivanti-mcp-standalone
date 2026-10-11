@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ANONYMOUS } from '../../auth/identity.js';
 import { createSessionPin } from '../../auth/identity-pin.js';
 import { createImpersonationSlot } from '../../auth/impersonation.js';
+import { sessionView } from '../../ivanti/session/session-view.js';
 import { connectionFixture } from '../../ivanti/connection.fixture.js';
 import type { IvantiTransport } from '../../ivanti/http/transport.js';
 import { impersonatedSessionFixture } from '../../ivanti/session/impersonated-session.fixture.js';
@@ -64,6 +65,21 @@ describe('connectionFor', () => {
     expect(scoped.admin).toBe(d.connection.admin);
     expect(scoped.people).toBe(d.connection.people);
     expect(scoped.capability).toBe(d.connection.capability);
+  });
+
+  // Whatever `sessionView` builds is person-scoped. A member added to it and not swapped here
+  // would stay on the service account's role under the person's name.
+  it('swaps every member the session view builds, and only those besides transport', async () => {
+    const d = deps();
+    const { context, session } = await acting();
+
+    const scoped = connectionFor(d, context);
+    const view = sessionView(session, logger());
+
+    const swapped = Object.keys(scoped).filter(
+      (key) => scoped[key as keyof typeof scoped] !== d.connection[key as keyof typeof scoped],
+    );
+    expect(swapped.sort()).toEqual([...Object.keys(view), 'transport'].sort());
   });
 
   // A workspace catalog describes a ROLE's Ivanti. Built on the service account's session it

@@ -169,11 +169,13 @@ describe('createSession', () => {
     const fetchImpl: FetchLike = () =>
       Promise.resolve(reply(400, 'rejected key super-secret for tenant'));
 
-    await session(fetchImpl)
+    const failure = await session(fetchImpl)
       .identity()
-      .catch((error: unknown) => {
-        expect((error as IvantiApiError).body).not.toContain('super-secret');
-      });
+      .catch((error: unknown) => error);
+
+    // Without this a resolved call would skip the check below and the test would pass for nothing.
+    expect(failure).toBeInstanceOf(IvantiApiError);
+    expect((failure as IvantiApiError).body).not.toContain('super-secret');
   });
 
   // The session SID is a live Admin session on the service account — as much a credential as the key.
@@ -214,12 +216,5 @@ describe('createSession', () => {
       );
 
     await expect(session(fetchImpl).identity()).rejects.toThrow(/no CSRF token/);
-  });
-
-  it('answers identityIfKnown without opening a session', () => {
-    const { calls, fetchImpl } = tenant(() => reply(200, { d: 'ok' }));
-
-    expect(session(fetchImpl).identityIfKnown()).toBeUndefined();
-    expect(calls).toHaveLength(0);
   });
 });

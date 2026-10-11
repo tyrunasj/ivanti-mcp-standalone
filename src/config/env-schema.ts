@@ -100,6 +100,15 @@ export const envSchema = z.object({
   OAUTH_SCOPES_SUPPORTED: commaSeparated.default([]),
   OAUTH_REQUIRED_SCOPES: commaSeparated.default([]),
   /**
+   * Require the JOSE `typ` header `at+jwt` (RFC 9068), which an ID token never carries.
+   *
+   * Off when unset: Entra v2 and stock Keycloak mint access tokens typed `JWT`, and would be
+   * refused. For an IdP that emits RFC 9068 access tokens (Auth0 on an API audience, Okta custom
+   * servers) it is the check that stops an ID token whose `aud` is the client id from verifying.
+   * No schema default, so the "set but ignored outside oauth" rule sees only what was written.
+   */
+  OAUTH_REQUIRE_TYP: z.stringbool().optional(),
+  /**
    * Which claim names the person, for matching against Ivanti.
    *
    * Not `sub`, which is what identifies the *token's* subject: Entra's is an opaque pairwise

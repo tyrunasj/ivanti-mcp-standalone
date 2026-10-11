@@ -45,7 +45,6 @@ function session(switchTo = vi.fn((role: string) => Promise.resolve(role))): Imp
     callHandler: () => Promise.reject(new Error('unused')),
     uploadToHandler: () => Promise.reject(new Error('unused')),
     identity: () => Promise.resolve({ role }),
-    identityIfKnown: () => ({ role }),
     switchTo: async (next: string): Promise<string> => {
       role = await switchTo(next);
       return role;
@@ -56,7 +55,7 @@ function session(switchTo = vi.fn((role: string) => Promise.resolve(role))): Imp
 
 async function withSession(target?: ImpersonatedSession): Promise<CallContext> {
   const slot = createImpersonationSlot(() => Promise.resolve(target ?? session()));
-  if (target !== undefined || target === undefined) await slot.open('HSanders');
+  await slot.open('HSanders');
   return { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS), impersonation: slot };
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import { fromObjectId } from '../metadata/entity-names.js';
 import type { Logger } from '../../logger.js';
 import type { IvantiSession } from './asmx-session.js';
 
@@ -64,7 +65,7 @@ async function readAdminCatalog(
     .filter((row): row is BriefBusinessObject & { id: string } => typeof row.id === 'string')
     .map((row) => ({
       id: row.id,
-      object: row.id.replace(/#$/, '').replace(/#/g, '__').toLowerCase(),
+      object: fromObjectId(row.id),
       displayName: row.displayName ?? row.name ?? row.id,
       ...(row.description === undefined || row.description === ''
         ? {}

@@ -32,7 +32,7 @@ const OPERATORS = new Set(['not', 'and', 'or']);
 const TYPED_LITERAL = /\b(datetime|datetimeoffset|guid|time|binary|X)'/i;
 
 /** One pass over the filter's quoting: the masked text, and whether a literal was left open. */
-function scanStringLiterals(filter: string): { masked: string; unterminated: boolean } {
+export function scanStringLiterals(filter: string): { masked: string; unterminated: boolean } {
   let masked = '';
   let inString = false;
 
@@ -53,17 +53,6 @@ function scanStringLiterals(filter: string): { masked: string; unterminated: boo
   }
 
   return { masked, unterminated: inString };
-}
-
-/**
- * Replaces the contents of single-quoted literals with `~`, preserving length and the `''`
- * escape, so that a value containing `(` or the word `datetime` cannot trip the scan.
- *
- * The mask character must not be a word character: masking with `x` made every `'a'` look like
- * the OData v2 binary literal `X'…'`, which the tests caught.
- */
-export function maskStringLiterals(filter: string): string {
-  return scanStringLiterals(filter).masked;
 }
 
 /**
@@ -141,7 +130,9 @@ export function findUnsupportedFilter(filter: string): UnsupportedFilter | undef
 
   // An identifier immediately followed by `(` is a call. Grouping parens are preceded by an
   // operator or nothing, so `not (x eq 1)` and `(a eq 1) and (b eq 2)` both pass.
-  const call = /([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+  // The left boundary keeps this linear: without it every offset inside a long identifier starts
+  // a scan to the end of it, so a 200 KB name cost 15 s.
+  const call = /(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
   let match: RegExpExecArray | null;
   while ((match = call.exec(masked)) !== null) {
     const name = match[1] ?? '';
@@ -249,7 +240,7 @@ export function referencedFieldNames(parts: {
 
   if (parts.filter !== undefined) {
     const withoutLiterals = parts.filter
-      .replace(/(?:[A-Za-z_][A-Za-z0-9_]*)?'(?:[^']|'')*'/g, "''")
+      .replace(/(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*)?'(?:[^']|'')*'/g, "''")
       .replace(UNQUOTED_LITERAL, ' ');
     for (const match of withoutLiterals.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
       const token = match[0];

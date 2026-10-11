@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
-import { ANONYMOUS, assertedIdentity, type CallerIdentity } from './identity.js';
+import { assertedIdentity, type CallerIdentity } from './identity.js';
 
 /**
  * One identity per conversation, decided once.
@@ -179,9 +179,4 @@ export function createSessionPin(sessionIdentity: CallerIdentity): SessionPin {
       }
     },
   };
-}
-
-/** The identity a session starts with, before anyone claims anything. */
-export function initialIdentity(verified: CallerIdentity | undefined): CallerIdentity {
-  return verified ?? ANONYMOUS;
 }

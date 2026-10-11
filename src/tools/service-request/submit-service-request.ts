@@ -20,6 +20,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { connectionFor } from '../shared/connection-for.js';
+import { decodeBase64Argument, NOT_BASE64 } from '../shared/decode-base64.js';
 import { ObjectNotAllowedError } from '../shared/object-gate.js';
 
 /** An answer is either a plain value or a chosen option carrying its identifier. */
@@ -236,12 +237,14 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
         // the implication that nothing reached the tenant was not.
         const decoded: { filename: string; bytes: Buffer; contentType: string }[] = [];
         for (const file of files) {
-          const bytes = Buffer.from(file.contentBase64, 'base64');
-          if (bytes.byteLength === 0) {
+          const bytes = decodeBase64Argument(file.contentBase64);
+          if (bytes === undefined) {
             return errorResult(
-              `'${file.filename}' decoded to nothing — either it is empty or the value is not ` +
-                'base64. Nothing was submitted.',
+              `'${file.filename}' ${NOT_BASE64}. Nothing was submitted.`,
             );
+          }
+          if (bytes.byteLength === 0) {
+            return errorResult(`'${file.filename}' decoded to nothing — it is empty. Nothing was submitted.`);
           }
           if (bytes.byteLength > MAX_FILE_BYTES) {
             return errorResult(

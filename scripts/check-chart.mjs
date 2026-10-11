@@ -7,11 +7,17 @@
  * installed the release. This renders the default values, then every guard, and
  * fails if a refusal renders or a valid configuration does not.
  *
+ * Two further checks tie the chart to the server rather than to itself: every configuration
+ * that renders is fed to the server's own `loadConfig` (a chart that renders what the server
+ * refuses at boot crash-loops the pod), and every `envSchema` key is wired in the Deployment.
+ * Both read `dist/`, so this runs after the build.
+ *
  * Needs `helm` on the PATH (GitHub's ubuntu runners carry it).
  *
  *   node scripts/check-chart.mjs
  */
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const CHART = fileURLToPath(new URL('../charts/ivanti-mcp', import.meta.url));
@@ -23,6 +29,21 @@ const BASE = {
   'ivanti.baseUrl': 'https://tenant.example.com',
   'secrets.existingSecret': 'ivanti-mcp-secrets',
 };
+
+const DIST = fileURLToPath(new URL('../dist/config/', import.meta.url));
+if (!existsSync(`${DIST}load-config.js`)) {
+  console.error('dist/ is missing: the chart is checked against the server\'s own loadConfig. Run `pnpm build` first.');
+  process.exit(2);
+}
+const { loadConfig } = await import(`${DIST}load-config.js`);
+const { envSchema } = await import(`${DIST}env-schema.js`);
+const { TIMEOUT_BOUNDS_MS } = await import(`${DIST}validate-config.js`);
+
+// The server's defaults are read from the schema, not restated: a chart default that drifts from
+// them is then a failing case instead of a stale comment.
+const READ_MS = envSchema.shape.IVANTI_TIMEOUT_MS.parse(undefined);
+const WRITE_MS = envSchema.shape.IVANTI_WRITE_TIMEOUT_MS.parse(undefined);
+const OAUTH = { 'server.authMode': 'oauth', 'oauth.issuer': 'https://sso.example.com' };
 
 const LONG_TOKEN = 'x'.repeat(32);
 
@@ -82,9 +103,53 @@ const CASES = [
   { name: 'NetworkPolicy switch misspelt', set: { 'networkPolicy.enabled': 'maybe' }, refuses: /networkPolicy\.enabled must be auto, true or false/ },
 
   { name: 'rolloutToken rolls the pod', set: { rolloutToken: '2026-09-29' }, has: ['ivanti-mcp/rollout-token: "2026-09-29"'] },
-  { name: 'optional server settings', set: { 'server.maxSessionsPerSubject': '5', 'ivanti.timeoutMs': '15000', 'ivanti.writeTimeoutMs': '45000',
+  { name: 'optional server settings', set: { ...OAUTH, 'server.maxSessionsPerSubject': '5', 'ivanti.timeoutMs': '15000', 'ivanti.writeTimeoutMs': '45000',
     'ivanti.configUrl': 'https://config.example.com', 'ivanti.impersonationRequired': 'true' },
   has: ['MCP_MAX_SESSIONS_PER_SUBJECT', 'IVANTI_TIMEOUT_MS', 'IVANTI_WRITE_TIMEOUT_MS', 'IVANTI_IMPERSONATION_REQUIRED', 'IVANTI_CENTRAL_CONFIG_API_KEY_FILE'] },
+  { name: 'identity TTL is a value', has: ['MCP_IDENTITY_IDLE_TTL_SECONDS, value: "1800"'] },
+  { name: 'identity TTL set', set: { 'server.identityIdleTtlSeconds': '60' }, has: ['MCP_IDENTITY_IDLE_TTL_SECONDS, value: "60"'] },
+
+  // What the server refuses at boot (validate-config.ts), refused at install. The parity step
+  // below holds the renders to the server; these hold the refusals.
+  { name: 'impersonationRequired without a ConfigDB', set: { 'ivanti.impersonationRequired': 'true' }, refuses: /impersonationRequired=true needs ivanti\.configUrl/ },
+  { name: 'maxSessionsPerSubject under bearer', set: { 'server.maxSessionsPerSubject': '5' }, refuses: /maxSessionsPerSubject needs server\.authMode=oauth/ },
+  { name: 'maxSessionsPerSubject above maxSessions', set: { ...OAUTH, 'server.maxSessionsPerSubject': '500', 'server.maxSessions': '100' }, refuses: /above server\.maxSessions=100/ },
+  { name: 'maxSessionsPerSubject at maxSessions', set: { ...OAUTH, 'server.maxSessionsPerSubject': '100', 'server.maxSessions': '100' }, has: ['MCP_MAX_SESSIONS_PER_SUBJECT'] },
+  { name: 'publicUrl with a fragment', set: { 'server.publicUrl': 'https://mcp.example.com/mcp#x' }, refuses: /must not contain a fragment/ },
+  { name: 'write timeout shorter than read', set: { 'ivanti.timeoutMs': '60000', 'ivanti.writeTimeoutMs': '5000' }, refuses: /writeTimeoutMs \(5000\) is shorter/ },
+  { name: 'read timeout alone above the write default', set: { 'ivanti.timeoutMs': String(WRITE_MS + 1000) }, refuses: /is shorter than ivanti\.timeoutMs/ },
+  { name: 'write timeout alone below the read default', set: { 'ivanti.writeTimeoutMs': String(READ_MS - 1000) }, refuses: /is shorter than ivanti\.timeoutMs/ },
+  { name: 'read timeout alone at the write default', set: { 'ivanti.timeoutMs': String(WRITE_MS) }, has: ['IVANTI_TIMEOUT_MS'] },
+  { name: 'timeoutMs under the floor', set: { 'ivanti.timeoutMs': String(TIMEOUT_BOUNDS_MS.min - 1) }, refuses: /ivanti\.timeoutMs=\d+ is outside/ },
+  { name: 'timeoutMs at the floor', set: { 'ivanti.timeoutMs': String(TIMEOUT_BOUNDS_MS.min) }, has: ['IVANTI_TIMEOUT_MS'] },
+  { name: 'writeTimeoutMs over the ceiling', set: { 'ivanti.writeTimeoutMs': String(TIMEOUT_BOUNDS_MS.max + 1) }, refuses: /ivanti\.writeTimeoutMs=\d+ is outside/ },
+  { name: 'timeouts at the ceiling', set: { 'ivanti.timeoutMs': String(TIMEOUT_BOUNDS_MS.max), 'ivanti.writeTimeoutMs': String(TIMEOUT_BOUNDS_MS.max) },
+    has: ['IVANTI_WRITE_TIMEOUT_MS'] },
+  { name: 'timeoutMs not a number', set: { 'ivanti.timeoutMs': 'soon' }, refuses: /ivanti\.timeoutMs=soon is outside/ },
+  { name: 'maxConcurrentRequests 0 (string)', set: { 'ivanti.maxConcurrentRequests': '0' }, refuses: /maxConcurrentRequests=0 is outside/ },
+  { name: 'maxConcurrentRequests 0 (--set number)', setRaw: { 'ivanti.maxConcurrentRequests': '0' }, refuses: /maxConcurrentRequests=0 is outside/ },
+  { name: 'maxConcurrentRequests 257', set: { 'ivanti.maxConcurrentRequests': '257' }, refuses: /maxConcurrentRequests=257 is outside/ },
+  { name: 'maxConcurrentRequests 256', set: { 'ivanti.maxConcurrentRequests': '256' }, has: ['IVANTI_MAX_CONCURRENT_REQUESTS, value: "256"'] },
+  { name: 'maxConcurrentRequests 1', set: { 'ivanti.maxConcurrentRequests': '1' }, has: ['IVANTI_MAX_CONCURRENT_REQUESTS, value: "1"'] },
+  { name: 'maxCallsPerMinute 0 (string)', set: { 'server.maxCallsPerMinute': '0' }, refuses: /maxCallsPerMinute=0 is outside/ },
+  { name: 'maxCallsPerMinute 0 (--set number)', setRaw: { 'server.maxCallsPerMinute': '0' }, refuses: /maxCallsPerMinute=0 is outside/ },
+  { name: 'maxCallsPerMinute 10001', set: { 'server.maxCallsPerMinute': '10001' }, refuses: /maxCallsPerMinute=10001 is outside/ },
+  { name: 'maxCallsPerMinute 10000', set: { 'server.maxCallsPerMinute': '10000' }, has: ['MCP_MAX_CALLS_PER_MINUTE, value: "10000"'] },
+
+  // The guards the suite once did not exercise.
+  { name: 'configUrl without the ConfigDB key', set: { 'ivanti.configUrl': 'https://config.example.com', 'secrets.existingSecret': null, ...{ 'secrets.create': 'true', 'secrets.ivantiApiKey': 'k', 'secrets.bearerToken': LONG_TOKEN } },
+    refuses: /ivanti\.configUrl needs the ConfigDB key/ },
+  { name: 'configUrl with the ConfigDB key', set: { 'ivanti.configUrl': 'https://config.example.com', ...DEV_SECRET, 'secrets.centralConfigApiKey': 'c' }, has: ['IVANTI_CENTRAL_CONFIG_API_KEY_FILE'] },
+  { name: 'bearer without a bearer token', set: { 'secrets.existingSecret': null, 'secrets.create': 'true', 'secrets.ivantiApiKey': 'k' }, refuses: /authMode=bearer needs a bearer token/ },
+  { name: 'dev secret, metrics token is the Ivanti API key', set: { ...DEV_SECRET, 'secrets.ivantiApiKey': METRICS_TOKEN, 'metrics.enabled': 'true', 'metrics.token': 'true', 'secrets.metricsToken': METRICS_TOKEN },
+    refuses: /metricsToken is the same as secrets\.ivantiApiKey/ },
+  { name: 'dev secret, metrics token is the ConfigDB key', set: { ...DEV_SECRET, 'secrets.centralConfigApiKey': METRICS_TOKEN, 'metrics.enabled': 'true', 'metrics.token': 'true', 'secrets.metricsToken': METRICS_TOKEN },
+    refuses: /metricsToken is the same as secrets\.centralConfigApiKey/ },
+
+  // OAUTH_AUDIENCE is a list on the server: a YAML list must arrive joined, not as Go's "[a b]".
+  { name: 'oauth audience as a string', set: { ...OAUTH, 'oauth.audience': 'api://a' }, has: ['OAUTH_AUDIENCE, value: "api://a"'] },
+  { name: 'oauth audience as a list', set: { ...OAUTH, 'oauth.audience[0]': 'api://a', 'oauth.audience[1]': 'api://b' },
+    has: ['OAUTH_AUDIENCE, value: "api://a,api://b"'], lacks: ['[api://a'] },
 
   // Metrics: a port, a Service and a NetworkPolicy rule of their own — never the MCP ones,
   // since every credential guarding that port reaches the tools. Off, nothing renders and
@@ -127,11 +192,36 @@ const CASES = [
   has: ['team: agents\n      ports:\n        - { protocol: TCP, port: 3000 }', '- podSelector: {}\n      ports:\n        - { protocol: TCP, port: 9464 }'] },
 ];
 
-function args(set = {}) {
+function args(set = {}, setRaw = {}) {
   const values = { ...BASE, ...set };
-  return Object.entries(values)
-    .filter(([, v]) => v !== null)
-    .flatMap(([k, v]) => ['--set-string', `${k}=${v}`]);
+  return [
+    ...Object.entries(values)
+      .filter(([, v]) => v !== null)
+      .flatMap(([k, v]) => ['--set-string', `${k}=${v}`]),
+    // `--set` types a number as a number, which Helm's `with` then reads as unset when it is 0.
+    ...Object.entries(setRaw).flatMap(([k, v]) => ['--set', `${k}=${v}`]),
+  ];
+}
+
+/** The Deployment's literal `- { name: X, value: "…" }` env lines, as an env object. */
+function deploymentEnv(manifests) {
+  const doc = manifests.split(/^---$/m).find((d) => /^kind: Deployment$/m.test(d)) ?? '';
+  const env = {};
+  for (const m of doc.matchAll(/^\s+- \{ name: (\w+),\s+value: ("(?:[^"\\]|\\.)*") \}$/gm)) env[m[1]] = JSON.parse(m[2]);
+  return env;
+}
+
+/**
+ * The server's own verdict on a rendered Deployment. `*_FILE` secrets are stubbed (and padded:
+ * a bearer token must be 32 characters) — the mount is not what is under test.
+ */
+function serverVerdict(env) {
+  try {
+    loadConfig(env, (p) => `stub-secret-for:${p}`.padEnd(48, '.'));
+    return null;
+  } catch (error) {
+    return String(error instanceof Error ? error.message : error);
+  }
 }
 
 function helm(...argv) {
@@ -153,7 +243,7 @@ if (!lint.ok) {
 }
 
 for (const c of CASES) {
-  const r = helm('template', 'ivanti-mcp', CHART, '--namespace', 'ivanti', ...args(c.set));
+  const r = helm('template', 'ivanti-mcp', CHART, '--namespace', 'ivanti', ...args(c.set, c.setRaw));
   const problems = [];
   if (c.refuses) {
     if (r.ok) problems.push('rendered, but a guard should have refused it');
@@ -163,6 +253,11 @@ for (const c of CASES) {
   } else {
     for (const s of c.has ?? []) if (!r.out.includes(s)) problems.push(`missing ${JSON.stringify(s)}`);
     for (const s of c.lacks ?? []) if (r.out.includes(s)) problems.push(`unexpected ${JSON.stringify(s)}`);
+    // Whatever renders, the server must start with. A parked release has no pod to start.
+    if (c.set?.replicaCount !== '0') {
+      const refusal = serverVerdict(deploymentEnv(r.out));
+      if (refusal !== null) problems.push(`renders, but the server would exit 78 on it:\n${refusal}`);
+    }
   }
   if (problems.length > 0) {
     failed += 1;
@@ -172,6 +267,25 @@ for (const c of CASES) {
     console.log(`  ok    ${c.refuses ? 'refuses' : 'renders'}  ${c.name}`);
   }
 }
+
+// Every setting the server reads is a value of the chart, or is named here as deliberately not.
+// `_FILE` secrets count under their own name: the chart mounts them, it never sets the plain key.
+const NOT_A_VALUE = {};
+const deploymentSource = readFileSync(`${CHART}/templates/deployment.yaml`, 'utf8');
+for (const key of Object.keys(envSchema.shape)) {
+  if (key in NOT_A_VALUE) continue;
+  if (!new RegExp(`name: ${key}(_FILE)?,`).test(deploymentSource)) {
+    failed += 1;
+    console.error(`  FAIL  ${key} is read by the server (env-schema.ts) but the Deployment never sets it. Wire a value, or list it in NOT_A_VALUE with the reason.`);
+  }
+}
+for (const key of Object.keys(NOT_A_VALUE)) {
+  if (!(key in envSchema.shape)) {
+    failed += 1;
+    console.error(`  FAIL  NOT_A_VALUE names ${key}, which env-schema.ts no longer has.`);
+  }
+}
+console.log(`  ok    ${Object.keys(envSchema.shape).length} envSchema keys checked against deployment.yaml`);
 
 if (failed > 0) {
   console.error(`\n${failed} chart check(s) failed.`);

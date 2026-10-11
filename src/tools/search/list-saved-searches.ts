@@ -7,6 +7,7 @@ import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
+import { impersonatedAs } from '../shared/zero-note.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { connectionFor } from '../shared/connection-for.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
@@ -53,7 +54,7 @@ export function createListSavedSearchesTool(deps: IvantiToolDeps): ToolDefinitio
     handler: (args, context) =>
       runTool('list_saved_searches', deps.logger, async () => {
         const connection = connectionFor(deps, context);
-        const impersonating = context.impersonation?.session()?.loginId;
+        const impersonating = impersonatedAs(context);
         const { entity } = await resolveObject(deps, args.object);
         const objectId = toObjectId(entity.name);
         const form = await connection.forms.get(objectId);

@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   servesEntity,
+  toObjectId,
   toCsdlEntity,
   toEnglishSingular,
   toEntitySet,
@@ -53,6 +54,13 @@ describe('toGuessedEntitySet', () => {
 });
 
 describe('servesEntity', () => {
+  it('matches a subtype object id, which keeps no trailing hash, against its workspace', () => {
+    expect(servesEntity(toObjectId('task__assignment'), 'Task#Assignment')).toBe(true);
+    expect(servesEntity('task#assignment', 'Task#Assignment')).toBe(true);
+    expect(servesEntity('task#assignment', 'Task#')).toBe(false);
+    expect(servesEntity('task#', 'Task#Assignment')).toBe(true);
+  });
+
   it('accepts a subtype for a base type', () => {
     expect(servesEntity('Task#', 'Task#Assignment')).toBe(true);
     expect(servesEntity('CI#', 'CI#Computer')).toBe(true);

@@ -1475,6 +1475,39 @@ The streamable-HTTP transport reports a bad `Accept` header, invalid JSON and an
 through it. Logged at error, any client could fill the error log at will — so it is logged at warn,
 without a stack.
 
+**A `$metadata` outage is not "no such object".**
+The catalog turned a transient failure into "Ivanti has no Business Object named X" and remembered
+any unlisted 4xx as absence for the life of the process. → The catalog tells a document, a
+missing entity (a 200 with a field-less CSDL, or a 404) and an unavailable read apart; only the
+first two are remembered, and the third answers `MetadataUnavailableError` ("not a refusal, nothing
+was changed, try again"). Do not bring back a status denylist. *(Solved 2026-10-11.)*
+
+**A `CustomerLink` derived from a failed sample must never be cached.**
+A failed sample and an empty one are the same shape and lead to the same fallback, but only the
+empty one is a fact about the tenant. `forEntity` evicts on a failed sample. *(Solved 2026-10-11.)*
+
+**Ivanti's `ISM_2000` is never evidence that a link or unlink happened.**
+The relationship writes now read the related rows back after the call and answer "NOT linked",
+"still linked" or "not confirmed". The tenant's UTC offset is read only from a datetime-shaped
+field and only up to 14 hours; anything else is "unknown", and the unknown is not remembered.
+
+**`WWW-Authenticate` truncation is for prose, not for a URL.**
+The challenge capped every value the way it capped a message, which cut the `resource_metadata`
+URL and the scope list. → The sanitiser (`sanitiseHeaderValue`) is separate from the length cap,
+and `validateConfig` refuses a scope or public URL the sanitiser would change. *(Solved 2026-10-11.)*
+
+**An ID token can verify as an access token.**
+Where the IdP's ID token carries the client id as `aud`, nothing but `typ` or a scope tells it
+from an access token. The verifier now always rejects a token typed `ID` / `id_token` or carrying a
+`nonce`; `OAUTH_REQUIRE_TYP=true` additionally demands `typ: at+jwt` (RFC 9068 IdPs only — Entra v2
+and stock Keycloak type access tokens `JWT`). The complete controls remain a distinct API audience
+or `OAUTH_REQUIRED_SCOPES`.
+
+**The subtype object id was converted twice, and the copies disagreed.**
+`form-context` built `Task#Assignment#` where workspaces keep `Task#Assignment`, so no subtype ever
+matched its workspace and subtypes got no form. The `Task#Assignment` "no admin form" claim in the
+Ivanti section below was probably this bug seen through a tool; re-measure it live before relying on it.
+
 ## Testing
 
 **Build a `Config` through `configFixture`, never as a literal.**

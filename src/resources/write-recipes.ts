@@ -12,19 +12,12 @@ object) in the same \`create_record\` call. The Contains relationship —
 
 ## Adding a note
 
-A note is not an operation, it is a record in \`Journals\`. What is not guessable is its shape:
-
-    create_record({ object: 'Journals', fields: {
-      Subject: 'Called the customer — archive job re-enabled.',
-      JournalType: 'Notes',
-      ParentLink_RecID: '<the incident RecId>',
-      ParentLink_Category: 'Incident',
-    }})
-
-- The note text goes in \`Subject\`. There is no \`Details\` field, and sending one is a 400.
-- \`JournalType\` must be set; \`Notes\` is the human-written kind.
-- Reading them back, **filter by type**: Ivanti writes its own Email journals into the same
-  relationship and they usually outnumber the real notes.
+Use \`add_note\`, and read them with \`list_notes\`; neither needs the shape below. A note is a
+record in \`journal__notes\`, hung off its parent by the same ParentLink pair, and the text is
+\`NotesBody\` — not \`Subject\`, and \`Journals\` is a different object that an end user's allowlist
+does not reach. Writing one by hand with \`create_record\` is the wrong tool. Ivanti writes its own
+Email journals into the same relationship and they usually outnumber the real notes, which is
+why \`list_notes\` filters by type.
 
 ## Required fields the schema does not flag
 

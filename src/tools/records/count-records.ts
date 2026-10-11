@@ -2,18 +2,15 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
-import { referencedFieldNames } from '../../ivanti/odata/filter.js';
 import { buildQuery, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { explainFieldError } from '../shared/explain-field-error.js';
+import { explainReadError, prepareFilterRead } from '../shared/read-preflight.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { scopeToOwnRecords } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-import { assertNullFilterTypes } from '../shared/null-filter.js';
 import { zeroNote } from '../shared/zero-note.js';
 import { transportFor } from '../shared/transport-for.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
@@ -58,8 +55,7 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         const transport = transportFor(deps.connection.transport, context);
         const resolved = await resolveObject(deps, args.object);
         const { entity, entitySet } = resolved;
-        assertNullFilterTypes(args.filter, entity);
-        const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
+        const scoped = await prepareFilterRead(deps, context, resolved, { filter: args.filter });
 
         // One row is enough to ask for: the count rides along with any page, and a page of one
         // is the cheapest thing to carry it.
@@ -71,7 +67,7 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         const payload = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => {
-            throw explainFieldError(error, entity, referencedFieldNames({ filter: args.filter })) ?? error;
+            throw explainReadError(error, entity, { filter: args.filter });
           });
         const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
@@ -89,12 +85,10 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
             ...(rows.length === 0
               ? {
                   note: zeroNote({
-                  // Ivanti's own answer for this person, which hides rather than filters.
-                  impersonating: context.impersonation?.session()?.loginId,
                     looked: entitySet,
                     ...(args.search === undefined ? {} : { keyword: args.search }),
                     ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
-                  }),
+                  }, context),
                 }
               : { note: 'Ivanti returned rows without a count; this is a floor, not a total.' }),
           });
@@ -107,12 +101,10 @@ export function createCountRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           ...(total.total === 0
             ? {
                 note: zeroNote({
-                  // Ivanti's own answer for this person, which hides rather than filters.
-                  impersonating: context.impersonation?.session()?.loginId,
                   looked: entitySet,
                   ...(args.search === undefined ? {} : { keyword: args.search }),
                   ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
-                }),
+                }, context),
               }
             : {}),
           exact: total.exact,

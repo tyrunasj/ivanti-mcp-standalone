@@ -14,7 +14,7 @@ import {
 } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-import { ALL_FIELDS } from '../../ivanti/odata/compact-fields.js';
+import { ignoredFieldsPayload } from '../shared/ignored-fields.js';
 import { transportFor } from '../shared/transport-for.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
@@ -83,27 +83,9 @@ export function createGetRecordTool(deps: IvantiToolDeps): ToolDefinition {
         // the answer and reads as "this record has no value for it". A tester asked employee for
         // `Manager` — which is `ManagerLink_RecID` here — and got a record with no sign that
         // anything had been asked for.
-        const ignoredFields =
-          fields === undefined
-            ? []
-            : fields.filter(
-                (name) =>
-                  name !== ALL_FIELDS &&
-                  !Object.keys(record).some((key) => key.toLowerCase() === name.toLowerCase()),
-              );
-
         return jsonResult({
           object: entitySet,
-          ...(ignoredFields.length > 0
-            ? {
-                ignoredFields,
-                note:
-                  `This record has no field named ${ignoredFields.join(', ')}, so ${
-                    ignoredFields.length === 1 ? 'it was' : 'they were'
-                  } left out rather than returned empty. Call get_object_metadata with a ` +
-                  '`search` for the right name — do not report the value as absent.',
-              }
-            : {}),
+          ...ignoredFieldsPayload([record], fields),
           record: fields === undefined ? record : projectRow(record, fields),
         });
       }),

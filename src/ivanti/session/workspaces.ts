@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import { fromObjectId } from '../metadata/entity-names.js';
 import type { Logger } from '../../logger.js';
 import type { IvantiSession } from './asmx-session.js';
 
@@ -73,7 +74,7 @@ async function readWorkspaceObjects(
 
     found.set(id.toLowerCase(), {
       id,
-      object: id.replace(/#$/, '').replace(/#/g, '__').toLowerCase(),
+      object: fromObjectId(id),
       displayName: workspace.Name ?? id,
       layoutName: workspace.LayoutName ?? '',
     });

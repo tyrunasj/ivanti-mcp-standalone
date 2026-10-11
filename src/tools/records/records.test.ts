@@ -14,6 +14,9 @@ import { createListRecordsTool } from './list-records.js';
 import { createSessionPin } from '../../auth/identity-pin.js';
 import { ANONYMOUS } from '../../auth/identity.js';
 import type { CallContext } from '../tool-definition.js';
+import { createImpersonationSlot } from '../../auth/impersonation.js';
+import { impersonatedSessionFixture } from '../../ivanti/session/impersonated-session.fixture.js';
+import { COMPACT_FELL_BACK_NOTE } from '../shared/compact-rows.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -97,7 +100,7 @@ describe('get_record field echo', () => {
     );
 
     expect(result['ignoredFields']).toEqual(['NotAField']);
-    expect(String(result['note'])).toContain('do not report the value as absent');
+    expect(String(result['fieldsNote'])).toContain('do not report the value as absent');
   });
 
   it('stays quiet when every requested field is real', async () => {
@@ -494,5 +497,108 @@ describe('get_related_records in enduser mode', () => {
     expect(result).toMatchObject({ returned: 0, rows: [] });
     expect(String(result['note'])).toContain('not the same as none existing');
     expect(String(result['note'])).not.toContain('REAL ZERO');
+  });
+});
+
+describe('the compact default and its note (list_records, get_related_records)', () => {
+  // `Status` is on the preference list; `WorkOrderRef` is not, but the schema marks it required.
+  // The projection counts both, so the default FITS — and the note has to agree.
+  const WORK_ORDER = {
+    fields: [
+      field('RecId'),
+      field('Status', { validated: true }),
+      field('WorkOrderRef', { nullable: false }),
+    ],
+    relationships: [{ name: 'IncidentContainsTask', target: 'task' }],
+  };
+  const withWorkOrders = (responses: Record<string, unknown>) => {
+    const { connection } = connectionFixture({
+      entities: { incident: INCIDENT, workorder: WORK_ORDER, task: { fields: [field('RecId')] } },
+      responses,
+    });
+    return { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS };
+  };
+
+  it('does not announce a fallback over rows the default fitted on the schema’s own fields', async () => {
+    const deps = withWorkOrders({
+      workorders: { value: [{ RecId: 'w1', Status: 'Open', WorkOrderRef: 'WO-7' }] },
+    });
+
+    const result = body(await createListRecordsTool(deps).handler({ object: 'workorder' }));
+
+    expect(String(result['fields'])).toContain('a compact default set');
+    expect(result).not.toHaveProperty('otherFields');
+    expect(JSON.stringify(result['rows'])).toContain('WO-7');
+  });
+
+  it('says the same thing, in the same words, when the default really does not fit', async () => {
+    const odd = { RecId: 'x1', Colour: 'red', Size: 'L' };
+    const deps = withWorkOrders({
+      workorders: { value: [odd] },
+      "incidents('i1')/IncidentContainsTask": { value: [odd] },
+    });
+
+    const listed = body(await createListRecordsTool(deps).handler({ object: 'workorder' }));
+    const related = body(
+      await createGetRelatedRecordsTool(deps).handler({
+        object: 'Incidents',
+        recordId: 'i1',
+        relationship: 'IncidentContainsTask',
+      }),
+    );
+
+    expect(listed['fields']).toBe(COMPACT_FELL_BACK_NOTE);
+    expect(related['fields']).toBe(listed['fields']);
+  });
+
+  it('reports a requested name the record lacks the same way in all three tools', async () => {
+    const deps = withWorkOrders({
+      "incidents('abc')/IncidentContainsTask": { value: [ROW] },
+      "incidents('abc')": ROW,
+      incidents: { value: [ROW] },
+    });
+    const ask = { fields: 'Subject,NotAField' };
+
+    const got = body(await createGetRecordTool(deps).handler({ object: 'Incidents', recordId: 'abc', ...ask }));
+    const listed = body(await createListRecordsTool(deps).handler({ object: 'Incidents', ...ask }));
+    const related = body(
+      await createGetRelatedRecordsTool(deps).handler({
+        object: 'Incidents',
+        recordId: 'abc',
+        relationship: 'IncidentContainsTask',
+        ...ask,
+      }),
+    );
+
+    for (const result of [got, listed, related]) {
+      expect(result['ignoredFields']).toEqual(['NotAField']);
+      expect(result['fieldsNote']).toBe(listed['fieldsNote']);
+    }
+  });
+});
+
+describe('an impersonated zero is never called a fact about the record', () => {
+  const impersonated = async (): Promise<CallContext> => {
+    const slot = createImpersonationSlot(() => Promise.resolve(impersonatedSessionFixture()));
+    await slot.open('HSanders');
+    return { identity: ANONYMOUS, impersonation: slot };
+  };
+
+  it('get_related_records retracts its REAL ZERO under impersonation, and keeps it otherwise', async () => {
+    const { deps: base } = fixture({ "incidents('i1')/IncidentContainsTask": { value: [] } });
+    const { transport } = base.connection;
+    const deps = {
+      ...base,
+      connection: { ...base.connection, transport: { ...transport, asPerson: () => transport } },
+    };
+    const ask = { object: 'Incidents', recordId: 'i1', relationship: 'IncidentContainsTask' };
+
+    const plain = body(await createGetRelatedRecordsTool(deps).handler(ask));
+    const asPerson = body(await createGetRelatedRecordsTool(deps).handler(ask, await impersonated()));
+
+    expect(String(plain['note'])).toContain('THAT IS A REAL ZERO');
+    expect(String(plain['note'])).not.toContain('NOT THE STRONG KIND OF ZERO');
+    expect(String(asPerson['note'])).toContain('NOT THE STRONG KIND OF ZERO');
+    expect(String(asPerson['note'])).toContain('HSanders');
   });
 });

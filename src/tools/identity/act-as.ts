@@ -57,20 +57,19 @@ function chosenBy(candidate: PersonCandidate, choice: string): boolean {
   );
 }
 
-/** Whether two of these records answer to the same login or address, which a person cannot pick between. */
+/** Whether two records answer to the same login or address, which a person cannot pick between. */
+function sharesKeyWith(a: PersonCandidate, b: PersonCandidate): boolean {
+  const login = a.loginId?.toLowerCase();
+  const email = a.primaryEmail?.toLowerCase();
+  return (
+    (login !== undefined && login === b.loginId?.toLowerCase()) ||
+    (email !== undefined && email === b.primaryEmail?.toLowerCase())
+  );
+}
+
+/** Whether any two of these records share a login or address. */
 function sharesAKey(candidates: readonly PersonCandidate[]): boolean {
-  const logins = new Set<string>();
-  const emails = new Set<string>();
-  for (const candidate of candidates) {
-    const login = candidate.loginId?.toLowerCase();
-    const email = candidate.primaryEmail?.toLowerCase();
-    if ((login !== undefined && logins.has(login)) || (email !== undefined && emails.has(email))) {
-      return true;
-    }
-    if (login !== undefined) logins.add(login);
-    if (email !== undefined) emails.add(email);
-  }
-  return false;
+  return candidates.some((a, i) => candidates.slice(i + 1).some((b) => sharesKeyWith(a, b)));
 }
 
 function toPinned(candidate: PersonCandidate, provenance: 'asserted' | 'verified'): PinnedPerson {
@@ -210,9 +209,15 @@ export function createActAsTool(deps: IvantiToolDeps): ToolDefinition {
         // record but one is marked as no longer active, that one is the only one this
         // conversation could act as anyway (`Terminated` is refused below). Read from the status
         // the directory already reports; a record without one — an external contact — counts as
-        // active, so this never decides between two people it knows nothing about.
+        // active. It applies only when every other record shares a key with the survivor: the
+        // Active record among different people is not the one the caller meant.
         const active = named.filter((candidate) => statusProblem(candidate) === undefined);
-        const narrowed = named.length > 1 && active.length === 1 ? active : named;
+        const survivor = named.length > 1 && active.length === 1 ? active[0] : undefined;
+        const narrowed =
+          survivor !== undefined &&
+          named.every((candidate) => candidate === survivor || sharesKeyWith(candidate, survivor))
+            ? [survivor]
+            : named;
 
         const only = narrowed.length === 1 ? narrowed[0] : undefined;
 

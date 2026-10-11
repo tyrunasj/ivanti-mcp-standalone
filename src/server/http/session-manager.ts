@@ -88,8 +88,8 @@ export class SessionManager<T extends ClosableSession> {
   /**
    * Marks a request in flight on this session until the returned function is called.
    *
-   * A session answering something — a long write, or the SSE stream a client holds open for its
-   * whole life — is in use however long ago it was last addressed, and the cap never closes it.
+   * A session answering something — a long write — is in use however long ago it was last
+   * addressed: neither the cap nor the idle sweep closes it, and the subject limit takes it last.
    */
   busy(id: string): () => void {
     this.store.begin(id);
@@ -98,6 +98,22 @@ export class SessionManager<T extends ClosableSession> {
       if (ended) return;
       ended = true;
       this.store.end(id);
+    };
+  }
+
+  /**
+   * Marks a client attached to this session's standalone stream until the returned function is
+   * called. Held for the client's life, so it says the client is present, not that anything is
+   * running: eviction still prefers a session with no request in flight, and the cap and the
+   * sweep leave an attached one alone.
+   */
+  attach(id: string): () => void {
+    this.store.attach(id);
+    let ended = false;
+    return (): void => {
+      if (ended) return;
+      ended = true;
+      this.store.detach(id);
     };
   }
 
@@ -164,7 +180,8 @@ export class SessionManager<T extends ClosableSession> {
 
     if (this.store.occupied >= this.options.maxSessions) {
       const victim = this.store.leastRecentlySeen(
-        (session) => session.inFlight === 0 && session.idleMs >= this.evictionFloorMs,
+        (session) =>
+          session.inFlight === 0 && session.attached === 0 && session.idleMs >= this.evictionFloorMs,
       );
       if (victim !== undefined) this.evict(victim, 'cap');
     }

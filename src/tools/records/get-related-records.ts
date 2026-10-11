@@ -3,7 +3,7 @@
 
 import { z } from 'zod';
 import { suggestNames } from '../../ivanti/metadata/suggest-names.js';
-import { ALL_FIELDS, resolveRowFields } from '../../ivanti/odata/compact-fields.js';
+import { ALL_FIELDS } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { buildQuery, readTotal, withQuery } from '../../ivanti/odata/query.js';
@@ -19,9 +19,9 @@ import {
 } from '../shared/own-records.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-import { compactMissedObject } from '../../ivanti/odata/compact-fields.js';
-import { compactFieldsFor } from '../../ivanti/odata/compact-fields.js';
-import { ignoredFieldNames, ignoredFieldsNote } from '../shared/ignored-fields.js';
+import { COMPACT_FITTED_NOTE, compactRows } from '../shared/compact-rows.js';
+import { ignoredFieldsPayload } from '../shared/ignored-fields.js';
+import { withImpersonation } from '../shared/zero-note.js';
 import { transportFor } from '../shared/transport-for.js';
 
 /**
@@ -151,13 +151,10 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
         const hasMore =
           fetched.length > RELATED_TOP || (total !== undefined && total.total > page.length);
 
-        const projection = resolveRowFields(parseFieldList(args.fields), args.fields);
         // Decided against the TARGET's rows: a journal, an attachment or a tenant's own object
-        // shares none of the field names the preference list is built from.
-        const compact =
-          projection.defaulted && rows.length > 0
-            ? compactFieldsFor(rows)
-            : undefined;
+        // shares none of the field names the preference list is built from. No schema extras —
+        // `entity` is the parent's, and offering its fields would be the wrong object's.
+        const shown = compactRows(rows, args.fields);
 
         return jsonResult({
           object: entitySet,
@@ -201,57 +198,38 @@ export function createGetRelatedRecordsTool(deps: IvantiToolDeps): ToolDefinitio
           // tell them someone else's records are attached to their ticket.
           ...(rows.length === 0 && rowScope !== undefined
             ? {
-                note:
+                note: withImpersonation(
                   `No ${target ?? 'related'} rows on this ${entity.name} are visible to ` +
-                  `${rowScope.scopedTo}. That is not the same as none existing — only rows that ` +
-                  'are theirs, or that hang off this record itself, are shown here.',
+                    `${rowScope.scopedTo}. That is not the same as none existing — only rows ` +
+                    'that are theirs, or that hang off this record itself, are shown here.',
+                  context,
+                ),
               }
             : {}),
           ...(rows.length === 0 && rowScope === undefined
             ? {
-                note:
+                note: withImpersonation(
                   `The relationship resolved and this ${entity.name} has no ` +
-                  `${target ?? 'related'} rows. THAT IS A REAL ZERO, not a failed lookup: the ` +
-                  'relationship name was checked against the object before the request, and a ' +
-                  'wrong one is refused by name. It is not the silent-empty failure a dropped ' +
-                  '`$filter` function produces. IT IS ALSO ONLY ABOUT THIS RECORD: whether ' +
-                  `${target ?? 'the target object'} holds any rows at all on this tenant is a ` +
-                  'separate question — answer it with count_records before reporting that ' +
-                  'nothing was ever logged, or you may describe a configuration gap as a fact ' +
-                  'about the record.',
+                    `${target ?? 'related'} rows. THAT IS A REAL ZERO, not a failed lookup: the ` +
+                    'relationship name was checked against the object before the request, and a ' +
+                    'wrong one is refused by name. It is not the silent-empty failure a dropped ' +
+                    '`$filter` function produces. IT IS ALSO ONLY ABOUT THIS RECORD: whether ' +
+                    `${target ?? 'the target object'} holds any rows at all on this tenant is a ` +
+                    'separate question — answer it with count_records before reporting that ' +
+                    'nothing was ever logged, or you may describe a configuration gap as a fact ' +
+                    'about the record.',
+                  context,
+                ),
               }
             : {}),
-          ...(projection.defaulted && rows.length > 0
-            ? ((): Record<string, unknown> => {
-                // Judged on the TARGET's rows, not the parent's: a journal or an attachment
-                // shares none of the ticket field names the compact set is built from.
-                // Only what is NOT already in the row below: repeating the shown fields under
-                // "available" reads as though nothing was shown.
-                const shown = new Set((compact?.fields ?? []).map((name) => name.toLowerCase()));
-                const missed = compactMissedObject(rows)?.filter(
-                  (name) => !shown.has(name.toLowerCase()),
-                );
-                return missed === undefined
-                  ? { fields: 'a compact default set — pass `fields`, or "*" for whole records' }
-                  : {
-                      fields:
-                        'THIS OBJECT IS NOT ONE OF THE ONES THE DEFAULT KNOWS, so what is below ' +
-                        'is its own first few fields. That choice is arbitrary, not a judgement ' +
-                        'about which fields matter — name the ones you want in `fields`, or ' +
-                        'pass "*".',
-                      otherFields: missed,
-                    };
-              })()
+          ...(shown.defaulted && rows.length > 0
+            ? {
+                fields: shown.note ?? COMPACT_FITTED_NOTE,
+                ...(shown.otherFields === undefined ? {} : { otherFields: shown.otherFields }),
+              }
             : {}),
-          ...(ignoredFieldNames(rows, parseFieldList(args.fields)).length === 0
-            ? {}
-            : {
-                ignoredFields: ignoredFieldNames(rows, parseFieldList(args.fields)),
-                fieldsNote: ignoredFieldsNote(
-                  ignoredFieldNames(rows, parseFieldList(args.fields)),
-                ),
-              }),
-          rows: projectRows(rows, compact?.fields ?? projection.fields),
+          ...ignoredFieldsPayload(rows, parseFieldList(args.fields)),
+          rows: projectRows(rows, shown.fields),
         });
       }),
   });

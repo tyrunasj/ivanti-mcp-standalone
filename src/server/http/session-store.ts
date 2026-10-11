@@ -13,8 +13,10 @@ interface Entry<T> {
   lastSeen: number;
   /** Who opened it, when a verified token said; the per-subject limit counts by this. */
   subject?: string;
-  /** Requests being answered right now, the SSE stream included. */
+  /** Requests being answered right now: a POST or DELETE with an answer still to give. */
   inFlight: number;
+  /** Standalone GET streams held open. The client's presence, not work in progress. */
+  attached: number;
 }
 
 /** What a caller may judge an entry by when choosing one to close. */
@@ -24,6 +26,7 @@ export interface StoredSession<T> {
   subject?: string;
   idleMs: number;
   inFlight: number;
+  attached: number;
 }
 
 /**
@@ -78,6 +81,7 @@ export class SessionStore<T> {
       value,
       lastSeen: this.now(),
       inFlight: 0,
+      attached: 0,
       ...(subject === undefined ? {} : { subject }),
     });
     return true;
@@ -134,6 +138,20 @@ export class SessionStore<T> {
     entry.lastSeen = this.now();
   }
 
+  /** A client attached its standalone GET stream. */
+  attach(id: string): void {
+    const entry = this.entries.get(id);
+    if (entry !== undefined) entry.attached += 1;
+  }
+
+  /** The stream ended; its client was last here now. */
+  detach(id: string): void {
+    const entry = this.entries.get(id);
+    if (entry === undefined) return;
+    entry.attached = Math.max(0, entry.attached - 1);
+    entry.lastSeen = this.now();
+  }
+
   /** The least recently seen session that satisfies `accept`, if any does. */
   leastRecentlySeen(accept: (session: StoredSession<T>) => boolean): StoredSession<T> | undefined {
     const now = this.now();
@@ -144,6 +162,7 @@ export class SessionStore<T> {
         value: entry.value,
         idleMs: now - entry.lastSeen,
         inFlight: entry.inFlight,
+        attached: entry.attached,
         ...(entry.subject === undefined ? {} : { subject: entry.subject }),
       };
       if (!accept(candidate)) continue;
@@ -162,19 +181,25 @@ export class SessionStore<T> {
     const now = this.now();
     let soonest: number | undefined;
     for (const entry of this.entries.values()) {
-      const wait = entry.inFlight > 0 ? floorMs : Math.max(0, entry.lastSeen + floorMs - now);
+      const wait = entry.inFlight > 0 || entry.attached > 0 ? floorMs : Math.max(0, entry.lastSeen + floorMs - now);
       if (soonest === undefined || wait < soonest) soonest = wait;
     }
     return soonest ?? 0;
   }
 
-  /** Removes everything idle for longer than the TTL and returns what was removed. */
+  /**
+   * Removes everything idle for longer than the TTL and returns what was removed.
+   *
+   * A session answering a request, or with a client attached to its stream, is in use however
+   * long ago it was last addressed: a write that outlives the TTL must not lose its session
+   * mid-flight, and a client that vanishes drops its stream, which detaches it.
+   */
   sweep(): { id: string; value: T }[] {
     const cutoff = this.now() - this.options.idleTtlMs;
     const expired: { id: string; value: T }[] = [];
 
     for (const [id, entry] of this.entries) {
-      if (entry.lastSeen <= cutoff) {
+      if (entry.lastSeen <= cutoff && entry.inFlight === 0 && entry.attached === 0) {
         expired.push({ id, value: entry.value });
         this.entries.delete(id);
       }

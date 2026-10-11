@@ -101,6 +101,37 @@ describe('saved_search', () => {
     expect(decodeURIComponent(urls[0] ?? '')).toContain('$inlinecount=allpages');
   });
 
+  it('reads the count the way every other tool does: a floor when it contradicts the rows', async () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({ RecId: `r${String(i)}`, Subject: 's' }));
+    const { deps: d } = deps({ 'All%20Active': { value: rows, '@odata.count': 3 } });
+
+    const result = body(
+      await createSavedSearchTool(d).handler({
+        object: 'Incidents',
+        name: 'All Active',
+        searchId: 'f1',
+      }),
+    );
+
+    expect(result).toMatchObject({ returned: 25, total: 25, totalIsExact: false });
+  });
+
+  it('accepts a count sent as a numeric string', async () => {
+    const { deps: d } = deps({
+      'All%20Active': { value: [{ RecId: 'a', Subject: 's' }], '@odata.count': '548' },
+    });
+
+    const result = body(
+      await createSavedSearchTool(d).handler({
+        object: 'Incidents',
+        name: 'All Active',
+        searchId: 'f1',
+      }),
+    );
+
+    expect(result).toMatchObject({ total: 548, totalIsExact: true });
+  });
+
   it('treats an empty answer as a real answer', async () => {
     // A saved search matching nothing answers 204 with an empty body.
     const { deps: d } = deps({});

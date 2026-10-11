@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
-import type { McpMode } from '../../config/env-schema.js';
 import type { Logger } from '../../logger.js';
-import { IvantiApiError, scrubErrorBody } from '../http/errors.js';
-import { exchange, readText, type ExchangeContext } from '../http/exchange.js';
+import type { ExchangeContext } from '../http/exchange.js';
 import type { RequestLimiter } from '../http/request-limiter.js';
 import type { FetchLike } from '../http/transport.js';
 import type { IvantiRoutes } from '../odata/url.js';
+import { createAsmxCalls } from './asmx-calls.js';
 import type { IvantiSession, SessionIdentity } from './asmx-session.js';
 import type { CentralConfig } from './central-config.js';
 import {
@@ -17,6 +16,7 @@ import {
   readRoles,
   selectRole,
   type IvantiRole,
+  type RolePolicy,
 } from './roles.js';
 
 /**
@@ -63,9 +63,8 @@ export interface OpenImpersonatedSessionOptions {
   /** The tenant hostname — Ivanti's `tenantId`, and the same string in the URL. */
   tenantHost: string;
   login: string;
-  mode: McpMode;
-  enduserRole: string;
-  pinnedRole?: string;
+  /** How the role is chosen; built where the configuration is read. */
+  rolePolicy: RolePolicy;
   logger: Logger;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
@@ -107,9 +106,7 @@ export async function openImpersonatedSession(
     routes,
     tenantHost,
     login,
-    mode,
-    enduserRole,
-    pinnedRole,
+    rolePolicy,
     logger,
     fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_IMPERSONATION_TIMEOUT_MS,
@@ -135,41 +132,13 @@ export async function openImpersonatedSession(
       ...(options.limiter === undefined ? {} : { limiter: options.limiter }),
     };
 
-    const post = async <T>(url: string, body: Record<string, unknown>, sid?: string): Promise<T> => {
-      const { body: text } = await exchange(
-        url,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json; charset=UTF-8',
-            Accept: 'application/json',
-            ...(sid === undefined ? {} : { Cookie: `SID=${sid}` }),
-          },
-          body: JSON.stringify(body),
-        },
-        context,
-        readText,
-      );
-
-      let parsed: unknown;
-      try {
-        parsed = text === '' ? {} : JSON.parse(text);
-      } catch {
-        // Unguarded, a login page answering 200 escaped as a raw `SyntaxError` — which `runTool`
-        // reports as a fault in this server rather than as something Ivanti said.
-        throw new IvantiApiError(
-          { status: 200, method: 'POST', url, body: scrubErrorBody(text, opened.sid) },
-          'Ivanti answered 200 with a body that is not JSON',
-        );
-      }
-      return (parsed as { d?: T }).d ?? (parsed as T);
-    };
+    const asmx = createAsmxCalls(() => context, routes);
 
     const initialize = (): Promise<SessionStatus> =>
-      post<SessionStatus>(
+      asmx.postJson<SessionStatus>(
         routes.service('Services/Session.asmx/InitializeSession'),
         { _csrfToken: null },
-        opened.sid,
+        { sid: opened.sid },
       );
 
     const status = await initialize();
@@ -180,50 +149,16 @@ export async function openImpersonatedSession(
       );
     }
 
-    const call = async <T>(
+    const credentials = { sid: opened.sid, csrf };
+    const call = <T>(
       servicePath: string,
       method: string,
       args: Record<string, unknown> = {},
-    ): Promise<T> =>
-      // `.asmx` wants the token in the BODY — the `.ashx` handlers want it as a header, which is why
-      // they do not share this path. (They are unreachable here in any case.)
-      post<T>(routes.service(`${servicePath}/${method}`), { _csrfToken: csrf, ...args }, opened.sid);
-
-    // The form-urlencoded handlers: `handlers/<path>`, the token as a LOWERCASE header.
-    const callHandler = async (handlerPath: string, form: Record<string, string>): Promise<string> => {
-      const { body } = await exchange(
-        routes.service(`handlers/${handlerPath}`),
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            Cookie: `SID=${opened.sid}`,
-            _csrftoken: csrf,
-          },
-          body: new URLSearchParams(form).toString(),
-        },
-        context,
-        readText,
-      );
-      return body;
-    };
-
-    // The multipart upload: the token as a MIXED-case header, and no Content-Type — only fetch
-    // knows the boundary it generated, and naming the type without it makes Ivanti read the body
-    // as empty. Three spellings of one token, one session.
-    const uploadToHandler = async (handlerPath: string, form: FormData): Promise<string> => {
-      const { body } = await exchange(
-        routes.service(handlerPath),
-        {
-          method: 'POST',
-          headers: { Cookie: `SID=${opened.sid}`, _csrfToken: csrf },
-          body: form,
-        },
-        context,
-        readText,
-      );
-      return body;
-    };
+    ): Promise<T> => asmx.callService<T>(credentials, servicePath, method, args);
+    const callHandler = (handlerPath: string, form: Record<string, string>): Promise<string> =>
+      asmx.postForm(credentials, handlerPath, form);
+    const uploadToHandler = (handlerPath: string, form: FormData): Promise<string> =>
+      asmx.postMultipart(credentials, handlerPath, form);
 
     // `tzoffset` is required: without it this answers 500, which reads as a broken session.
     const userData = (): Promise<Record<string, unknown>> =>
@@ -234,20 +169,17 @@ export async function openImpersonatedSession(
         userData,
         // A different convention: body only, no cookie and no CSRF, on the integration service.
         rolesForUser: () =>
-          post(routes.service('ServiceAPI/FRSHEATIntegration.asmx/GetRolesForUser'), {
-            sessionKey: opened.sid,
-            tenantId: tenantHost,
-          }),
+          asmx.postJson(
+            routes.service('ServiceAPI/FRSHEATIntegration.asmx/GetRolesForUser'),
+            { sessionKey: opened.sid, tenantId: tenantHost },
+            // Not known to carry the `d` envelope, and the one call here that may come back empty.
+            { envelope: false },
+          ),
       },
       logger,
     );
 
-    const decision = {
-      mode,
-      enduserRole,
-      ...(pinnedRole === undefined ? {} : { pinnedRole }),
-    };
-    const choice = chooseRole(roles, { ...decision, activeRole: status.ActiveRole ?? '' });
+    const choice = chooseRole(roles, { policy: rolePolicy, activeRole: status.ActiveRole ?? '' });
 
     if (!choice.ok) {
       throw new Error(choice.refusal);
@@ -284,10 +216,10 @@ export async function openImpersonatedSession(
     // unavailable-yet but unobtainable. When that happens the choice stands on list order, and the
     // caller is told so rather than left to assume it was informed.
     if (!flagsKnown(roles)) {
-      // `chooseRole` returns no note when a CONFIGURED role name matched one the person holds —
-      // that is the one branch where the absent flags changed nothing, because the role was named
-      // rather than inferred.
-      const chosenByConfiguration = choice.note === undefined;
+      // Only a role the deployment NAMED is unaffected by the absent flags. Keeping whatever
+      // Ivanti made active carries no note either, but it is exactly the choice the flags would
+      // have checked, so it is judged on `basis` and never on the absence of a note.
+      const chosenByConfiguration = choice.basis === 'configured';
       let why: string | undefined;
       const flagged = await userData()
         .then(parseUserRoles)
@@ -307,7 +239,7 @@ export async function openImpersonatedSession(
 
       if (flagged.length > 0 && flagsKnown(flagged)) {
         roles = flagged;
-        const confirmed = chooseRole(flagged, { ...decision, activeRole: currentRole });
+        const confirmed = chooseRole(flagged, { policy: rolePolicy, activeRole: currentRole });
         if (!confirmed.ok) {
               throw new Error(confirmed.refusal);
         }
@@ -337,11 +269,16 @@ export async function openImpersonatedSession(
         // `IVANTI_IMPERSONATION_ROLE` in `enduser` and exits 78, so the old text sent an operator
         // to a setting that would stop their server from starting — in the mode where this note
         // matters most.
-        const setting = mode === 'enduser' ? 'ENDUSER_ROLE' : 'IVANTI_IMPERSONATION_ROLE';
+        const setting = rolePolicy.setting;
         const blind =
-          `Ivanti would not report which of this person's roles are self-service, so ${currentRole} ` +
-          `was taken from the order it listed them (${roles.map((role) => role.name).join(', ')}) ` +
-          `rather than chosen. Set ${setting} to decide it explicitly.`;
+          choice.basis === 'active'
+            ? `Ivanti made ${currentRole} active and would not report which of this person's ` +
+              `roles are self-service, so that role was kept without being checked. Set ` +
+              `${setting} to decide it explicitly.`
+            : `Ivanti would not report which of this person's roles are self-service, so ` +
+              `${currentRole} was taken from the order it listed them ` +
+              `(${roles.map((role) => role.name).join(', ')}) rather than chosen. Set ` +
+              `${setting} to decide it explicitly.`;
         note = note === undefined ? blind : `${note} ${blind}`;
         logger.warn('role chosen without Ivanti reporting which are self-service', {
           login: opened.loginId,
@@ -376,7 +313,6 @@ export async function openImpersonatedSession(
       callHandler,
       uploadToHandler,
       identity: () => Promise.resolve(identity()),
-      identityIfKnown: identity,
       switchTo: async (next: string): Promise<string> => {
         currentRole = await selectRole({ call }, next);
         return currentRole;

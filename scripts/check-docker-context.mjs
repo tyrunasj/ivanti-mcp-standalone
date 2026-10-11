@@ -97,3 +97,12 @@ if (unpinned.length > 0) {
   process.exit(1);
 }
 console.log(`pnpm ${pinned} matches packageManager; every base image is pinned by digest`);
+
+// The ports have no built-in value (MCP_PORT, METRICS_PORT), so an EXPOSE would name a port the
+// server is not listening on — the literal 3000 that outlived its removal.
+const exposed = dockerfile.split('\n').filter((l) => /^\s*EXPOSE\b/i.test(l));
+if (exposed.length > 0) {
+  console.error(`docker/Dockerfile EXPOSEs a port, but no port is built in:\n  ${exposed.join('\n  ')}`);
+  process.exit(1);
+}
+console.log('the Dockerfile EXPOSEs nothing (the ports come from MCP_PORT and METRICS_PORT)');

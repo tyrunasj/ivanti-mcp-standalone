@@ -15,16 +15,6 @@ import { createIvantiRoutes, type IvantiRoutes } from '../odata/url.js';
 
 export type { FetchLike } from './exchange.js';
 
-/** Reads: `IVANTI_TIMEOUT_MS`. */
-export const DEFAULT_TIMEOUT_MS = 10_000;
-
-/**
- * Everything but a GET: `IVANTI_WRITE_TIMEOUT_MS`. Three times the read timeout because a create
- * runs the tenant's workflow before it answers — measured past 10 s on workflow-heavy objects — and
- * a write that times out may still have been applied, which is the costliest way to fail.
- */
-export const DEFAULT_WRITE_TIMEOUT_MS = 30_000;
-
 /**
  * The most `requestBinary` reads when the caller names no cap. Nothing a conversation can hold is
  * anywhere near it; the cap is there so that a 2 GB attachment is refused rather than buffered.
@@ -38,10 +28,10 @@ export interface TransportOptions {
   apiKey: string;
   logger: Logger;
   fetchImpl?: FetchLike;
-  /** GETs. */
-  timeoutMs?: number;
-  /** Everything else — creates, updates, deletes, uploads. */
-  writeTimeoutMs?: number;
+  /** GETs: `IVANTI_TIMEOUT_MS`. Required: the one default lives in the env schema. */
+  timeoutMs: number;
+  /** Everything else — creates, updates, deletes, uploads: `IVANTI_WRITE_TIMEOUT_MS`. */
+  writeTimeoutMs: number;
   /**
    * Authenticate as an impersonated session instead of with the API key.
    *
@@ -115,8 +105,8 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     apiKey,
     logger,
     fetchImpl = globalThis.fetch,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-    writeTimeoutMs = DEFAULT_WRITE_TIMEOUT_MS,
+    timeoutMs,
+    writeTimeoutMs,
     sid,
   } = options;
 
@@ -166,13 +156,19 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     return { status, text: body };
   };
 
-  const parse = <T>(text: string, url: string, method: string): T => {
+  // What the answer was, not a guessed 200: a 201 or 202 reads as the wrong thing otherwise, and
+  // on a write the reader must know the request may well have been applied.
+  const unreadable = (method: string, status: number, what: string): string =>
+    `Ivanti answered ${String(status)} with ${what}` +
+    (method.toUpperCase() === 'GET' ? '' : ' — the write may still have been applied, so check before retrying');
+
+  const parse = <T>(text: string, url: string, method: string, status: number): T => {
     try {
       return JSON.parse(text) as T;
     } catch {
       throw new IvantiApiError(
-        { status: 200, method, url, body: scrubErrorBody(text, ...context.secrets) },
-        'Ivanti answered 200 with a body that is not JSON',
+        { status, method, url, body: scrubErrorBody(text, ...context.secrets) },
+        unreadable(method, status, 'a body that is not JSON'),
       );
     }
   };
@@ -187,18 +183,19 @@ export function createTransport(options: TransportOptions): IvantiTransport {
     async request<T>(url: string, init: RequestInit = {}): Promise<T | undefined> {
       const { status, text } = await send(url, init);
       if (status === 204 || text.trim() === '') return undefined;
-      return parse<T>(text, url, init.method ?? 'GET');
+      return parse<T>(text, url, init.method ?? 'GET', status);
     },
 
     async requestRequired<T>(url: string, init: RequestInit = {}): Promise<T> {
-      const { text } = await send(url, init);
+      const { status, text } = await send(url, init);
       if (text.trim() === '') {
+        const method = init.method ?? 'GET';
         throw new IvantiApiError(
-          { status: 200, method: init.method ?? 'GET', url },
-          'Ivanti answered 200 with an empty body where a record was expected',
+          { status, method, url },
+          unreadable(method, status, 'an empty body where a record was expected'),
         );
       }
-      return parse<T>(text, url, init.method ?? 'GET');
+      return parse<T>(text, url, init.method ?? 'GET', status);
     },
 
     async requestMultipart<T>(url: string, form: FormData): Promise<T | undefined> {
@@ -208,7 +205,7 @@ export function createTransport(options: TransportOptions): IvantiTransport {
         true,
       );
       if (status === 204 || text.trim() === '') return undefined;
-      return parse<T>(text, url, 'POST');
+      return parse<T>(text, url, 'POST', status);
     },
 
     async requestBinary(

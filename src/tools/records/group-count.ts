@@ -10,7 +10,10 @@ import { toObjectId } from '../../ivanti/write/validated-write.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { scopeToOwnRecords } from '../shared/own-records.js';
+import { prepareFilterRead } from '../shared/read-preflight.js';
+import { tryRead } from '../shared/try-read.js';
+import { explainFieldError, type FieldNameError } from '../shared/explain-field-error.js';
+import { referencedFieldNames } from '../../ivanti/odata/filter.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { connectionFor } from '../shared/connection-for.js';
@@ -80,8 +83,8 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
         const resolved = await resolveObject(deps, args.object);
         const { entity, entitySet } = resolved;
         // Identity first: an unidentified caller must be refused for that, not told which fields
-        // the object has.
-        const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
+        // the object has. The same checks `list_records` runs on the same `filter` argument.
+        const scoped = await prepareFilterRead(deps, context, resolved, { filter: args.filter });
 
         // Then the name, before it reaches a filter AS A FIELD NAME — the value beside it is
         // quoted, the name is not. Unchecked, it was a way to write arbitrary OData into the
@@ -127,6 +130,11 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
 
         const counted = values.slice(0, MAX_BUCKETS);
 
+        // A bad field in the caller's `filter` fails EVERY bucket the same way; collected so it
+        // is reported once, by name, rather than as a truncated error on each of up to 25.
+        const filterFields = referencedFieldNames({ filter: args.filter });
+        const fieldErrors: FieldNameError[] = [];
+
         // One request per bucket, together rather than in series.
         const groups: Bucket[] = await Promise.all(
           counted.map(async (value): Promise<Bucket> => {
@@ -153,13 +161,22 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
                 ? { value, count: rows.length, exact: rows.length === 0 }
                 : { value, count: total.total, exact: total.exact };
             } catch (error: unknown) {
+              const explained = explainFieldError(error, entity, filterFields);
+              if (explained !== undefined) fieldErrors.push(explained);
               return {
                 value,
-                error: error instanceof Error ? error.message.slice(0, 120) : 'failed',
+                error:
+                  explained?.message ??
+                  (error instanceof Error ? error.message.slice(0, 120) : 'failed'),
               };
             }
           }),
         );
+
+        const [firstFieldError] = fieldErrors;
+        if (firstFieldError !== undefined && fieldErrors.length === groups.length) {
+          throw firstFieldError;
+        }
 
         // The buckets come from a create form's validation list, and records can hold values that
         // list no longer offers — measured, four of a change's seven statuses were missing and the
@@ -176,10 +193,14 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
           transport.routes.entitySet(entitySet),
           buildQuery({ filter: scoped.filter, top: 1, count: true }),
         );
-        const whole = await transport
-          .request<OdataRecord>(wholeUrl)
-          .then((payload) => readTotal(payload, 0))
-          .catch(() => undefined);
+        // A failed read is not a missing total: it is carried as `total: null` and `partial`,
+        // because a missing key cannot be told from "not computed" and the 26th concurrent read
+        // is exactly the one a full request cap refuses.
+        const wholeRead = await tryRead(
+          transport.request<OdataRecord>(wholeUrl).then((payload) => readTotal(payload, 0)),
+        );
+        const wholeFailed = !wholeRead.ok;
+        const whole = wholeRead.ok ? wholeRead.value : undefined;
         const unaccounted = whole === undefined ? undefined : whole.total - bucketTotal;
 
         return jsonResult({
@@ -187,15 +208,29 @@ export function createGroupCountTool(deps: IvantiToolDeps): ToolDefinition {
           ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
           groupBy: args.groupBy,
           valuesFrom,
-          ...(whole === undefined ? {} : { total: whole.total }),
+          ...(wholeFailed ? { total: null } : whole === undefined ? {} : { total: whole.total }),
           // Always emitted, zero included: the description trains a reader to check this key
           // before trusting the breakdown, and a missing key cannot be told from "not computed".
           // One tester summed seven buckets by hand to prove it; on a 25-bucket field they said
           // they would have skipped that and reported a partial as a total.
-          ...(unaccounted === undefined ? {} : { unaccounted: Math.max(0, unaccounted) }),
+          ...(wholeFailed
+            ? { unaccounted: null }
+            : unaccounted === undefined
+              ? {}
+              : { unaccounted: Math.max(0, unaccounted) }),
           // A bucket that could not be counted makes the whole answer partial, whatever else is
           // true — and it changes what `unaccounted` means, so it is said INSTEAD of the warning
           // below, which would put those records down to the field's list.
+          ...(wholeFailed && failedBuckets === 0
+            ? {
+                partial: true,
+                warning:
+                  'The total could not be read, so whether these buckets cover every record is ' +
+                  'UNKNOWN — `total` and `unaccounted` are null, not zero. THIS IS A PARTIAL ' +
+                  'ANSWER: do not present the buckets as a breakdown of the whole. Ask again, or ' +
+                  'count the whole with count_records.',
+              }
+            : {}),
           ...(failedBuckets > 0
             ? {
                 partial: true,

@@ -6,13 +6,9 @@ import type { AdminCatalog } from './admin-catalog.js';
 import type { IvantiSession, SessionIdentity } from './asmx-session.js';
 import type { CentralConfig } from './central-config.js';
 
-/**
- * What this credential can actually do, decided once at startup.
- *
- * A tenant API key may carry any role, and the ASMX half of Ivanti is reachable only if the
- * handshake succeeds. Rather than registering tools that will fail for half the customers, the
- * tier decides which tools exist at all — an unregistered tool never appears in `tools/list`.
- */
+/** The `reason` of a tier held down by configuration rather than by the tenant. */
+export const TIER_CAPPED_REASON = 'capped by IVANTI_MAX_TIER';
+
 /**
  * | Tier | What the credential turned out to be | What it adds |
  * |---|---|---|
@@ -25,6 +21,13 @@ import type { CentralConfig } from './central-config.js';
  */
 export type CapabilityTier = 'odata' | 'session' | 'admin';
 
+/**
+ * What this credential can actually do, decided once at startup.
+ *
+ * A tenant API key may carry any role, and the ASMX half of Ivanti is reachable only if the
+ * handshake succeeds. Rather than registering tools that will fail for half the customers, the
+ * tier decides which tools exist at all — an unregistered tool never appears in `tools/list`.
+ */
 export interface Capability {
   tier: CapabilityTier;
   /** Present from the `session` tier up: who the server signs in as. */
@@ -64,7 +67,7 @@ export async function probeCapability(
 
   if (maxTier === 'odata') {
     logger.info('ivanti tier capped by configuration', { maxTier });
-    return { tier: 'odata', reason: 'capped by IVANTI_MAX_TIER', ...impersonation };
+    return { tier: 'odata', reason: TIER_CAPPED_REASON, ...impersonation };
   }
 
   let identity: SessionIdentity;
@@ -80,7 +83,7 @@ export async function probeCapability(
 
   if (maxTier === 'session') {
     logger.info('ivanti tier capped by configuration', { maxTier, role: identity.role });
-    return { tier: 'session', identity, reason: 'capped by IVANTI_MAX_TIER', ...impersonation };
+    return { tier: 'session', identity, reason: TIER_CAPPED_REASON, ...impersonation };
   }
 
   // The admin console is tried, not assumed. The call doubles as the catalog fetch, so a tenant

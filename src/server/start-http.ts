@@ -149,13 +149,6 @@ interface Session extends McpSession {
 }
 
 /**
- * Serves the MCP endpoint, a health probe and the OAuth metadata document.
- *
- * This function is wiring. The decisions live in collaborators that can be tested without a
- * socket: `resolveRoute` for dispatch, `authorizeRequest` for the door, `SessionManager` for
- * admission and expiry, `readJsonBody` and `describeRpc` for the payload.
- */
-/**
  * The listener, plus the teardown that has to happen before it stops listening.
  *
  * `close()` is not `http.close()`: that waits for every in-flight response, and the standalone
@@ -172,6 +165,13 @@ export interface HttpServer {
   sessionCount: () => number;
 }
 
+/**
+ * Serves the MCP endpoint, a health probe and the OAuth metadata document.
+ *
+ * This function is wiring. The decisions live in collaborators that can be tested without a
+ * socket: `resolveRoute` for dispatch, `authorizeRequest` for the door, `SessionManager` for
+ * admission and expiry, `readJsonBody` and `describeRpc` for the payload.
+ */
 export async function startHttp(
   config: Config,
   logger: Logger,
@@ -192,9 +192,29 @@ export async function startHttp(
   });
 
   const publicUrl = config.MCP_PUBLIC_URL;
-  const servesOauthMetadata = config.AUTH_MODE === 'oauth' && config.OAUTH_ISSUER !== undefined;
+  // oauth is only servable with all three; checked here so that nothing below has to model "oauth,
+  // but no verifier" or "oauth, but no resource" as a state a request can be in.
+  if (config.AUTH_MODE === 'oauth') {
+    const missing = [
+      deps.verifier === undefined ? 'a token verifier' : undefined,
+      publicUrl === undefined ? 'MCP_PUBLIC_URL' : undefined,
+      config.OAUTH_ISSUER === undefined ? 'OAUTH_ISSUER' : undefined,
+    ].filter((name) => name !== undefined);
+    if (missing.length > 0) {
+      throw new ConfigError([`AUTH_MODE=oauth cannot be served without ${missing.join(', ')}.`]);
+    }
+  }
+  const protectedResource =
+    config.AUTH_MODE === 'oauth' && publicUrl !== undefined && config.OAUTH_ISSUER !== undefined
+      ? buildProtectedResourceMetadata({
+          resource: publicUrl,
+          issuer: config.OAUTH_ISSUER,
+          scopesSupported: config.OAUTH_SCOPES_SUPPORTED,
+          resourceName: 'Ivanti MCP',
+        })
+      : undefined;
   const oauthPaths =
-    publicUrl !== undefined && servesOauthMetadata
+    publicUrl !== undefined && protectedResource !== undefined
       ? new Set(metadataPaths(publicUrl))
       : new Set<string>();
   const resourceMetadataUrl = publicUrl !== undefined ? metadataUrl(publicUrl) : undefined;
@@ -297,16 +317,11 @@ export async function startHttp(
           case 'oauth-metadata': {
             // Unauthenticated by necessity: this document is how a client discovers *how* to
             // authenticate, so requiring a token to read it would be circular.
-            sendJson(
-              response,
-              200,
-              buildProtectedResourceMetadata({
-                resource: publicUrl ?? '',
-                issuer: config.OAUTH_ISSUER ?? '',
-                scopesSupported: config.OAUTH_SCOPES_SUPPORTED,
-                resourceName: 'Ivanti MCP',
-              }),
-            );
+            if (protectedResource === undefined) {
+              sendJson(response, 404, { error: 'not_found' });
+              return;
+            }
+            sendJson(response, 200, protectedResource);
             return;
           }
 

@@ -89,6 +89,29 @@ function tool(responses: Record<string, unknown>, ownRecordsOnly = false) {
 }
 
 describe('upload_attachment', () => {
+  it('refuses a garbled base64 value instead of uploading its prefix', async () => {
+    const { connection, urls } = connectionFixture({
+      entities: { incident: { fields: [field('RecId')] } },
+      responses: TENANT,
+    });
+    const upload = createUploadAttachmentTool({
+      connection,
+      gate: OPEN_GATE,
+      logger: logger(),
+      ownRecordsOnly: false,
+      actions: OPEN_ACTIONS,
+    });
+
+    const result = await upload.handler(
+      { ...ARGS, contentBase64: 'aGVsbG8=!!!d29ybGQ=' },
+      pinned(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('not valid base64');
+    expect(urls.some((url) => url.startsWith('POST'))).toBe(false);
+  });
+
   it('reports who Ivanti recorded, read off the row rather than asserted', async () => {
     // `lastModBy` was hard-coded to the service account, which is false under an impersonated
     // session: the write then runs as the person, and Ivanti records them.

@@ -171,6 +171,11 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
         : Promise.resolve(found);
     },
     entityNames: () => Promise.resolve([...entities.keys()].sort((a, b) => a.localeCompare(b))),
+    entityNamesDetailed: () =>
+      Promise.resolve({
+        names: [...entities.keys()].sort((a, b) => a.localeCompare(b)),
+        incomplete: false,
+      }),
     graph: () => Promise.resolve(undefined),
     widen: vi.fn(() => Promise.resolve()),
   };
@@ -190,7 +195,6 @@ export function connectionFixture(options: ConnectionFixtureOptions = {}): Conne
     callHandler: () => Promise.reject(new Error('no handler in this fixture')),
     uploadToHandler: () => Promise.reject(new Error('no handler in this fixture')),
     identity: () => Promise.resolve(identity),
-    identityIfKnown: () => identity,
   };
 
   const workspaces = createWorkspaceCatalog(session, fixtureLogger);

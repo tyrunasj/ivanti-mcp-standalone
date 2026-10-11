@@ -3,13 +3,13 @@
 
 import { z } from 'zod';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
-import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { transportFor } from '../shared/transport-for.js';
+import { confirmLinked, isLinkedTo, notConfirmed } from './membership.js';
 import {
   describeUnknownRelationship,
   RELATIONSHIP_OK,
@@ -53,18 +53,12 @@ export function createUnlinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        const relatedUrl = transport.routes.related(
+        const isLinked = await isLinkedTo(
+          transport,
           entitySet,
           args.recordId,
           relationship,
-        );
-        const linked = readRows<OdataRecord>(
-          await transport.request<OdataRecord>(relatedUrl),
-          relatedUrl,
-        );
-
-        const isLinked = linked.some(
-          (row) => String(row['RecId']).toLowerCase() === args.targetId.toLowerCase(),
+          args.targetId,
         );
         if (!isLinked) {
           return errorResult(
@@ -88,6 +82,25 @@ export function createUnlinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         const code = answer?.['code'];
         if (typeof code === 'string' && code !== RELATIONSHIP_OK) {
           return errorResult(`Ivanti refused the unlink with code ${code}.`);
+        }
+
+        // The code is not evidence: the related rows are.
+        const after = await confirmLinked(
+          transport,
+          entitySet,
+          args.recordId,
+          relationship,
+          args.targetId,
+        );
+        if (after instanceof Error) {
+          return errorResult(notConfirmed('unlink', args.targetId, after));
+        }
+        if (after) {
+          return errorResult(
+            `Ivanti answered ${RELATIONSHIP_OK} but ${args.targetId} is still linked to ` +
+              `${entitySet}('${args.recordId}') via ${relationship} when read back, so it was NOT ` +
+              'unlinked. Do not report it as done.',
+          );
         }
 
         deps.logger.info('ivanti records unlinked', { object: entitySet, relationship });

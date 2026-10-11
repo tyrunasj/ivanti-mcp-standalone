@@ -15,7 +15,8 @@ helm install ivanti-mcp oci://ghcr.io/tyrunasj/charts/ivanti-mcp \
 The package is public: no registry login is needed.
 
 The chart forces HTTP (stdio is meaningless in a pod) and refuses to render on a
-configuration the server would reject at boot. It also refuses `replicaCount > 1`:
+configuration the server would reject at boot (`check-chart.mjs` feeds every rendered
+configuration to the server's own `loadConfig`). It also refuses `replicaCount > 1`:
 HTTP sessions are held in memory, and the pod that answers `initialize` mints the
 session id, so nothing in the request that opens a session can route it back to that
 pod. **One replica; a rollout ends every open session** and clients reconnect.
@@ -47,15 +48,18 @@ Full notes, including the secret-ownership and DNS traps, are in
 | `rolloutToken` | — | Change it to roll the pod after rotating a key in `existingSecret`; the key is read once, at startup. |
 | `networkPolicy.enabled` | `auto` | `auto` = on exactly when `authMode=none`. Admits `networkPolicy.from`, by default pods in the release namespace. |
 | `metrics.enabled` | `false` | `METRICS_ON`. Prometheus metrics on a port and a ClusterIP Service of their own, `<fullname>-metrics` — never the main Service, so the Ingress cannot route to them. Leave off on an internet-facing release unless something in-cluster scrapes it. |
+| `server.port` / `service.port` | `3000` | `MCP_PORT` in the pod / the Service's port. Keep them equal; `publicUrl` and any port-forward follow. |
 | `metrics.port` | `9464` | `METRICS_PORT`. Refused when equal to `server.port`. |
 | `metrics.token` | `false` | Mounts key `metrics-token` from the secret as `METRICS_TOKEN_FILE`: a scrape-only token, at least 32 characters, never one of the other keys. |
 | `metrics.from` | `[]` | NetworkPolicy peers admitted to the metrics port, and only to it; empty = pods in the release namespace. Applies only while the NetworkPolicy renders — `auto` still follows `authMode`. |
 | `metrics.serviceMonitor.enabled` | `false` | Needs the Prometheus Operator CRDs and `metrics.enabled`. Sends the token when `metrics.token` is set; `labels` for your Prometheus's selector. |
-| `server.maxSessionsPerSubject` | — | `MCP_MAX_SESSIONS_PER_SUBJECT`, `oauth` only. Past it, that person's least recently used session closes. |
+| `server.maxSessionsPerSubject` | — | `MCP_MAX_SESSIONS_PER_SUBJECT`, `oauth` only and at most `server.maxSessions`. Past it, that person's least recently used session closes. |
 | `ivanti.timeoutMs` / `ivanti.writeTimeoutMs` | — | `IVANTI_TIMEOUT_MS` / `IVANTI_WRITE_TIMEOUT_MS`; empty = the server defaults, 10000 and 30000. |
 | `ivanti.maxConcurrentRequests` | — | `IVANTI_MAX_CONCURRENT_REQUESTS`: requests in flight to the tenant at once; empty = the server default (16) |
 | `server.maxCallsPerMinute` | — | `MCP_MAX_CALLS_PER_MINUTE`: tool calls per conversation per minute; empty = the server default (120) |
 | `ivanti.impersonationRequired` | `false` | `IVANTI_IMPERSONATION_REQUIRED`, with `ivanti.configUrl`: exit rather than run as the service account when impersonation is unavailable. |
+| `server.identityIdleTtlSeconds` | `1800` | `MCP_IDENTITY_IDLE_TTL_SECONDS`: how long a conversation may go quiet before the pinned person is forgotten. Not the session TTL. |
+| `oauth.audience` | — | Accepted `aud` values: a string or a list; empty = `server.publicUrl`. |
 | `hostAliases` | `[]` | For tenants behind split-horizon DNS. |
 | `image.digest` | — | Pin this in production instead of a tag. |
 

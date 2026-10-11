@@ -84,8 +84,6 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
           ...(matching.length === 0
             ? {
                 note: zeroNote({
-                  // Ivanti's own answer for this person, which hides rather than filters.
-                  impersonating: context.impersonation?.session()?.loginId,
                   looked: `quick actions on ${entity.name}`,
                   ...(args.search === undefined ? {} : { keyword: args.search }),
                   because:
@@ -97,7 +95,7 @@ export function createListQuickActionsTool(deps: IvantiToolDeps): ToolDefinition
                         'means you cannot run one either way.'
                       : `${String(actions.length)} actions exist on this object; none matches ` +
                         'the filters you passed.',
-                }),
+                }, context),
               }
             : {}),
           ...(matching.length < actions.length ? { of: actions.length } : {}),

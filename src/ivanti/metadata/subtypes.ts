@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import { IvantiApiError } from '../http/errors.js';
 import { toCsdlEntity, toEntitySet } from './entity-names.js';
 
 /**
@@ -23,7 +24,8 @@ export interface Subtype {
 }
 
 export function findSubtypes(names: readonly string[], object: string): Subtype[] {
-  const base = `${toCsdlEntity(object).toLowerCase()}__`;
+  // A CSDL name already: `toCsdlEntity` would strip the real trailing `s` of `ci__address`.
+  const base = `${(object.includes('#') ? toCsdlEntity(object) : object).toLowerCase()}__`;
 
   return names
     .filter((name) => name.toLowerCase().startsWith(base))
@@ -38,4 +40,13 @@ export function describeSubtypes(object: string, subtypes: readonly Subtype[]): 
     'the base type itself — create one of these instead: ' +
     `${subtypes.map((subtype) => subtype.entitySet).join(', ')}.`
   );
+}
+
+/**
+ * Whether a failed create has the signature of aiming at a base type: a 500 with an empty body.
+ * Anything else — a timeout, a 401, a required-field refusal — is not evidence of a base type, and
+ * must keep its own handling.
+ */
+export function isBaseTypeRefusal(error: unknown): boolean {
+  return error instanceof IvantiApiError && error.status === 500 && error.body.trim() === '';
 }

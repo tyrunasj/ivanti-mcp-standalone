@@ -6,7 +6,7 @@ import { configFixture } from '../config/config.fixture.js';
 import { connectionFixture } from '../ivanti/connection.fixture.js';
 import type { Capability } from '../ivanti/session/capability.js';
 import type { Logger } from '../logger.js';
-import { selectTools, type ToolContext } from '../tools/register-tools.js';
+import { selectTools, type ToolContext } from '../tools/select-tools.js';
 import { registerResources, selectResources } from './register-resources.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
@@ -14,7 +14,11 @@ const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), er
 
 const GATED = { MCP_MODE: 'enduser' as const, ENDUSER_BUSINESS_OBJECTS: ['incident'] };
 
-function deployment(mode: 'full' | 'enduser', tier: Capability['tier']) {
+function deployment(
+  mode: 'full' | 'enduser',
+  tier: Capability['tier'],
+  canImpersonate = false,
+) {
   const config = configFixture(mode === 'enduser' ? GATED : { MCP_MODE: 'full' });
   const context: ToolContext = {
     serverName: 'ivanti-mcp',
@@ -22,7 +26,7 @@ function deployment(mode: 'full' | 'enduser', tier: Capability['tier']) {
     logger: logger(),
     ivanti: connectionFixture({
       entities: { incident: {}, employee: {} },
-      capability: tier === 'odata' ? { tier: 'odata', reason: 'fixture' } : { tier },
+      capability: tier === 'odata' ? { tier: 'odata', reason: 'fixture' } : { tier, canImpersonate },
     }).connection,
   };
 
@@ -125,6 +129,34 @@ describe('the reference documents', () => {
         expect(resource.text.startsWith('# ')).toBe(true);
       }
     }
+  });
+});
+
+describe('the documents agree with the tools beside them', () => {
+  const text = (uri: string, impersonating = false): string =>
+    deployment('full', 'admin', impersonating).resources.find((r) => r.uri === uri)?.text ?? '';
+
+  // add_note writes `journal__notes` with `NotesBody`; the recipe taught `Journals` with the text
+  // in `Subject`, which an end user's allowlist refuses and add_note never does.
+  it('sends a note to add_note, in the shape add_note writes', () => {
+    const recipes = text('ivanti://reference/write-recipes');
+
+    expect(recipes).toContain('add_note');
+    expect(recipes).toContain('journal__notes');
+    expect(recipes).toContain('NotesBody');
+    expect(recipes).not.toContain("JournalType: 'Notes'");
+    expect(recipes).not.toContain("object: 'Journals'");
+  });
+
+  // The tools say that under impersonation "those really are their records".
+  it('says a "My" saved search answers for the person only where act_as can open their session', () => {
+    const without = text('ivanti://reference/workflow');
+    const impersonating = text('ivanti://reference/workflow', true);
+
+    expect(without).not.toContain('act_as');
+    expect(without).toContain('account this server signs in as');
+    expect(impersonating).toContain('After `act_as` that is the person');
+    expect(impersonating).not.toContain('account this server signs in as');
   });
 });
 

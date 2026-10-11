@@ -23,12 +23,14 @@ const tenant = (prefixed: boolean) =>
     });
   });
 
+const TIMEOUTS = { timeoutMs: 1_000, writeTimeoutMs: 3_000 };
+
 describe('connectIvanti', () => {
   it('probes once and hands back a transport bound to the base path it found', async () => {
     const fetchImpl = tenant(true);
     const { logger } = testLogger();
 
-    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl });
+    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl, ...TIMEOUTS });
 
     expect(connection.basePath).toBe('/HEAT');
     expect(connection.metadataUrl).toBe('https://t/HEAT/api/odata/incidents/$metadata');
@@ -43,7 +45,7 @@ describe('connectIvanti', () => {
     const fetchImpl = tenant(false);
     const { logger, lines } = testLogger();
 
-    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl });
+    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl, ...TIMEOUTS });
 
     expect(connection.basePath).toBe('');
     expect(connection.transport.routes.entitySet('Incidents')).toBe(
@@ -55,7 +57,7 @@ describe('connectIvanti', () => {
   it('logs every base-path attempt at debug, not only the one that answered', async () => {
     const { logger, lines } = testLogger();
 
-    await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl: tenant(false) });
+    await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl: tenant(false), ...TIMEOUTS });
 
     const probed = lines
       .map((line) => JSON.parse(line) as { message: string; attempted?: unknown })
@@ -76,6 +78,7 @@ describe('connectIvanti', () => {
       apiKey: 'super-secret',
       logger,
       fetchImpl: tenant(true),
+      ...TIMEOUTS,
     });
 
     expect(lines.join('\n')).not.toContain('super-secret');
@@ -88,7 +91,7 @@ describe('connectIvanti', () => {
     const { logger } = testLogger();
 
     await expect(
-      connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl }),
+      connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl, ...TIMEOUTS }),
     ).rejects.toThrow(/Could not reach Ivanti/);
   });
 
@@ -103,7 +106,7 @@ describe('connectIvanti', () => {
     const { logger } = testLogger();
 
     await expect(
-      connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl }),
+      connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl, ...TIMEOUTS }),
     ).rejects.toThrow(/refused the API key: 401[\s\S]*IVANTI_API_KEY/);
   });
 
@@ -182,7 +185,7 @@ describe('connectIvanti', () => {
     );
     const { logger, lines } = testLogger();
 
-    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl });
+    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl, ...TIMEOUTS });
 
     expect(connection.capability.tier).toBe('odata');
     expect(lines.join('\n')).toContain('session unavailable');
@@ -208,7 +211,7 @@ describe('connectIvanti', () => {
     });
     const { logger } = testLogger();
 
-    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl });
+    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl, ...TIMEOUTS });
 
     expect(connection.capability).toMatchObject({
       tier: 'admin',
@@ -235,7 +238,7 @@ describe('connectIvanti', () => {
     });
     const { logger } = testLogger();
 
-    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl });
+    const connection = await connectIvanti({ baseUrl: 'https://t', apiKey: 'k', logger, fetchImpl, ...TIMEOUTS });
 
     expect(connection.capability.tier).toBe('session');
   });

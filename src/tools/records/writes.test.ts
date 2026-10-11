@@ -357,6 +357,58 @@ describe('the fields that say whose record it is, in enduser', () => {
     expect(urls.some((url) => url.startsWith('POST'))).toBe(false);
   });
 
+  describe('what the record holds after a create', () => {
+    function created(readBack: Record<string, unknown>) {
+      const { connection } = connectionFixture({
+        entities: { incident: INCIDENT, employee: {} },
+        responses: {
+          'POST incidents': { RecId: 'new-1' },
+          "incidents('new-1')": { RecId: 'new-1', Subject: 'x', ...readBack },
+          incidents: { value: [MINE] },
+          employees: { value: [] },
+        },
+      });
+      const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+      context.pin?.pin({ ...PERSON });
+      const d = { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: true, actions: OPEN_ACTIONS };
+      return createCreateRecordTool(d).handler({ object: 'Incidents', fields: { Subject: 'x' } }, context);
+    }
+
+    it('fails when the stored customer is not the person, rather than reporting it filed for them', async () => {
+      const result = await created({ ProfileLink_RecID: 'SVC-ACCOUNT', ProfileLink_Category: 'Employee' });
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain('ProfileLink_RecID');
+      expect(text(result)).toContain('NOT the person\'s own');
+    });
+
+    it('names the person when the stored link holds their id in another case', async () => {
+      const result = await created({ ProfileLink_RecID: 'e1', ProfileLink_Category: 'employee' });
+
+      expect(result.isError).toBeUndefined();
+      expect(body(result)['filedFor']).toBe('Harold Sanders');
+    });
+
+    it('does not say who it was filed for when the read-back does not return the link', async () => {
+      const result = await created({});
+
+      expect(result.isError).toBeUndefined();
+      expect(body(result)['filedFor']).toBeUndefined();
+      expect(JSON.stringify(body(result)['notConfirmed'])).toContain('ProfileLink_RecID');
+    });
+
+    it('reports an author Ivanti kept its own value for, without failing', async () => {
+      const result = await created({
+        ProfileLink_RecID: 'E1',
+        ProfileLink_Category: 'Employee',
+        CreatedBy: 'svc',
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(body(result)['ignoredByIvanti']).toEqual({ CreatedBy: 'svc' });
+    });
+  });
+
   it('accepts a create that names them, and sends the stamp once', async () => {
     const { d, context } = enduser();
     const sent = bodies(d);
@@ -568,6 +620,22 @@ describe('a write Ivanti refuses', () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain('task__assignment');
+  });
+
+  it('does not call a timeout on an object with subtypes a base-type refusal', async () => {
+    const { connection } = connectionFixture({
+      entities: { journal: {}, journal__notes: {} },
+      responses: {
+        'POST journals': new IvantiApiError({ status: 0, method: 'POST', url: 'journals', body: 'timed out' }),
+      },
+    });
+    const d = { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS };
+
+    const result = await createCreateRecordTool(d).handler({ object: 'Journals', fields: { Subject: 'x' } });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('MAY HAVE TAKEN EFFECT');
+    expect(text(result)).not.toContain('base type');
   });
 
   it('passes any other refusal through as Ivanti gave it', async () => {

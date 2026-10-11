@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
-export const WORKFLOW = `
+export const workflowFor = (canImpersonate: boolean): string =>
+  `
 # Running the tenant's own procedures, and relating records
 
 ## Prefer a quick action to a raw write
@@ -39,8 +40,12 @@ The object is \`frs_approval#\` (\`frs_approvals\`); "Approvals" is not a name I
 
 ## Saved searches answer for the service account too
 
-A saved search called "My …" was written by, and resolves for, the signed-in account.
-\`list_saved_searches\` flags the ones that do. Do not present those results as anyone else's.
+A saved search called "My …" resolves against the SESSION it runs on. ${
+    canImpersonate
+      ? 'After `act_as` that is the person, so the rows are theirs and the result says whose; before it, the service account.'
+      : 'Here that is the account this server signs in as.'
+  }
+\`list_saved_searches\` flags the ones that answer for the service account. Do not present those results as anyone else's.
 
 ## Linking, and the one that does damage
 

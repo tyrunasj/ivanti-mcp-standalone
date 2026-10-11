@@ -32,6 +32,25 @@ const deps = (responses: Record<string, unknown>) => {
   return { urls, deps: { connection, gate: OPEN_GATE, logger: logger(), ownRecordsOnly: false, actions: OPEN_ACTIONS } };
 };
 
+/** The related rows as read in turn (before, then after) — the fixture alone answers one thing. */
+function relatedInTurn(
+  connection: ReturnType<typeof deps>['deps']['connection'],
+  lists: Array<unknown[] | Error>,
+): void {
+  const original = connection.transport.request.bind(connection.transport);
+  vi.spyOn(connection.transport, 'request').mockImplementation(((
+    url: string,
+    init?: { method?: string },
+  ) => {
+    if (!url.endsWith('/IncidentContainsTask') && !url.endsWith('/IncidentAssociatesCI')) {
+      return original(url, init);
+    }
+    if ((init?.method ?? 'GET') !== 'GET') return original(url, init);
+    const next = lists.shift() ?? [];
+    return next instanceof Error ? Promise.reject(next) : Promise.resolve({ value: next });
+  }));
+}
+
 const ARGS = {
   object: 'Incidents',
   recordId: 'abc',
@@ -41,7 +60,8 @@ const ARGS = {
 
 describe('link_records', () => {
   it('PATCHes the $Ref route and accepts Ivanti’s success code', async () => {
-    const { deps: d, urls } = deps({ IncidentContainsTask: { code: 'ISM_2000' } });
+    const { deps: d, urls } = deps({ 'PATCH IncidentContainsTask': { code: 'ISM_2000' } });
+    relatedInTurn(d.connection, [[], [{ RecId: 't1' }]]);
 
     const result = body(await createLinkRecordsTool(d).handler(ARGS));
 
@@ -53,7 +73,7 @@ describe('link_records', () => {
 
   it('treats a failure code in a 200 as a failure', async () => {
     // Ivanti answers relationship problems with 200 and a code, so the status says nothing.
-    const { deps: d } = deps({ IncidentContainsTask: { code: 'ISM_4000' } });
+    const { deps: d } = deps({ 'PATCH IncidentContainsTask': { code: 'ISM_4000' } });
 
     const result = await createLinkRecordsTool(d).handler(ARGS);
 
@@ -86,6 +106,40 @@ describe('link_records', () => {
     expect(result).toMatchObject({ alreadyLinked: true, targetId: 'ci9' });
     expect(result).not.toHaveProperty('linked');
     expect(urls.some((url) => url.startsWith('PATCH'))).toBe(false);
+  });
+});
+
+describe('link_records on a relationship with no parent field', () => {
+  const LINK = { 'PATCH IncidentAssociatesCI': { code: 'ISM_2000' } };
+  const ASSOC = { ...ARGS, relationship: 'IncidentAssociatesCI', targetId: 'ci9' };
+
+  it('reports an association Ivanti answered ISM_2000 but whose second read lacks the target', async () => {
+    const { deps: d } = deps(LINK);
+    relatedInTurn(d.connection, [[], []]);
+
+    const result = await createLinkRecordsTool(d).handler(ASSOC);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('NOT linked');
+  });
+
+  it('says linked only when the second read lists the target', async () => {
+    const { deps: d } = deps(LINK);
+    relatedInTurn(d.connection, [[], [{ RecId: 'CI9' }]]);
+
+    const result = body(await createLinkRecordsTool(d).handler(ASSOC));
+
+    expect(result).toMatchObject({ linked: 'ci9' });
+  });
+
+  it('does not claim success when the second read fails', async () => {
+    const { deps: d } = deps(LINK);
+    relatedInTurn(d.connection, [[], new IvantiApiError({ status: 500, method: 'GET', url: 'x' })]);
+
+    const result = await createLinkRecordsTool(d).handler(ASSOC);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('not confirmed');
   });
 });
 
@@ -252,5 +306,41 @@ describe('unlink_records', () => {
     });
 
     expect((await createUnlinkRecordsTool(d).handler(ARGS)).isError).toBeUndefined();
+  });
+});
+
+describe('unlink_records read-back', () => {
+  const DELETE = { 'DELETE IncidentContainsTask': { code: 'ISM_2000' } };
+
+  it('refuses to report an unlink when the second read still lists the target', async () => {
+    const { deps: d } = deps(DELETE);
+    relatedInTurn(d.connection, [[{ RecId: 't1' }], [{ RecId: 't1' }]]);
+
+    const result = await createUnlinkRecordsTool(d).handler(ARGS);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('still linked');
+  });
+
+  it('reports unlinked when the second read omits the target', async () => {
+    const { deps: d } = deps(DELETE);
+    relatedInTurn(d.connection, [[{ RecId: 't1' }], []]);
+
+    const result = body(await createUnlinkRecordsTool(d).handler(ARGS));
+
+    expect(result).toMatchObject({ unlinked: 't1' });
+  });
+
+  it('does not claim success when the second read fails', async () => {
+    const { deps: d } = deps(DELETE);
+    relatedInTurn(d.connection, [
+      [{ RecId: 't1' }],
+      new IvantiApiError({ status: 500, method: 'GET', url: 'x' }),
+    ]);
+
+    const result = await createUnlinkRecordsTool(d).handler(ARGS);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('not confirmed');
   });
 });

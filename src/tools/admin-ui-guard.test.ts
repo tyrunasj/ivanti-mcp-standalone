@@ -87,9 +87,16 @@ describe('every tool, over a stubbed tenant', () => {
   });
 
   it('reaches Ivanti only through the two documented surfaces', async () => {
+    // A session tier, so the ASMX surface is actually driven: with only the OData surface in
+    // play the assertion below could not fail for the other one.
     const { connection, urls } = connectionFixture({
       entities: { incident: {}, employee: {}, journal__notes: {} },
       responses: RESPONSES,
+      capability: { tier: 'session', identity: { role: 'ServiceDeskAnalyst' } },
+      sessionCalls: {
+        GetRoleWorkspaces: { Workspaces: [] },
+        GetObjectQuickActions: [],
+      },
     });
 
     const tools = selectTools(configFixture(), {
@@ -101,8 +108,14 @@ describe('every tool, over a stubbed tenant', () => {
 
     for (const tool of tools) await tool.handler(ARGUMENTS[tool.name] ?? {});
 
-    for (const url of urls.map((entry) => entry.replace(/^[A-Z]+ /, '')).filter((candidate) => candidate.startsWith('http'))) {
-      expect(url, `unexpected surface: ${url}`).toMatch(/\/api\/(odata|rest)\//);
-    }
+    // Surface one: the REST/OData API, recorded as `METHOD https://…/api/(odata|rest)/…`.
+    // Surface two: the ASMX session services, recorded as `Services/X.asmx/Method`.
+    const rest = /^[A-Z]+ https?:\/\/\S*\/api\/(odata|rest)\//;
+    const asmx = /^[\w./-]*\.asmx\/\w+$/;
+    const stray = urls.filter((entry) => !rest.test(entry) && !asmx.test(entry));
+
+    expect(stray, `unexpected surface: ${stray.join(', ')}`).toEqual([]);
+    expect(urls.some((entry) => rest.test(entry)), 'the REST surface was never reached').toBe(true);
+    expect(urls.some((entry) => asmx.test(entry)), 'the ASMX surface was never reached').toBe(true);
   });
 });

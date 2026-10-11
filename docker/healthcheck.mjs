@@ -29,7 +29,14 @@ if (!port) {
   process.stderr.write('health: MCP_PORT is not set\n');
   process.exit(1);
 }
-const timeout = Number(process.env.HEALTHCHECK_TIMEOUT_MS ?? '4000');
+// `Number('abc')` is NaN, which AbortSignal.timeout treats as no timeout at all — a hung server
+// would then hold the check until Docker's own kill. A bad value is a failed check, said aloud.
+const rawTimeout = process.env.HEALTHCHECK_TIMEOUT_MS?.trim() || '4000';
+const timeout = Number(rawTimeout);
+if (!Number.isInteger(timeout) || timeout < 1) {
+  process.stderr.write(`health: HEALTHCHECK_TIMEOUT_MS must be a positive whole number of milliseconds (got ${JSON.stringify(rawTimeout)})\n`);
+  process.exit(1);
+}
 
 try {
   const response = await fetch(`http://127.0.0.1:${port}/health`, {

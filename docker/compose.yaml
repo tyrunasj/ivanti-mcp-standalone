@@ -36,7 +36,7 @@ services:
       MCP_BIND: 0.0.0.0
       METRICS_BIND: 0.0.0.0
 
-    # PUBLISHED ON THE HOST'S LOOPBACK ONLY, by default. A bare `3000:3000`
+    # PUBLISHED ON THE HOST'S LOOPBACK ONLY, by default. A bare `<port>:<port>`
     # publishes on every host interface, and Docker writes its own iptables rules
     # AHEAD of ufw and firewalld — so a host firewall that says "deny" does not
     # stop it. With AUTH_MODE=none that is the whole tool surface, on the

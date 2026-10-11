@@ -23,11 +23,6 @@ export class ConfigError extends Error {
 }
 
 /**
- * Resolves file-backed secrets, parses the environment, then applies the cross-field
- * rules — in that order, because a rule such as "bearer mode needs a token" cannot be
- * judged until `BEARER_TOKEN_FILE` has been read.
- */
-/**
  * An environment variable set to nothing is not set.
  *
  * `docker run -e AUTH_MODE=` is how an operator clears a value inherited from an `--env-file`,
@@ -43,6 +38,11 @@ function withoutEmpty(env: EnvRecord): EnvRecord {
   return kept;
 }
 
+/**
+ * Resolves file-backed secrets, parses the environment, then applies the cross-field
+ * rules — in that order, because a rule such as "bearer mode needs a token" cannot be
+ * judged until `BEARER_TOKEN_FILE` has been read.
+ */
 export function loadConfig(env: EnvRecord, readFile?: FileReader): Config {
   const resolved: EnvRecord = withoutEmpty(env);
 
@@ -54,7 +54,11 @@ export function loadConfig(env: EnvRecord, readFile?: FileReader): Config {
       // the file form — fail with "Both … are set; provide exactly one", when only one was. It
       // also let a whitespace-only `BEARER_TOKEN` start the server, which is the one direction
       // this bug failed open.
-      resolved[key] = readSecret(resolved, key, readFile);
+      // An unset secret stays absent: `validateConfig` reads the key set as "what the operator wrote",
+      // and a key holding `undefined` would count as written.
+      const secret = readSecret(resolved, key, readFile);
+      if (secret === undefined) delete resolved[key];
+      else resolved[key] = secret;
       delete resolved[`${key}_FILE`];
     } catch (error) {
       throw new ConfigError([error instanceof Error ? error.message : String(error)]);

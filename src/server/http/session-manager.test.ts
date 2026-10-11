@@ -445,4 +445,61 @@ describe('SessionManager', () => {
       expect.objectContaining({ cap: 1, retryAfterSeconds: EVICTION_FLOOR_MS / 1000 }),
     );
   });
+
+  describe('a running request versus an attached stream', () => {
+    const open = (m: SessionManager<FakeSession>, id: string, subject: string): FakeSession => {
+      const s = session();
+      const admission = m.admit({ subject });
+      if (!admission.admitted) throw new Error(`expected ${id} to be admitted`);
+      admission.slot.commit(id, s);
+      return s;
+    };
+
+    // Both of a subject's sessions had a GET stream, and the "doing nothing" preference could not
+    // tell the one mid-write from the one merely attached, so it closed the writer.
+    it('closes the attached-idle session, not the one mid-write, at the subject limit', () => {
+      const m = manager(10, HOUR, silent(), 2);
+      const writing = open(m, 'writing', 'alice');
+      m.attach('writing');
+      m.busy('writing');
+      clock += 10;
+      const attached = open(m, 'attached', 'alice');
+      m.attach('attached');
+      clock += 10;
+
+      open(m, 'third', 'alice');
+
+      expect(writing.close).not.toHaveBeenCalled();
+      expect(attached.close).toHaveBeenCalled();
+    });
+
+    it('sweeps neither a session mid-write nor one with a client attached', () => {
+      const m = manager(5, 100);
+      const writing = session();
+      const attached = session();
+      m.register('writing', writing);
+      m.register('attached', attached);
+      m.busy('writing');
+      m.attach('attached');
+      clock += 1_000;
+      vi.useFakeTimers();
+      m.startSweeping(10);
+      vi.advanceTimersByTime(20);
+      vi.useRealTimers();
+
+      expect(writing.close).not.toHaveBeenCalled();
+      expect(attached.close).not.toHaveBeenCalled();
+    });
+
+    it('does not close an attached session to make room at the cap', () => {
+      const m = manager(1, HOUR);
+      const attached = session();
+      m.register('attached', attached);
+      m.attach('attached');
+      clock += 10 * EVICTION_FLOOR_MS;
+
+      expect(m.admit().admitted).toBe(false);
+      expect(attached.close).not.toHaveBeenCalled();
+    });
+  });
 });
