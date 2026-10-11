@@ -9,12 +9,11 @@ import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { scopeToOwnRecords } from '../shared/own-records.js';
+import { explainReadError, prepareFilterRead } from '../shared/read-preflight.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-import { assertOrderBy } from '../shared/order-by.js';
 import { QUERY_WORDS, noHitsNote } from './query-words.js';
-import { rowFields } from './row-fields.js';
+import { compactRows } from '../shared/compact-rows.js';
 import { transportFor } from '../shared/transport-for.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
@@ -69,8 +68,10 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
         const transport = transportFor(deps.connection.transport, context);
         const resolved = await resolveObject(deps, args.object);
         const { entitySet } = resolved;
-        assertOrderBy(args.orderBy, resolved.entity);
-        const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
+        const scoped = await prepareFilterRead(deps, context, resolved, {
+          filter: args.filter,
+          orderBy: args.orderBy,
+        });
 
         const url = withQuery(
           transport.routes.entitySet(entitySet),
@@ -83,13 +84,15 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
           }),
         );
 
-        const payload = await transport.request<OdataRecord>(url);
+        const payload = await transport.request<OdataRecord>(url).catch((error: unknown) => {
+          throw explainReadError(error, resolved.entity, { filter: args.filter });
+        });
         const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
 
         // `"*"` used to reach the projection as a field name, and every hit came back as its
-        // RecId alone — see `rowFields`.
-        const shown = rowFields(rows, args.fields, resolved.entity);
+        // RecId alone — see `compactRows`.
+        const shown = compactRows(rows, args.fields, resolved.entity);
 
         return jsonResult({
           object: entitySet,
@@ -99,7 +102,7 @@ export function createFulltextSearchObjectTool(deps: IvantiToolDeps): ToolDefini
           ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),
           // In the payload, not only in the description: across a long session the manifest
           // scrolls out of attention and an empty `rows` reads as a clean negative.
-          ...(rows.length === 0 ? { note: noHitsNote(args.query) } : {}),
+          ...(rows.length === 0 ? { note: noHitsNote(args.query, context) } : {}),
           ...(shown.note === undefined ? {} : { fields: shown.note }),
           rows: projectRows(rows, shown.fields),
         });

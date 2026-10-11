@@ -6,7 +6,7 @@ import type { Logger } from '../../logger.js';
 import { IvantiApiError } from '../http/errors.js';
 import type { IvantiTransport } from '../http/transport.js';
 import { createIvantiRoutes } from '../odata/url.js';
-import { createMetadataCatalog, UnknownEntityError } from './catalog.js';
+import { createMetadataCatalog, MetadataUnavailableError, UnknownEntityError } from './catalog.js';
 
 const logger = (): Logger => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -20,7 +20,10 @@ const NAV = '<NavigationProperty Name="IncidentContainsTask" Type="Collection(Me
 
 const SEED_URL = 'https://t/HEAT/api/odata/incidents/$metadata';
 
-/** Answers `requestText` from a fragment→body map; anything unmatched is a 404. */
+/**
+ * Answers `requestText` from a fragment→body map. Anything unmatched is what Ivanti really does
+ * for an entity set that does not exist (`notes.md`): a 200 with a field-less CSDL document.
+ */
 function fakeTransport(documents: Record<string, string | Error>): {
   transport: IvantiTransport;
   calls: string[];
@@ -40,9 +43,8 @@ function fakeTransport(documents: Record<string, string | Error>): {
       calls.push(url);
       const match = Object.entries(documents).find(([fragment]) => url.includes(fragment));
       if (match === undefined) {
-        return Promise.reject(
-          new IvantiApiError({ status: 404, method: 'GET', url, body: 'no such thing' }),
-        );
+        const set = /\/odata\/([^/]+)\/\$metadata/.exec(url)?.[1] ?? 'unknown';
+        return Promise.resolve(csdl(`<EntityType Name="${set}" />`));
       }
       const body = match[1];
       return body instanceof Error ? Promise.reject(body) : Promise.resolve(body);
@@ -88,7 +90,7 @@ describe('createMetadataCatalog', () => {
   it('falls back to the shared graph when the entity genuinely has no relationships', async () => {
     const { catalog: metadata } = catalog({
       '/incidents/$metadata': csdl(entity('incident', NAV), entity('task')),
-      // tasks/$metadata is a 404 here
+      // tasks/$metadata is Ivanti's fabricated field-less answer here
     });
 
     await expect(metadata.entity('Task#')).resolves.toMatchObject({
@@ -144,7 +146,7 @@ describe('createMetadataCatalog', () => {
     const { transport, calls } = fakeTransport(documents);
     const metadata = createMetadataCatalog({ transport, seedUrl: SEED_URL, logger: logger() });
 
-    await expect(metadata.entity('Incident#')).rejects.toThrow(UnknownEntityError);
+    await expect(metadata.entity('Incident#')).rejects.toThrow(MetadataUnavailableError);
     documents['/incidents/$metadata'] = csdl(entity('incident', NAV));
 
     await expect(metadata.entity('Incident#')).resolves.toMatchObject({ name: 'incident' });
@@ -258,20 +260,62 @@ describe('createMetadataCatalog', () => {
       };
     }
 
-    it.each([
-      ['a 503 while the tenant recycles', new IvantiApiError({ status: 503, method: 'GET', url: SEED_URL }, 'unavailable')],
-      ['a 429', new IvantiApiError({ status: 429, method: 'GET', url: SEED_URL }, 'slow down')],
-      ['a 401 from a proxy', new IvantiApiError({ status: 401, method: 'GET', url: SEED_URL }, 'nope')],
-      ['a transport failure', new IvantiApiError({ status: 0, method: 'GET', url: SEED_URL }, 'timeout')],
-      ['something that is not an IvantiApiError at all', new TypeError('terminated')],
-    ])('tries again after %s', async (_label, error) => {
-      const { catalog: subject, recover } = flaky(error);
+    const failure = (status: number, body = 'x'): IvantiApiError =>
+      new IvantiApiError({ status, method: 'GET', url: SEED_URL }, body);
 
-      await expect(subject.entity('incident')).rejects.toThrow(UnknownEntityError);
+    it.each([
+      ['a 503 while the tenant recycles', failure(503)],
+      ['a 429', failure(429)],
+      ['a 401 from a proxy', failure(401)],
+      ['a 403', failure(403)],
+      ['a transport failure', failure(0, 'timeout')],
+      // Unlisted statuses were cached as "no such entity" for the process lifetime.
+      ['a 404 from an ingress mid-deploy', failure(404)],
+      ['a 400', failure(400)],
+      ['a 408', failure(408)],
+      ['a 405', failure(405)],
+      ['a 409', failure(409)],
+      ['a 410', failure(410)],
+      ['something that is not an IvantiApiError at all', new TypeError('terminated')],
+    ])('says it could not be read, then tries again, after %s', async (_label, error) => {
+      const { catalog: subject, recover, calls } = flaky(error);
+
+      await expect(subject.entity('incident')).rejects.toThrow(MetadataUnavailableError);
+      const afterFirst = calls.length;
+      await expect(subject.entity('incident')).rejects.not.toThrow(UnknownEntityError);
+      // Asked again: the failure was not remembered (old code: a 404/400/... was, and no request).
+      expect(calls.length).toBeGreaterThan(afterFirst);
 
       // Ivanti recovers a second later. Nothing about the first failure may outlive it.
       recover();
       await expect(subject.entity('incident')).resolves.toMatchObject({ name: 'incident' });
+    });
+
+    it('does not say a name is unknown while a graph it needed could not be read', async () => {
+      const { catalog: subject } = catalog({
+        '/incidents/$metadata': csdl(entity('incident', NAV)),
+        '/widgets/$metadata': new IvantiApiError({ status: 503, method: 'GET', url: SEED_URL }, 'x'),
+      });
+
+      await expect(subject.entity('widget')).rejects.toThrow(/could not be read/);
+    });
+
+    it('reports a widen() that lost graphs as incomplete, and a clean one as complete', async () => {
+      const documents: Record<string, string | Error> = {
+        '/incidents/$metadata': csdl(entity('incident', NAV)),
+        '/employees/$metadata': failure(503),
+        '/changes/$metadata': failure(503),
+        '/tasks/$metadata': failure(503),
+      };
+      const { transport } = fakeTransport(documents);
+      const subject = createMetadataCatalog({ transport, seedUrl: SEED_URL, logger: logger() });
+
+      await subject.widen();
+      await expect(subject.entityNamesDetailed()).resolves.toMatchObject({ incomplete: true });
+
+      for (const key of ['/employees', '/changes', '/tasks']) delete documents[`${key}/$metadata`];
+      await subject.widen();
+      await expect(subject.entityNamesDetailed()).resolves.toMatchObject({ incomplete: false });
     });
 
     // The other direction, and the reason the cache exists: Ivanti answering 200 with its

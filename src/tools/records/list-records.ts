@@ -2,26 +2,20 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import { z } from 'zod';
-import { ALL_FIELDS, resolveRowFields } from '../../ivanti/odata/compact-fields.js';
+import { ALL_FIELDS } from '../../ivanti/odata/compact-fields.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
-import { referencedFieldNames } from '../../ivanti/odata/filter.js';
 import { buildQuery, DEFAULT_TOP, MAX_TOP, readTotal, withQuery } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { explainFieldError } from '../shared/explain-field-error.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { scopeToOwnRecords } from '../shared/own-records.js';
+import { explainReadError, prepareFilterRead } from '../shared/read-preflight.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
-import { assertOrderBy } from '../shared/order-by.js';
-import { compactMissedObject } from '../../ivanti/odata/compact-fields.js';
-import { compactFieldsFor } from '../../ivanti/odata/compact-fields.js';
-import { visibleFields } from '../../ivanti/metadata/csdl.js';
-import { assertNullFilterTypes } from '../shared/null-filter.js';
-import { ignoredFieldNames, ignoredFieldsNote } from '../shared/ignored-fields.js';
-import { zeroNote } from '../shared/zero-note.js';
+import { COMPACT_FITTED_NOTE, compactRows } from '../shared/compact-rows.js';
+import { ignoredFieldsPayload } from '../shared/ignored-fields.js';
+import { withImpersonation, zeroNote } from '../shared/zero-note.js';
 import { transportFor } from '../shared/transport-for.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
@@ -104,13 +98,12 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         const top = args.top ?? DEFAULT_TOP;
 
         // Before the request: an unknown sort field answers 204, which is indistinguishable from
-        // "there are no such records".
-        assertOrderBy(args.orderBy, entity);
-        assertNullFilterTypes(args.filter, entity);
-
-        // In `enduser` mode this narrows the filter to the caller's own records, and refuses
-        // when nobody has said who that is.
-        const scoped = await scopeToOwnRecords(deps, context, resolved, args.filter);
+        // "there are no such records". In `enduser` mode this also narrows the filter to the
+        // caller's own records, and refuses when nobody has said who that is.
+        const scoped = await prepareFilterRead(deps, context, resolved, {
+          filter: args.filter,
+          orderBy: args.orderBy,
+        });
 
         const url = withQuery(
           transport.routes.entitySet(entitySet),
@@ -124,39 +117,21 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           }),
         );
 
-        const projection = resolveRowFields(parseFieldList(args.fields), args.fields);
-
         const payload = await transport
           .request<OdataRecord>(url)
           .catch((error: unknown) => {
-            const referenced = referencedFieldNames({
+            throw explainReadError(error, entity, {
               filter: args.filter,
               fields: parseFieldList(args.fields),
             });
-            throw explainFieldError(error, entity, referenced) ?? error;
           });
         const rows = readRows<OdataRecord>(payload, url);
         const total = readTotal(payload, rows.length);
         const skipped = args.skip ?? 0;
 
-        /**
-         * The default field set, decided against THIS object's rows rather than a fixed list.
-         *
-         * A tenant defines its own Business Objects and renames fields on the ones Ivanti ships,
-         * so the preference list is a starting point and not an answer. `compactFieldsFor` falls
-         * back to the row's own leading fields when the list matches nothing — otherwise every
-         * row of an unrecognised object came back as a RecId and two timestamps.
-         */
-        const compact =
-          projection.defaulted && rows.length > 0
-            ? compactFieldsFor(
-                rows,
-                // A better-than-a-name-list candidate source, where the schema offers one.
-                visibleFields(entity)
-                  .filter((f) => f.validated || !f.nullable)
-                  .map((f) => f.name),
-              )
-            : undefined;
+        // The default field set, decided against THIS object's rows rather than a fixed list: a
+        // tenant defines its own Business Objects, so the preference list is a starting point.
+        const shown = compactRows(rows, args.fields, entity);
 
         return jsonResult({
           object: entitySet,
@@ -167,20 +142,20 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
           ...(rows.length === 0 && (args.search !== undefined || scoped.scopedTo === undefined)
             ? {
                 note: zeroNote({
-                  // Ivanti's own answer for this person, which hides rather than filters.
-                  impersonating: context.impersonation?.session()?.loginId,
                   looked: entitySet,
                   ...(args.search === undefined ? {} : { keyword: args.search }),
                   ...(scoped.scopedTo === undefined ? {} : { scopedTo: scoped.scopedTo }),
-                }),
+                }, context),
               }
             : {}),
           ...(rows.length === 0 && args.search === undefined && scoped.scopedTo !== undefined
             ? {
-                note:
+                note: withImpersonation(
                   `No ${entitySet} record matching this is visible to ${scoped.scopedTo}. That ` +
-                  'is not the same as none existing — a record belonging to someone else answers ' +
-                  'zero here too.',
+                    'is not the same as none existing — a record belonging to someone else ' +
+                    'answers zero here too.',
+                  context,
+                ),
               }
             : {}),
           // Emitted on an empty answer too. The zero case used to drop `total`, `totalIsExact`
@@ -193,42 +168,14 @@ export function createListRecordsTool(deps: IvantiToolDeps): ToolDefinition {
                 totalIsExact: total.exact,
                 hasMore: total.total > skipped + rows.length,
               }),
-          ...(projection.defaulted && rows.length > 0
-            ? ((): Record<string, unknown> => {
-                // The compact default is tuned for the ticket objects. On some others it
-                // intersects nothing but RecId and timestamps, and the rows come back
-                // indistinguishable from one another — so say so, with the names to pick from,
-                // rather than presenting a useless row as a normal answer.
-                // Only what is NOT already in the row below: repeating the shown fields under
-                // "available" reads as though nothing was shown.
-                const shown = new Set((compact?.fields ?? []).map((name) => name.toLowerCase()));
-                const missed = compactMissedObject(rows)?.filter(
-                  (name) => !shown.has(name.toLowerCase()),
-                );
-                return missed === undefined
-                  ? {
-                      fields:
-                        'a compact default set — pass `fields` for others, or "*" for whole records',
-                    }
-                  : {
-                      fields:
-                        'THIS OBJECT IS NOT ONE OF THE ONES THE DEFAULT KNOWS, so the rows below ' +
-                        'show its own first few fields instead. That choice is arbitrary, not a ' +
-                        'judgement about which fields matter — name the ones you want in ' +
-                        '`fields`, or pass "*".',
-                      otherFields: missed,
-                    };
-              })()
+          ...(shown.defaulted && rows.length > 0
+            ? {
+                fields: shown.note ?? COMPACT_FITTED_NOTE,
+                ...(shown.otherFields === undefined ? {} : { otherFields: shown.otherFields }),
+              }
             : {}),
-          ...(ignoredFieldNames(rows, parseFieldList(args.fields)).length === 0
-            ? {}
-            : {
-                ignoredFields: ignoredFieldNames(rows, parseFieldList(args.fields)),
-                fieldsNote: ignoredFieldsNote(
-                  ignoredFieldNames(rows, parseFieldList(args.fields)),
-                ),
-              }),
-          rows: projectRows(rows, compact?.fields ?? projection.fields),
+          ...ignoredFieldsPayload(rows, parseFieldList(args.fields)),
+          rows: projectRows(rows, shown.fields),
         });
       }),
   });

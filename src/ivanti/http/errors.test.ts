@@ -34,6 +34,64 @@ describe('truncate', () => {
   });
 });
 
+describe('truncate keeps to its byte cap', () => {
+  it('keeps at most the cap in bytes for a non-Latin body', () => {
+    const kept = truncate('ж'.repeat(5000), 1024).replace('… [truncated]', '');
+    expect(Buffer.byteLength(kept, 'utf8')).toBeLessThanOrEqual(1024);
+  });
+
+  it('never leaves half a character behind', () => {
+    // Three-byte characters against a cap that falls mid-character.
+    const kept = truncate('€'.repeat(100), 10).replace('… [truncated]', '');
+    expect(kept).toBe('€€€');
+    expect(kept).not.toContain('\uFFFD');
+  });
+});
+
+describe('scrubErrorBody stays linear and never leaks an unclosed value', () => {
+  const budgetMs = 250;
+  const timed = (run: () => unknown): number => {
+    const start = performance.now();
+    run();
+    return performance.now() - start;
+  };
+
+  it('takes 10,000 XML openers without closers in linear time', () => {
+    expect(timed(() => scrubErrorBody('<SessionId>'.repeat(10_000)))).toBeLessThan(budgetMs);
+  });
+
+  it('takes 10,000 JSON openers without closers in linear time', () => {
+    expect(timed(() => scrubErrorBody('"SessionId":"'.repeat(10_000)))).toBeLessThan(budgetMs);
+  });
+
+  it('takes a long run of backslashes and entities in linear time', () => {
+    expect(timed(() => scrubErrorBody('\\'.repeat(100_000)))).toBeLessThan(budgetMs);
+    expect(timed(() => scrubErrorBody('&amp;'.repeat(100_000)))).toBeLessThan(budgetMs);
+  });
+
+  it('redacts an opener with no closer to the end rather than leaking its prefix', () => {
+    const json = scrubErrorBody('{"SessionId":"abc-secret-part and then more');
+    expect(json).not.toContain('abc-secret');
+    expect(json).toContain('[REDACTED]');
+
+    const xml = scrubErrorBody('<ConnectionString>Server=db;Password=hunter2');
+    expect(xml).not.toContain('hunter2');
+    expect(xml).toContain('[REDACTED]');
+  });
+
+  it('still keeps what surrounds a closed value, and a value ending in an escaped backslash', () => {
+    expect(scrubErrorBody('{"SessionId":"abc","Other":"keep"}')).toBe(
+      '{"SessionId":"[REDACTED]","Other":"keep"}',
+    );
+    expect(scrubErrorBody('{"LoginId":"CORP\\\\jsmith","Other":"keep"}')).toBe(
+      '{"LoginId":"[REDACTED]","Other":"keep"}',
+    );
+    expect(scrubErrorBody('<Hostname>h</Hostname><RecId>keep</RecId>')).toBe(
+      '<Hostname>[REDACTED]</Hostname><RecId>keep</RecId>',
+    );
+  });
+});
+
 describe('isIvantiNotFound', () => {
   it('recognises a real 404', () => {
     expect(isIvantiNotFound(err(404))).toBe(true);

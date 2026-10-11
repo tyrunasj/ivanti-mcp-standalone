@@ -7,7 +7,12 @@ import { ANONYMOUS, verifiedIdentity, type CallerIdentity } from '../../auth/ide
 import type { Logger } from '../../logger.js';
 import type { AuthorizationResult } from './authorize-request.js';
 import { describeRpc } from './describe-rpc.js';
-import { readJsonBody } from './read-body.js';
+import {
+  BodyBudget,
+  MAX_BODY_BYTES,
+  MAX_INITIALIZE_BODY_BYTES,
+  readJsonBody,
+} from './read-body.js';
 import { sendRpcError } from './respond.js';
 import type {
   ClientDetails,
@@ -47,6 +52,8 @@ export interface McpHandlerDeps<S extends McpSession> {
    * probe order — `email`, then `preferred_username`, then `upn`.
    */
   directoryClaim?: string;
+  /** Bounds the request bytes buffered at once; one per handler unless a test shares it. */
+  bodyBudget?: BodyBudget;
 }
 
 export type McpHandler = (
@@ -55,13 +62,6 @@ export type McpHandler = (
   authorization: AuthorizationResult,
 ) => Promise<void>;
 
-/**
- * Dispatches one request on the MCP endpoint.
- *
- * Separate from `startHttp` because this is MCP protocol dispatch — which session, is this an
- * initialize, is the body well formed — while `startHttp` is HTTP plumbing. They change for
- * different reasons, and only this half is worth testing without a socket.
- */
 /**
  * Whether this request's credential belongs to the session it addresses.
  *
@@ -74,8 +74,16 @@ function sameSubject(sessionIdentity: CallerIdentity, authorization: Authorizati
   return authorization.identity?.subject === sessionIdentity.subject;
 }
 
+/**
+ * Dispatches one request on the MCP endpoint.
+ *
+ * Separate from `startHttp` because this is MCP protocol dispatch — which session, is this an
+ * initialize, is the body well formed — while `startHttp` is HTTP plumbing. They change for
+ * different reasons, and only this half is worth testing without a socket.
+ */
 export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>): McpHandler {
   const { sessions, logger, directoryClaim } = deps;
+  const bodyBudget = deps.bodyBudget ?? new BodyBudget();
 
   /** One place that knows the shape of a request log line. */
   const logExchange = (
@@ -114,8 +122,10 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
     request: IncomingMessage,
     response: ServerResponse,
     body?: unknown,
+    /** A GET holds the standalone stream: the client is attached, nothing is running. */
+    stream = false,
   ): Promise<void> => {
-    const done = sessions.busy(sessionId);
+    const done = stream ? sessions.attach(sessionId) : sessions.busy(sessionId);
     try {
       await existing.transport.handleRequest(request, response, body);
     } finally {
@@ -172,7 +182,7 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
       const startedAt = Date.now();
       if (isStream) logger.debug('mcp stream opened', { sessionId, subject });
 
-      await answerOn(sessionId, existing, request, response);
+      await answerOn(sessionId, existing, request, response, undefined, isStream);
 
       logExchange(
         isStream ? 'mcp stream closed' : 'mcp request',
@@ -184,8 +194,15 @@ export function createMcpHandler<S extends McpSession>(deps: McpHandlerDeps<S>):
       return;
     }
 
-    const parsed = await readJsonBody(request);
+    // No session header means this can only be an `initialize`, which is small; the full limit is
+    // for a call on a session that has already been admitted.
+    const parsed = await readJsonBody(
+      request,
+      sessionId === undefined ? MAX_INITIALIZE_BODY_BYTES : MAX_BODY_BYTES,
+      bodyBudget,
+    );
     if (!parsed.ok) {
+      if (parsed.status === 503) response.setHeader('Retry-After', String(parsed.retryAfterSeconds));
       sendRpcError(response, parsed.status, parsed.message);
       return;
     }

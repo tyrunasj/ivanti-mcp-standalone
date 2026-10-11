@@ -108,7 +108,7 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
-        /**
+        /*
          * `Owner` holds a LOGIN on most rows and a DISPLAY NAME on some.
          *
          * Measured: Becky Smith has four vote rows and a login match returned three. The fourth
@@ -291,8 +291,6 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
           ...(approvals.length === 0
             ? {
                 note: zeroNote({
-                  // Ivanti's own answer for this person, which hides rather than filters.
-                  impersonating: context.impersonation?.session()?.loginId,
                   // Safe to assert now: the person was resolved above and a miss was refused,
                   // so an empty answer really is a fact about their queue.
                   looked: `approvals owned by ${who.displayName ?? lookupLogin} (matched on ${who.matchedOn})`,
@@ -305,7 +303,7 @@ export function createListApprovalsTool(deps: IvantiToolDeps): ToolDefinition {
                     'Note an approval block can be Pending with no vote row on it at all, which ' +
                     'is invisible here for every person: that means nobody was asked, not that ' +
                     'nothing is waiting.',
-                }),
+                }, context),
               }
             : {}),
           ...(total === undefined ? {} : { total: total.total, totalIsExact: total.exact }),

@@ -10,8 +10,9 @@ import { createSession, type IvantiSession } from './session/asmx-session.js';
 import { probeCapability, type Capability, type CapabilityTier } from './session/capability.js';
 import { createAdminCatalog, type AdminCatalog } from './session/admin-catalog.js';
 import { createCentralConfig, type CentralConfig } from './session/central-config.js';
-import { createFormContext, type FormContext } from './session/form-context.js';
-import { createWorkspaceCatalog, type WorkspaceCatalog } from './session/workspaces.js';
+import type { FormContext } from './session/form-context.js';
+import type { WorkspaceCatalog } from './session/workspaces.js';
+import { sessionView } from './session/session-view.js';
 import { createPersonDirectory, type PersonDirectory } from './people/directory.js';
 import { createCustomerLinks, type CustomerLinks } from './people/customer-link.js';
 import {
@@ -31,15 +32,15 @@ export interface ConnectOptions {
   impersonation?: { configUrl: string; apiKey: string };
   logger: Logger;
   fetchImpl?: FetchLike & ProbeFetch;
-  /** A GET: `IVANTI_TIMEOUT_MS`. */
-  timeoutMs?: number;
+  /** A GET: `IVANTI_TIMEOUT_MS`. Required, so the env schema is the one place a default lives. */
+  timeoutMs: number;
   /**
    * Everything else: `IVANTI_WRITE_TIMEOUT_MS`. Also the whole of the ASMX session and
    * CentralConfig, whose calls are POSTs whether they read or write, or open and close sessions —
    * the method cannot tell a read there from a quick action, so neither gets cut off at a read's
    * timeout.
    */
-  writeTimeoutMs?: number;
+  writeTimeoutMs: number;
   /**
    * `IVANTI_MAX_CONCURRENT_REQUESTS`: the cap on requests in flight to the tenant, shared by every
    * surface below and by the person's sessions. Absent, nothing is capped.
@@ -122,8 +123,8 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     impersonation,
   } = options;
 
-  // The session surfaces keep their own default unless told otherwise; see `writeTimeoutMs`.
-  const sessionTimeoutMs = writeTimeoutMs ?? timeoutMs;
+  // The session surfaces run on the write budget; see `writeTimeoutMs`.
+  const sessionTimeoutMs = writeTimeoutMs;
 
   const probe = await probeBasePath(baseUrl, apiKey, fetchImpl, timeoutMs, logger);
 
@@ -158,8 +159,8 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     logger,
     fetchImpl,
     ...limited,
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    ...(writeTimeoutMs === undefined ? {} : { writeTimeoutMs }),
+    timeoutMs,
+    writeTimeoutMs,
   });
 
   const session = createSession({
@@ -169,11 +170,12 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     logger,
     fetchImpl,
     ...limited,
-    ...(sessionTimeoutMs === undefined ? {} : { timeoutMs: sessionTimeoutMs }),
+    timeoutMs: sessionTimeoutMs,
   });
 
   const admin = createAdminCatalog(session, logger);
-  const workspaces = createWorkspaceCatalog(session, logger);
+  // The members that depend on which session, built by the function `connectionFor` also uses.
+  const view = sessionView(session, logger);
 
   // Probed here, not on first use: which tools exist depends on the answer, and tools are
   // selected once at startup.
@@ -189,7 +191,7 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
           logger,
           fetchImpl,
           ...limited,
-          ...(sessionTimeoutMs === undefined ? {} : { timeoutMs: sessionTimeoutMs }),
+          timeoutMs: sessionTimeoutMs,
         });
 
   const capability = await probeCapability(session, admin, logger, maxTier, centralConfig);
@@ -213,11 +215,9 @@ export async function connectIvanti(options: ConnectOptions): Promise<IvantiConn
     ...limited,
     transport,
     metadata,
-    session,
-    workspaces,
+    ...view,
     admin,
     centralConfig,
-    forms: createFormContext(session, workspaces, logger),
     serviceRequests: { tenantOffset: createTenantOffsetReader(transport, logger) },
     people: {
       directory,

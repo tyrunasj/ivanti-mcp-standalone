@@ -81,6 +81,34 @@ const typeOf = (p) =>
   Array.isArray(p.type) ? p.type.join(' | ')
     : p.type ?? (Array.isArray(p.anyOf) ? p.anyOf.map(typeOf).join(' | ') : 'object');
 
+/**
+ * Every key some `.env` the configurator can generate mentions, as a line `KEY=` or `# KEY=`.
+ * The generator is the page's own code, taken from between its `<env-builder>` markers and run
+ * here, so nothing is restated.
+ */
+function missingFromGenerator(page, keys) {
+  const block = /\/\/ <env-builder>[^\n]*\n([\s\S]*?)\/\/ <\/env-builder>/.exec(page)?.[1];
+  if (block === undefined) return keys;
+  const buildEnvText = new Function('crypto', `${block}\nreturn buildEnvText;`)(globalThis.crypto);
+  const seen = new Set();
+  const flags = [true, false];
+  for (const transport of ['stdio', 'http', 'both'])
+    for (const auth of ['none', 'bearer', 'oauth'])
+      for (const mode of ['full', 'enduser'])
+        for (const bind of ['local', 'all'])
+          for (const files of flags)
+            for (const where of ['docker', 'host', 'win'])
+              for (const metrics of ['off', 'local', 'token']) {
+                const text = buildEnvText({
+                  transport, auth, mode, bind, files, metrics,
+                  http: transport !== 'stdio', win: where === 'win', host: where === 'host',
+                  scrape: metrics !== 'off', scrapeToken: metrics === 'token',
+                });
+                for (const m of text.matchAll(/^#?\s*([A-Z][A-Z0-9_]*)=/gm)) seen.add(m[1]);
+              }
+  return keys.filter((key) => !seen.has(key) && !seen.has(`${key}_FILE`));
+}
+
 const html = readFileSync(HANDBOOK, 'utf8');
 const match = html.match(DATA_LINE);
 if (match === null) {
@@ -153,6 +181,30 @@ if (mode === '--write') {
   const undocumented = Object.keys(envSchema.shape).filter((key) => !documented.has(key) && !documented.has(`${key}_FILE`));
   if (undocumented.length > 0) {
     console.error(`docs/handbook.html's settings reference (const ENV) lacks: ${undocumented.join(', ')}. Add an entry for each.`);
+    process.exit(1);
+  }
+  // A stated default must be the schema's. Compared only where both sides are plain values
+  // (numbers, booleans, hosts, words) — prose such as "(no limit)" is editorial.
+  const entries = new Map(JSON.parse(ENV_LINE.exec(html)?.[1] ?? '[]').flatMap((group) => group.vars.map((v) => [v.name, v])));
+  const drift = [];
+  for (const [key, schema] of Object.entries(envSchema.shape)) {
+    const entry = entries.get(key);
+    if (entry === undefined) continue;
+    const plain = /^[A-Za-z0-9.]+$/.test(entry.def);
+    const hasDefault = schema.def?.type === 'default';
+    if (!hasDefault && /^\d+$/.test(entry.def)) drift.push(`${key} (documented default ${entry.def}, the schema has none)`);
+    if (hasDefault && plain && typeof schema.def.defaultValue !== 'object' && String(schema.def.defaultValue) !== entry.def)
+      drift.push(`${key} (documented ${entry.def}, schema ${String(schema.def.defaultValue)})`);
+  }
+  if (drift.length > 0) {
+    console.error(`docs/handbook.html's settings reference states defaults the schema does not have: ${drift.join('; ')}.`);
+    process.exit(1);
+  }
+  // The configurator must not miss a setting either: run its .env generator over every answer and
+  // require each schema key (or its `_FILE` form) to appear in some output, active or commented.
+  const missing = missingFromGenerator(html, Object.keys(envSchema.shape));
+  if (missing.length > 0) {
+    console.error(`docs/handbook.html's .env generator (buildEnvText) can emit none of: ${missing.join(', ')}. Add each, commented out with its default if it is optional.`);
     process.exit(1);
   }
   console.log('handbook data matches the code');

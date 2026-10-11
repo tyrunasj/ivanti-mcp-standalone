@@ -4,13 +4,16 @@
 /**
  * Whether a FREE field holds what was written, allowing for how Ivanti stores it.
  *
- * A validated field is compared exactly, because its stored value is the option's own spelling and
- * this server resolved that spelling itself. A free field is stored the way Ivanti renders it, so
+ * A validated field THIS SERVER RESOLVED is compared exactly (see `confirmWrite`), because its stored
+ * value is the option's own spelling and this server chose that spelling itself. A validated field
+ * it could not resolve holds the caller's spelling, and is compared like a free field. A free field is stored the way Ivanti renders it, so
  * an exact comparison would report values that took as values that did not: a date comes back as
  * an instant in UTC, a number without the quotes it was sent in, a flag as a boolean, text with its
  * whitespace moved. Each allowance here is one of those, and none of them lets through a value that
  * did NOT take — a cleared field, the old value, a different one.
  */
+
+import { MAX_UTC_OFFSET_HOURS } from '../service-request/tenant-offset.js';
 
 export type Verdict = 'same' | 'different' | 'incomparable';
 
@@ -22,7 +25,7 @@ export type Verdict = 'same' | 'different' | 'incomparable';
 const MARKUP = /<\/?[a-z][^>]*>/i;
 
 /** The widest real UTC offsets, -12:00 to +14:00: how far a zone-less time can move in storage. */
-const ZONELESS_SLACK_MS = 14 * 60 * 60 * 1000;
+const ZONELESS_SLACK_MS = MAX_UTC_OFFSET_HOURS * 60 * 60 * 1000;
 
 const NUMERIC = /^Edm\.(Byte|SByte|Int16|Int32|Int64|Decimal|Double|Single)$/;
 const TEMPORAL = /^Edm\.(DateTimeOffset|DateTime|Date)$/;

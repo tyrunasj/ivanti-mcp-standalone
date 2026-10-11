@@ -7,6 +7,7 @@ import { connectionFixture, entityFixture, field } from '../../ivanti/connection
 import type { Logger } from '../../logger.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
 import { OPEN_ACTIONS } from '../shared/action-gate.js';
+import { IvantiApiError } from '../../ivanti/http/errors.js';
 import { createGroupCountTool } from './group-count.js';
 import { createPreviewDeleteTool } from './preview-delete.js';
 
@@ -179,6 +180,77 @@ describe('group_count', () => {
 
     // Group first: Ivanti ignores parentheses anywhere else, and reads the rest as one long `or`.
     expect(decodeURIComponent(urls[0] ?? '')).toContain("(Priority eq 1) and Status eq 'Active'");
+  });
+});
+
+describe('group_count, when a read fails', () => {
+  const refusal = (status: number, body = '') =>
+    new IvantiApiError({ status, method: 'GET', url: 'u', body });
+
+  it('does not drop the total in silence when the whole-object read fails', async () => {
+    // The 26th concurrent read is the one a full request cap refuses. A missing `total` cannot be
+    // told from "not computed", and 25 exact buckets read as the whole.
+    const { deps: d } = deps({
+      "Status%20eq%20'Active'": { value: [], '@odata.count': 1 },
+      "Status%20eq%20'Closed'": { value: [], '@odata.count': 2 },
+      incidents: refusal(503),
+    });
+
+    const result = body(
+      await createGroupCountTool(d).handler({ object: 'Incidents', groupBy: 'Status' }),
+    );
+
+    expect(result).toMatchObject({ total: null, unaccounted: null, partial: true });
+    expect(String(result.warning)).toContain('UNKNOWN');
+  });
+
+  it('reports a misspelt filter field once, by name, not as a truncated error per bucket', async () => {
+    const { deps: d } = deps({
+      incidents: refusal(400, '{"code":"ISM_4000","message":"No such entry exists"}'),
+    });
+
+    const result = await createGroupCountTool(d).handler({
+      object: 'Incidents',
+      groupBy: 'Status',
+      filter: "Statuss eq 'Active'",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("has no field named 'Statuss' (did you mean: Status?)");
+    expect(text(result)).not.toContain('"groups"');
+  });
+});
+
+describe('preview_delete, when Ivanti does not answer', () => {
+  const failing = (status: number) => ({
+    ...FORM_CHAIN,
+    PreDeleteObject: new IvantiApiError({ status, method: 'POST', url: 'u', body: 'boom' }),
+  });
+
+  it.each([502, 503, 504, 0])(
+    'does not say "no preview, proceed" over a %i — the cascade was never shown',
+    async (status) => {
+      const { deps: d } = deps({}, failing(status));
+
+      const result = await createPreviewDeleteTool(d).handler({
+        object: 'Incidents',
+        recordId: 'rec-1',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).not.toContain('previewAvailable');
+      expect(text(result)).not.toContain('proceed');
+    },
+  );
+
+  it('still answers "no working preview" for a plain 500, which is Ivanti failing to evaluate', async () => {
+    const { deps: d } = deps({}, failing(500));
+
+    const result = body(
+      await createPreviewDeleteTool(d).handler({ object: 'Incidents', recordId: 'rec-1' }),
+    );
+
+    expect(result).toMatchObject({ previewAvailable: false, wouldDelete: null });
   });
 });
 

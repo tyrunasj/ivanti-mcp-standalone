@@ -23,7 +23,6 @@ export const impersonatedSessionFixture = (
     callHandler: () => Promise.reject(new Error('unused in this fixture')),
     uploadToHandler: () => Promise.reject(new Error('unused in this fixture')),
     identity: () => Promise.resolve({ role }),
-    identityIfKnown: () => ({ role }),
     switchTo: () => Promise.reject(new Error('unused in this fixture')),
     release: () => Promise.resolve(),
     ...overrides,

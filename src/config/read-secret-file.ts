@@ -28,7 +28,17 @@ export function readSecret(
 
   if (path === undefined) return inline;
 
-  const contents = readFile(path).trim();
+  let raw: string;
+  try {
+    raw = readFile(path);
+  } catch (error) {
+    // The bare `EACCES: permission denied, open '…'` names a path, not the setting it came from.
+    throw new Error(
+      `${key}_FILE points at ${path}, which could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  const contents = raw.trim();
   if (contents === '') {
     throw new Error(`${key}_FILE points at ${path}, which is empty.`);
   }

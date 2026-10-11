@@ -126,11 +126,13 @@ writes its own iptables rules ahead of ufw and firewalld — the host firewall d
 Publish on `127.0.0.1` and put a TLS proxy in front, or publish wider only with `bearer` or `oauth`.
 `docker/compose.yaml` publishes on `127.0.0.1` unless `MCP_PUBLISH_ADDR` (compose interpolation, not
 a server setting) says otherwise, on `MCP_PORT` read from the same `.env` — run it with
-`--env-file .env`; there is no default port, so without one compose refuses to start.
+`--env-file .env`; there is no default port, so without one compose refuses to start. The image's
+`HEALTHCHECK` reads `MCP_PORT` too, and waits `HEALTHCHECK_TIMEOUT_MS` (default 4000, a number of
+milliseconds) for `/health`; like `MCP_PUBLISH_ADDR`, the server never reads it.
 
 **Metrics publish the same way.** With `METRICS_ON=true` the server must bind `METRICS_BIND=0.0.0.0`
 inside the container, which `docker/compose.yaml` sets, and the publish address decides who reaches
-`METRICS_PORT` (required with `METRICS_ON=true`; the image `EXPOSE`s 9464). Its ports line is
+`METRICS_PORT` (required with `METRICS_ON=true`; no default). Its ports line is
 commented out: `${METRICS_PUBLISH_ADDR:-127.0.0.1}:${METRICS_PORT:?…}:${METRICS_PORT:?…}` keeps it
 on the host's loopback; a Prometheus container on the same Docker network scrapes `ivanti-mcp:9464` without
 publishing at all. Publish wider only with `METRICS_TOKEN_FILE=/run/secrets/metrics-token`. The

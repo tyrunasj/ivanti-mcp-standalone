@@ -29,4 +29,14 @@ describe('readSecret', () => {
   it('rejects an empty secret file', () => {
     expect(() => readSecret({ TOKEN_FILE: '/x' }, 'TOKEN', () => '   \n')).toThrow(/is empty/);
   });
+
+  it('names the setting when the file cannot be read', () => {
+    const unreadable = (): string => {
+      throw new Error("EACCES: permission denied, open '/run/secrets/t'");
+    };
+
+    expect(() => readSecret({ TOKEN_FILE: '/run/secrets/t' }, 'TOKEN', unreadable)).toThrow(
+      /TOKEN_FILE points at \/run\/secrets\/t, which could not be read: EACCES/,
+    );
+  });
 });

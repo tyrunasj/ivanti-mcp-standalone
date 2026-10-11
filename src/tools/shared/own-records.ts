@@ -62,7 +62,7 @@ export interface ScopedRead {
 }
 
 /** The person this conversation acts for, or the reason it cannot answer. */
-function requirePerson(context: CallContext): { recId: string; displayName: string } {
+export function requirePerson(context: CallContext): { recId: string; displayName: string } {
   const person = context.pin?.person();
   if (person === undefined) throw new IdentityRequiredError();
   return { recId: person.recId, displayName: person.displayName };
@@ -173,6 +173,15 @@ export async function ownershipFields(
     [link.categoryField]: category,
     ...authorFields(person.loginId),
   };
+}
+
+/**
+ * The field of `ownershipFields` that holds the person's RecId — the one that says whose record
+ * it is. Named by its `_RecID` suffix, which customer-link discovery requires of the pair, so the
+ * caller does not depend on the order the stamp was assembled in.
+ */
+export function ownerLinkField(owner: Readonly<Record<string, string>>): string | undefined {
+  return Object.keys(owner).find((name) => /_recid$/i.test(name));
 }
 
 /**

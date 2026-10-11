@@ -138,3 +138,100 @@ describe('list_approvals — the ordering', () => {
     expect(ids(result)).toEqual(['V1']);
   });
 });
+
+describe('list_approvals — what is being approved', () => {
+  function withSubjects(rows: Record<string, unknown>[], responses: Record<string, unknown>) {
+    const { connection } = connectionFixture({
+      entities: {
+        frs_approvalvotetracking: { fields: VOTE_FIELDS.map((name) => field(name)) },
+        change: { fields: [field('RecId'), field('Subject')] },
+      },
+      responses: { frs_approvalvotetrackings: { value: rows }, ...responses },
+    });
+    const context: CallContext = { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
+    context.pin?.pin({ ...JOHN });
+    const tool = createListApprovalsTool({
+      connection,
+      gate: OPEN_GATE,
+      logger: logger(),
+      ownRecordsOnly: false,
+      actions: OPEN_ACTIONS,
+    });
+    return async (): Promise<Record<string, unknown>[]> => {
+      const result = await tool.handler({}, context);
+      const [block] = result.content;
+      const parsed = JSON.parse(block?.type === 'text' ? block.text : '{}') as {
+        approvals: Record<string, unknown>[];
+      };
+      return parsed.approvals;
+    };
+  }
+
+  const VOTE = {
+    RecId: 'V1',
+    Owner: 'jsmith',
+    Owner_Valid: 'E1',
+    Status: 'Pending',
+    PrimaryParentObject: 'Change#',
+    PrimaryParentRecId: 'C1',
+  };
+
+  it('reads the approved record’s subject, status and requester with the approver’s authority', async () => {
+    const run = withSubjects([VOTE], {
+      "changes('C1')": { RecId: 'C1', Subject: 'Upgrade DB', Status: 'Pending', ProfileFullName: 'Ann Lee' },
+    });
+
+    const [approval] = await run();
+
+    expect(approval).toMatchObject({
+      subject: 'Upgrade DB',
+      requestedBy: 'Ann Lee',
+      recordStatus: 'Pending',
+      approvalId: 'V1',
+    });
+  });
+
+  it('keeps requestedBy as an explicit null when the object has no requester field', async () => {
+    const run = withSubjects([VOTE], { "changes('C1')": { RecId: 'C1', Subject: 'Upgrade DB' } });
+
+    const [approval] = await run();
+
+    expect(approval).toHaveProperty('requestedBy', null);
+  });
+
+  it('lists the approval without a subject when the record cannot be read', async () => {
+    const run = withSubjects([VOTE], { "changes('C1')": new Error('Ivanti 500') });
+
+    const [approval] = await run();
+
+    expect(approval).toMatchObject({ approvalId: 'V1' });
+    expect(approval).not.toHaveProperty('subject');
+  });
+
+  it('skips the subject read for a vote that names no parent', async () => {
+    const run = withSubjects([{ ...VOTE, PrimaryParentObject: null }], {});
+
+    const [approval] = await run();
+
+    expect(approval).not.toHaveProperty('requestedBy');
+  });
+});
+
+describe('list_approvals — an empty queue', () => {
+  it('says so as a real zero, and that decided ones are excluded by default', async () => {
+    const { tool, context } = setup([], VOTE_FIELDS);
+
+    const result = await tool.handler({}, context);
+    const [block] = result.content;
+    const parsed = JSON.parse(block?.type === 'text' ? block.text : '{}') as { note: string };
+
+    expect(parsed.note).toContain('REAL ZERO');
+    expect(parsed.note).toContain('UNDECIDED');
+
+    const decided = await tool.handler({ includeDecided: true }, context);
+    const [again] = decided.content;
+    expect((JSON.parse(again?.type === 'text' ? again.text : '{}') as { note: string }).note).toContain(
+      'never been asked',
+    );
+  });
+});

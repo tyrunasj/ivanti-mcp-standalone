@@ -12,6 +12,7 @@ import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { buildQuery, withQuery } from '../../ivanti/odata/query.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { readRows } from '../shared/read-rows.js';
+import { tryRead } from '../shared/try-read.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
 
 /** One page is enough to see which links this tenant actually uses, and cheap. */
@@ -79,11 +80,14 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
           deps.connection.transport.routes.entitySet(entitySet),
           buildQuery({ top: SAMPLE_ROWS }),
         );
-        const sample = await deps.connection.transport
-          .request<OdataRecord>(sampleUrl)
-          .then((payload) => readRows<OdataRecord>(payload, sampleUrl))
-          .catch(() => []);
-        for (const row of sample) {
+        const sampled = await tryRead(
+          deps.connection.transport
+            .request<OdataRecord>(sampleUrl)
+            .then((payload) => readRows<OdataRecord>(payload, sampleUrl)),
+        );
+        // A sample that could not be read is not a sample of nothing: without this, every link
+        // came back "simply unset on all rows sampled" about rows nobody had read.
+        for (const row of sampled.ok ? sampled.value : []) {
           for (const link of links) {
             const value = row[link.categoryField];
             if (typeof value !== 'string' || value === '') continue;
@@ -102,6 +106,7 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
           object: entity.name,
           count: links.length,
           links: described,
+          ...(sampled.ok ? {} : { sampleFailed: true }),
           note:
             'Write both fields of a pair in the same call — a RecId without its Category is ' +
             'refused. `categoryValues` are the strings this tenant actually stores in that ' +
@@ -109,9 +114,13 @@ export function createGetLinkFieldsTool(deps: IvantiToolDeps): ToolDefinition {
             'than one, the link points at more than one kind of object — write the one that ' +
             'names the object the RecId came from. Each is an object name in the tenant’s own ' +
             'casing and may be dotted (a group object plus its extension, e.g. ' +
-            '`ServiceAgreement.SLA`) — neither half alone is a valid value. A link with no ' +
-            `\`categoryValues\` was simply unset on all ${String(SAMPLE_ROWS)} rows sampled, and ` +
-            'the values listed are only those the sample held, not every one the link accepts.',
+            '`ServiceAgreement.SLA`) — neither half alone is a valid value. ' +
+            (sampled.ok
+              ? `A link with no \`categoryValues\` was simply unset on all ${String(SAMPLE_ROWS)} rows sampled, ` +
+                'and the values listed are only those the sample held, not every one the link ' +
+                'accepts.'
+              : 'THE SAMPLE COULD NOT BE READ (`sampleFailed`), so no `categoryValues` are listed ' +
+                'and that says nothing about what the links hold — ask again.'),
         });
       }),
   });

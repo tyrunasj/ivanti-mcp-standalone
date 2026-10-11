@@ -89,12 +89,6 @@ export interface ToolSpec<Shape extends ZodRawShape> {
 }
 
 /**
- * Builds a definition whose handler is typed by its own schema.
- *
- * The generic is erased at the boundary so that a heterogeneous list of tools can be held in one
- * array — that cast lives here, once, rather than at every definition site.
- */
-/**
  * What a handler sees when nobody supplied a context.
  *
  * The server always supplies one — `registerTools` binds it per session — so this is reached only
@@ -105,6 +99,12 @@ function noContext(): CallContext {
   return { identity: ANONYMOUS, pin: createSessionPin(ANONYMOUS) };
 }
 
+/**
+ * Builds a definition whose handler is typed by its own schema.
+ *
+ * The generic is erased at the boundary so that a heterogeneous list of tools can be held in one
+ * array — that cast lives here, once, rather than at every definition site.
+ */
 export function defineTool<Shape extends ZodRawShape>(spec: ToolSpec<Shape>): ToolDefinition {
   return {
     name: spec.name,

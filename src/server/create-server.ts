@@ -46,8 +46,10 @@ export interface ServerFactory {
   toolNames: string[];
   /** URIs of the reference documents it exposes. Empty when no tenant is configured. */
   resourceUris: string[];
-  /** Which instructions this deployment sends, and what they cost per request. */
+  /** Which instructions this deployment sends to a verified caller, and what they cost per request. */
   manifest: ManifestFingerprint;
+  /** The same for the connection `context` describes: a caller without a token is sent other text. */
+  manifestFor: (context: CallContext) => ManifestFingerprint;
   /**
    * A fresh server per connection — the SDK forbids one instance holding two transports — bound
    * to the identity that connection established.
@@ -121,11 +123,16 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
             // answered at startup rather than re-derived from configuration.
             tenantHost: new URL(ivanti.metadataUrl).hostname,
             login,
-            mode: config.MCP_MODE,
-            enduserRole: config.ENDUSER_ROLE,
-            ...(config.IVANTI_IMPERSONATION_ROLE === undefined
-              ? {}
-              : { pinnedRole: config.IVANTI_IMPERSONATION_ROLE }),
+            rolePolicy:
+              config.MCP_MODE === 'enduser'
+                ? { mode: 'enduser', role: config.ENDUSER_ROLE, setting: 'ENDUSER_ROLE' }
+                : {
+                    mode: 'full',
+                    setting: 'IVANTI_IMPERSONATION_ROLE',
+                    ...(config.IVANTI_IMPERSONATION_ROLE === undefined
+                      ? {}
+                      : { pinnedRole: config.IVANTI_IMPERSONATION_ROLE }),
+                  },
             // The handshake is POSTs end to end, so it gets the write budget.
             timeoutMs: config.IVANTI_WRITE_TIMEOUT_MS,
             // The person's requests count against the same cap as everyone else's.
@@ -162,11 +169,19 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
 
   // Once, like the tools: it is a property of the deployment, not of a session.
   const manifest = fingerprintManifest(tools, instructions);
+  // The usage lines of a connection must carry the fingerprint of the text it was actually sent.
+  const manifestWithoutToken =
+    instructionsWithoutToken === instructions
+      ? manifest
+      : fingerprintManifest(tools, instructionsWithoutToken);
+  const manifestFor = (context: CallContext): ManifestFingerprint =>
+    context.identity.provenance === 'verified' ? manifest : manifestWithoutToken;
 
   return {
     toolNames: tools.map((tool) => tool.name),
     resourceUris: resources.map((resource) => resource.uri),
     manifest,
+    manifestFor,
     create: (context: CallContext): McpConnection => {
       const sent = context.identity.provenance === 'verified' ? instructions : instructionsWithoutToken;
       const server = new McpServer(
@@ -199,7 +214,7 @@ export function createServerFactory(config: Config, deps: ServerFactoryDeps): Se
         { ...context, ...(impersonation === undefined ? {} : { impersonation }) },
         deps.logger,
         config.MCP_IDENTITY_IDLE_TTL_SECONDS * 1000,
-        manifest,
+        manifestFor(context),
         config.MCP_MAX_CALLS_PER_MINUTE,
       );
       endOnInitialize(server, endConversation);

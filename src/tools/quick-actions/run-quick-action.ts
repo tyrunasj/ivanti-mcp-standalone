@@ -19,6 +19,25 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { NO_OP_ACTION_TYPE } from './list-quick-actions.js';
 import { connectionFor } from '../shared/connection-for.js';
+import { transportFor } from '../shared/transport-for.js';
+import type { OdataRecord } from '../../ivanti/odata/response.js';
+import { settleAnswers } from './answers.js';
+
+/** Best effort: the record as it stands, or undefined when it cannot be read. */
+async function snapshot(read: () => Promise<OdataRecord | undefined>): Promise<OdataRecord | undefined> {
+  try {
+    return await read();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Names only, never values: a changed field may hold anything the person wrote. */
+function changedFieldNames(before: OdataRecord, after: OdataRecord): string[] {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter((name) => JSON.stringify(before[name]) !== JSON.stringify(after[name]))
+    .sort();
+}
 
 export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -33,10 +52,9 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
       'reopening even where a Reopen action exists. Treat a closing action as irreversible — ' +
       'confirm, naming the record, first — and delete before closing anything that should not ' +
       'survive. A `SendEmail` action reaches real people and cannot be recalled.\n\n' +
-      '`saved: true` MEANS IVANTI ACCEPTED THE COMMIT, NOT THAT THE RECORD CHANGED. An action ' +
-      'whose preconditions the record does not meet commits cleanly and does nothing — a reopen ' +
-      'run against an already-resolved record reported `saved: true` and moved nothing. Read the ' +
-      'record back before telling anyone it worked.\n\n' +
+      '`saved: true` MEANS IVANTI ACCEPTED THE COMMIT, NOT THAT THE RECORD CHANGED: an action ' +
+      'whose preconditions are unmet commits cleanly and does nothing. `changedFields` names ' +
+      'what differed; without it, read the record back before saying it worked.\n\n' +
       'A `Composite` ACTION REWRITES MORE THAN ITS NAME SUGGESTS: measured, a "Reassign Owner ' +
       'Team" action also cleared the Owner and reset the Status. Compare the record against what ' +
       'you read BEFORE running.\n\n' +
@@ -127,7 +145,9 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
         const probe = await executeAction({ ...shared, shouldSave: false });
 
         const prompts: ActionPrompt[] = probe.promptParams ?? [];
-        const answers = args.answers ?? {};
+        const settled = settleAnswers(prompts, args.answers ?? {});
+        if (!settled.ok) return errorResult(settled.message);
+        const answers = settled.answers;
         const unanswered = prompts.filter(
           (prompt) =>
             prompt.Required === true &&
@@ -149,6 +169,11 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
           return answer === undefined ? prompt : { ...prompt, Value: answer };
         });
 
+        const transport = transportFor(deps.connection.transport, context);
+        const recordUrl = transport.routes.record(resolved.entitySet, args.recordId);
+        const readRecord = (): Promise<OdataRecord | undefined> => transport.request<OdataRecord>(recordUrl);
+        const before = await snapshot(readRecord);
+
         const result = await executeAction({
           ...shared,
           shouldSave: true,
@@ -164,6 +189,10 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
           );
         }
 
+        const after = before === undefined ? undefined : await snapshot(readRecord);
+        const changedFields =
+          before === undefined || after === undefined ? [] : changedFieldNames(before, after);
+
         deps.logger.info('ivanti quick action run', { object: objectId, action: action.name });
 
         return jsonResult({
@@ -171,6 +200,7 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
           action: action.name,
           ran: true,
           ...(result.saved === undefined ? {} : { saved: result.saved }),
+          ...(changedFields.length === 0 ? {} : { changedFields }),
           // Ivanti hands back a bare `{ <RecId>: <RecId> }` map with no object names in it, so
           // on its own it says only "something was created" — a tester could not tell whether
           // the action had made a task, a journal entry or a child ticket.

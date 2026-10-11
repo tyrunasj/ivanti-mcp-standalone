@@ -14,6 +14,25 @@ export default tseslint.config(
       '@typescript-eslint/explicit-function-return-type': ['error', { allowExpressions: false }],
     },
   },
+  // `ivanti/` knows nothing about MCP: dependencies point down, so it may not reach up into the
+  // layers that compose it. What it must tell them it says through `http/request-observer.ts`.
+  {
+    files: ['src/ivanti/**/*.ts'],
+    ignores: ['**/*.test.ts', '**/*.fixture.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^(\\.\\./)+(config|usage|metrics|tools|server|auth)/',
+              message: 'ivanti/ must not import upward; see http/request-observer.ts.',
+            },
+          ],
+        },
+      ],
+    },
+  },
   {
     files: ['**/*.test.ts'],
     rules: { '@typescript-eslint/explicit-function-return-type': 'off' },

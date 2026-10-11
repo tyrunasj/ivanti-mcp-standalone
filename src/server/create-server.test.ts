@@ -123,6 +123,29 @@ describe('the instructions a connection is sent', () => {
   });
 });
 
+describe('the manifest fingerprint a connection is stamped with', () => {
+  // The usage lines of a tokenless stdio conversation under oauth were stamped with the verified
+  // path's text, so two different instructions shared one fingerprint.
+  it('follows the instructions the connection was actually sent', () => {
+    const { connection } = connectionFixture();
+    const factory = createServerFactory(
+      { ...config, AUTH_MODE: 'oauth', HTTP_TRANSPORT_ON: true },
+      { logger: logger(), ivanti: connection },
+    );
+    const verified = { identity: { provenance: 'verified' as const, subject: 'alice@example.com' } };
+
+    expect(factory.manifestFor(verified)).toEqual(factory.manifest);
+    expect(factory.manifestFor({ identity: ANONYMOUS }).manifest).not.toBe(factory.manifest.manifest);
+  });
+
+  it('is one fingerprint where both paths send the same text', () => {
+    const { connection } = connectionFixture();
+    const factory = createServerFactory(config, { logger: logger(), ivanti: connection });
+
+    expect(factory.manifestFor({ identity: ANONYMOUS })).toEqual(factory.manifest);
+  });
+});
+
 describe('the impersonated session\'s lifetime', () => {
   /** A connection whose ConfigDB answers, so the factory builds an opener. */
   const impersonating = (release: () => Promise<void>) => {

@@ -4,6 +4,45 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
+## 0.3.4 — 2026-10-11
+
+**Upgrading.** A full code review ([`docs/review/2026-10-11-full-review.md`](docs/review/2026-10-11-full-review.md))
+is fixed in this release. Several settings an axis never reads are now refused at start-up instead
+of ignored, so check these before moving:
+
+- `BEARER_TOKEN` (or `_FILE`) outside `AUTH_MODE=bearer`, and any `OAUTH_*` outside `oauth`;
+- `IVANTI_MAX_TIER` with no tenant, and `IVANTI_IMPERSONATION_ROLE` without the ConfigDB pair;
+- a refused API key at start-up now exits 78 (it was 1), and a `$metadata` outage at start-up
+  reports itself as one.
+
+The Helm chart gains `server.identityIdleTtlSeconds` and `oauth.requireTyp`; `oauth.audience` takes
+a string or a list. It now refuses values that rendered a pod which then exited 78 (for example
+`ivanti.impersonationRequired` without `configUrl`).
+
+- **Subtypes get their forms.** One object-id conversion replaces two that disagreed, so
+  validated fields, pick lists, link fields and quick-action forms work for `Task#Assignment`,
+  `CI#Computer` and every other subtype.
+- **Writes say what they know.** A read-back that fails after an accepted write answers "the write
+  was accepted; read the record, do not repeat it", never "nothing was changed". An enduser create
+  reports `filedFor` only when the stored link confirms it. `link_records` and `unlink_records`
+  read the related rows back; `run_quick_action` refuses answers that match no prompt and reports
+  the fields that changed. A garbled base64 argument is refused instead of uploading a truncated file.
+- **Reads say what they know.** A `$metadata` outage is "could not be read, try again", not
+  "no such object", and is not remembered. A failed customer-link sample is not remembered. One
+  pre-flight filter check, one compact default and one empty-result caveat serve every read tool.
+- **OAuth.** An ID token no longer verifies as an access token; `OAUTH_REQUIRE_TYP=true` also
+  demands `typ: at+jwt`. The 401 challenge keeps the metadata URL and scope list whole.
+- **HTTP limits.** An initialize body over 64 KiB gets 413; the bodies buffered at once are
+  capped, answering 503 with `Retry-After` beyond it; quadratic regexes on filter text are linear.
+- **Configurator and handbook.** The settings reference lists every setting the server reads
+  (`MCP_PUBLISH_ADDR`, `METRICS_PUBLISH_ADDR`, `HEALTHCHECK_TIMEOUT_MS` and `OAUTH_REQUIRE_TYP`
+  were missing), the configurator takes each port from one place and writes every optional
+  setting as a commented line with its default, and `pnpm handbook:check` fails when either drifts
+  from the schema.
+- **Internals.** `register-tools.ts` is split by reason to change, `runTool` maps failures through
+  one table, `ivanti/` no longer imports upward, dead exports are gone, and the dev-only
+  `source-map-js` advisory is overridden.
+
 ## 0.3.3 — 2026-10-09
 
 **Upgrading.** `MCP_PORT` no longer defaults to 3000, nor `METRICS_PORT` to 9464. A deployment

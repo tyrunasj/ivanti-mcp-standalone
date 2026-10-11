@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
-import type { McpMode } from '../../config/env-schema.js';
-
 /**
  * Which of a person's Ivanti roles an impersonated session opens under.
  *
@@ -176,15 +174,27 @@ export function flagsKnown(roles: readonly IvantiRole[]): boolean {
   return roles.some((role) => role.selfService !== undefined);
 }
 
+/**
+ * How the deployment wants the role chosen, decided by whoever configures it and handed in as
+ * data: this module knows nothing of MCP modes or of what the settings are called. `setting`
+ * names the one that decides the role, for the messages that send an operator to it.
+ */
+export type RolePolicy =
+  | { mode: 'enduser'; role: string; setting: string }
+  | { mode: 'full'; pinnedRole?: string; setting: string };
+
 export interface RoleChoiceOptions {
-  mode: McpMode;
-  /** `ENDUSER_ROLE` — the self-service role an end-user session should open under. */
-  enduserRole: string;
-  /** `IVANTI_IMPERSONATION_ROLE` — pins the role in `full` mode. */
-  pinnedRole?: string;
+  policy: RolePolicy;
   /** What `InitializeSession` reported, which may be empty. */
   activeRole: string;
 }
+
+/**
+ * Why this role: `configured` was named by the deployment, `flag` by Ivanti's own self-service
+ * flag, `active` is whatever Ivanti made active, `order` is the first entry of an unflagged list
+ * (a guess), `only` is all the person holds.
+ */
+export type RoleBasis = 'configured' | 'active' | 'flag' | 'order' | 'only';
 
 export type RoleChoice =
   | {
@@ -195,6 +205,7 @@ export type RoleChoice =
       mustSelect: boolean;
       /** Said in a log line and in the tool response. Empty when nothing surprising happened. */
       note?: string;
+      basis: RoleBasis;
     }
   | { ok: false; refusal: string };
 
@@ -207,10 +218,11 @@ const named = (roles: IvantiRole[], name: string): IvantiRole | undefined =>
  * Pure, because it is the part worth testing exhaustively: the I/O around it is three POSTs.
  */
 export function chooseRole(roles: IvantiRole[], options: RoleChoiceOptions): RoleChoice {
-  const { mode, enduserRole, pinnedRole, activeRole } = options;
-  const decide = (role: string, note?: string): RoleChoice => ({
+  const { policy, activeRole } = options;
+  const decide = (role: string, basis: RoleBasis, note?: string): RoleChoice => ({
     ok: true,
     role,
+    basis,
     mustSelect: role.toLowerCase() !== activeRole.toLowerCase(),
     ...(note === undefined ? {} : { note }),
   });
@@ -224,15 +236,17 @@ export function chooseRole(roles: IvantiRole[], options: RoleChoiceOptions): Rol
     };
   }
 
-  if (mode === 'enduser') {
+  if (policy.mode === 'enduser') {
+    const enduserRole = policy.role;
     const configured = named(roles, enduserRole);
-    if (configured !== undefined) return decide(configured.name);
+    if (configured !== undefined) return decide(configured.name, 'configured');
 
     // Ivanti's own flag, never a guess from the name. Unknown is not self-service.
     const anySelfService = roles.find((role) => role.selfService === true);
     if (anySelfService !== undefined) {
       return decide(
         anySelfService.name,
+        'flag',
         `${enduserRole} is not held by this person; using their self-service role ` +
           `${anySelfService.name} instead.`,
       );
@@ -251,12 +265,14 @@ export function chooseRole(roles: IvantiRole[], options: RoleChoiceOptions): Rol
     // enduser deployment running an agent role is something an operator must be able to see.
     return decide(
       activeRole,
+      'active',
       `This person holds no self-service role (${enduserRole} is not among theirs), so the ` +
         `session keeps the role Ivanti made active: ${activeRole}.`,
     );
   }
 
   // full mode.
+  const pinnedRole = policy.pinnedRole;
   if (pinnedRole !== undefined) {
     const pinned = named(roles, pinnedRole);
     if (pinned === undefined) {
@@ -265,21 +281,22 @@ export function chooseRole(roles: IvantiRole[], options: RoleChoiceOptions): Rol
       return {
         ok: false,
         refusal:
-          `IVANTI_IMPERSONATION_ROLE is ${pinnedRole}, which this person does not hold. ` +
+          `${policy.setting} is ${pinnedRole}, which this person does not hold. ` +
           `They hold: ${roles.map((role) => role.name).join(', ') || 'no roles Ivanti will report'}.`,
       };
     }
-    return decide(pinned.name);
+    return decide(pinned.name, 'configured');
   }
 
   // Whatever Ivanti made active is the most faithful reading of "act as them", as long as it is
   // not the self-service portal — a `full` deployment is IT staff doing IT work.
-  if (activeRole !== '' && named(roles, activeRole)?.selfService !== true) return decide(activeRole);
+  if (activeRole !== '' && named(roles, activeRole)?.selfService !== true) return decide(activeRole, 'active');
 
   const working = roles.find((role) => role.selfService !== true);
   if (working !== undefined) {
     return decide(
       working.name,
+      working.selfService === false ? 'flag' : 'order',
       activeRole === ''
         ? `Ivanti opened the session with no role; using ${working.name}.`
         : `The active role ${activeRole} is a self-service role; using ${working.name}.`,
@@ -298,6 +315,7 @@ export function chooseRole(roles: IvantiRole[], options: RoleChoiceOptions): Rol
   // They only have self-service roles. That is a real answer about this person, not a failure.
   return decide(
     activeRole,
+    'only',
     `This person holds only self-service roles, so the session runs as ${activeRole}.`,
   );
 }

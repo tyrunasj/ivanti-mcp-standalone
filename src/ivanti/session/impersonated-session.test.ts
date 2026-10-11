@@ -7,7 +7,7 @@ import { IvantiApiError } from '../http/errors.js';
 import { createIvantiRoutes } from '../odata/url.js';
 import type { CentralConfig } from './central-config.js';
 import { openImpersonatedSession } from './impersonated-session.js';
-import { RoleNotAppliedError } from './roles.js';
+import { RoleNotAppliedError, type RolePolicy } from './roles.js';
 
 const TENANT = 'tenant.example.com';
 const SID = `${TENANT}#SESSION123#1`;
@@ -38,6 +38,8 @@ function server(answers: Record<string, unknown>) {
   return { fetchImpl, calls };
 }
 
+const FULL: RolePolicy = { mode: 'full', setting: 'IVANTI_IMPERSONATION_ROLE' };
+
 const open = (
   answers: Record<string, unknown>,
   overrides: Partial<Parameters<typeof openImpersonatedSession>[0]> = {},
@@ -48,8 +50,7 @@ const open = (
     routes,
     tenantHost: TENANT,
     login: 'HSanders',
-    mode: 'full',
-    enduserRole: 'SelfServiceMobile',
+    rolePolicy: FULL,
     logger: logger(),
     fetchImpl,
     ...overrides,
@@ -117,7 +118,7 @@ describe('openImpersonatedSession', () => {
         GetUserData: USER_DATA,
         SelectRole: { ActiveRole: 'SelfServiceMobile' },
       },
-      { mode: 'enduser' },
+      { rolePolicy: { mode: 'enduser', role: 'SelfServiceMobile', setting: 'ENDUSER_ROLE' } },
     );
 
     const session = await promise;
@@ -183,8 +184,7 @@ describe('openImpersonatedSession', () => {
       routes,
       tenantHost: TENANT,
       login: 'HSanders',
-      mode: 'full',
-      enduserRole: 'SelfServiceMobile',
+      rolePolicy: FULL,
       logger: logger(),
       fetchImpl: () => Promise.reject(new Error('ECONNRESET')),
     });
@@ -203,8 +203,7 @@ describe('openImpersonatedSession', () => {
       routes,
       tenantHost: TENANT,
       login: 'HSanders',
-      mode: 'full',
-      enduserRole: 'SelfServiceMobile',
+      rolePolicy: FULL,
       logger: logger(),
       fetchImpl: () => Promise.resolve(new Response(`<html>${SID}</html>`, { status: 200 })),
     });
@@ -219,7 +218,7 @@ describe('openImpersonatedSession', () => {
   it('refuses a pinned role the person does not hold', async () => {
     const { promise } = open(
       { InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED },
-      { pinnedRole: 'Admin' },
+      { rolePolicy: { mode: 'full', pinnedRole: 'Admin', setting: 'IVANTI_IMPERSONATION_ROLE' } },
     );
 
     await expect(promise).rejects.toThrow(/IVANTI_IMPERSONATION_ROLE/);
@@ -291,6 +290,29 @@ describe('openImpersonatedSession', () => {
     expect(session.note).toContain('Ivanti applied SelfServiceMobile rather than ServiceDeskAnalyst');
   });
 
+  // GetUserData never answers here, so the flags are unobtainable and the role Ivanti made
+  // active is kept unchecked: that is a guess about this person, not a configured decision.
+  it('warns when the kept active role was never checked against flags Ivanti will not give', async () => {
+    const warn = vi.fn();
+    const { promise } = open(
+      {
+        InitializeSession: { SessionCsrfToken: 'CSRF', ActiveRole: 'SelfService' },
+        GetRolesForUser: { status: 'Success', roleList: [{ Name: 'SelfService' }, { Name: 'Admin' }] },
+        SelectRole: { ActiveRole: 'SelfService' },
+      },
+      { logger: { ...logger(), warn } },
+    );
+
+    const session = await promise;
+
+    expect(session.note).toContain('IVANTI_IMPERSONATION_ROLE');
+    expect(session.note).toContain('SelfService active');
+    expect(warn).toHaveBeenCalledWith(
+      'role chosen without Ivanti reporting which are self-service',
+      expect.anything(),
+    );
+  });
+
   it('says nothing when Ivanti applies the role it was asked for', async () => {
     const { promise } = open({ InitializeSession: INITIALIZED, GetUserData: USER_DATA, SelectRole: SELECTED });
 
@@ -354,8 +376,7 @@ describe('choosing a role when Ivanti reports no flags', () => {
       routes,
       tenantHost: TENANT,
       login: 'HSanders',
-      mode: 'full',
-      enduserRole: 'SelfServiceMobile',
+      rolePolicy: FULL,
       logger: logger(),
       fetchImpl,
     });

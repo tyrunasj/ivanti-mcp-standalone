@@ -4,9 +4,8 @@
 import type { IvantiConnection } from '../../ivanti/connect.js';
 import type { IvantiToolDeps } from './deps.js';
 import { transportFor } from './transport-for.js';
-import { createFormContext } from '../../ivanti/session/form-context.js';
+import { sessionView } from '../../ivanti/session/session-view.js';
 import type { ImpersonatedSession } from '../../ivanti/session/impersonated-session.js';
-import { createWorkspaceCatalog } from '../../ivanti/session/workspaces.js';
 import type { CallContext } from '../tool-definition.js';
 
 /**
@@ -56,14 +55,10 @@ export function connectionFor(deps: IvantiToolDeps, context: CallContext): Ivant
 
   // Built the way `connectIvanti` builds them, on the person's session instead. Each caches for
   // the life of the session, exactly as the service account's cache for the life of the process.
-  const logger = deps.logger;
-  const workspaces = createWorkspaceCatalog(session, logger);
   const scoped: IvantiConnection = {
     ...base,
     transport: transportFor(base.transport, context),
-    session,
-    workspaces,
-    forms: createFormContext(session, workspaces, logger),
+    ...sessionView(session, deps.logger),
   };
   perSession.set(session, { role: session.role, connection: scoped });
   return scoped;

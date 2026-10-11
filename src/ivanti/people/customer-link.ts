@@ -36,15 +36,6 @@ export interface CustomerLink {
    * use the tenant's own spelling. Reading it off real rows avoids guessing at the casing.
    */
   readonly categoriesSeen: readonly string[];
-  /** More than one link field points at people, and the runner-up was not empty. */
-  readonly ambiguous: boolean;
-  /**
-   * Whether the sample this was derived from FAILED, as opposed to coming back empty.
-   *
-   * The two are the same shape — no rows — and lead to the same fallback, but only one of them is
-   * a fact about the tenant. `forEntity` refuses to remember the other.
-   */
-  readonly sampleFailed?: boolean;
 }
 
 export interface CustomerLinks {
@@ -111,12 +102,18 @@ export function createCustomerLinks(deps: CustomerLinksDeps): CustomerLinks {
   const { transport, personObjects, logger } = deps;
   const cache = new Map<string, Promise<CustomerLink | undefined>>();
 
+  /**
+   * `sampleFailed` is whether the sample FAILED, as opposed to coming back empty: the two are the
+   * same shape (no rows) and lead to the same fallback, but only an empty table is a fact about
+   * the tenant. It rides beside the link, whatever the link turned out to be, so that `forEntity`
+   * can refuse to remember an answer derived from a failed read.
+   */
   const discover = async (
     entity: EntityMetadata,
     entitySet: string,
-  ): Promise<CustomerLink | undefined> => {
+  ): Promise<{ link: CustomerLink | undefined; sampleFailed: boolean }> => {
     const candidates = candidatesOf(entity);
-    if (candidates.length === 0) return undefined;
+    if (candidates.length === 0) return { link: undefined, sampleFailed: false };
 
     // Set by the `.catch` below, and read by `forEntity` to decide whether the answer is worth
     // remembering.
@@ -133,7 +130,7 @@ export function createCustomerLinks(deps: CustomerLinksDeps): CustomerLinks {
       // it gets CACHED for the process lifetime — see `forEntity`. Warn, not debug: the default
       // LOG_LEVEL is `info`, so the old line was invisible in every stock deployment.
       .catch((error: unknown) => {
-        logger.warn('customer link sampling failed; falling back to the name ladder', {
+        logger.warn('customer link sampling failed; trying the name ladder', {
           entity: entity.name,
           error: error instanceof Error ? error.message : 'unknown error',
         });
@@ -155,13 +152,14 @@ export function createCustomerLinks(deps: CustomerLinksDeps): CustomerLinks {
 
     const best = scored[0];
     if (best !== undefined) {
-      const runnerUp = scored[1];
       return {
-        recIdField: best.candidate.recIdField,
-        categoryField: best.candidate.categoryField,
-        foundBy: 'data',
-        ambiguous: runnerUp !== undefined && runnerUp.hits === best.hits,
-        categoriesSeen: best.categoriesSeen,
+        sampleFailed,
+        link: {
+          recIdField: best.candidate.recIdField,
+          categoryField: best.candidate.categoryField,
+          foundBy: 'data',
+          categoriesSeen: best.categoriesSeen,
+        },
       };
     }
 
@@ -170,15 +168,16 @@ export function createCustomerLinks(deps: CustomerLinksDeps): CustomerLinks {
       .filter((candidate) => PREFERRED.includes(candidate.prefix))
       .sort((a, b) => rank(a.prefix) - rank(b.prefix))[0];
 
-    if (named === undefined) return undefined;
+    if (named === undefined) return { link: undefined, sampleFailed };
 
     return {
-      recIdField: named.recIdField,
-      categoryField: named.categoryField,
-      foundBy: 'name',
-      ambiguous: false,
-      categoriesSeen: [],
-      ...(sampleFailed ? { sampleFailed: true } : {}),
+      sampleFailed,
+      link: {
+        recIdField: named.recIdField,
+        categoryField: named.categoryField,
+        foundBy: 'name',
+        categoriesSeen: [],
+      },
     };
   };
 
@@ -189,12 +188,13 @@ export function createCustomerLinks(deps: CustomerLinksDeps): CustomerLinks {
       if (cached !== undefined) return cached;
 
       // Cached before it settles, so concurrent callers share one discovery — but dropped again
-      // if the discovery either threw or had to guess because its SAMPLE failed. A link chosen
-      // from the name ladder because Ivanti had a bad second is not a fact about the tenant, and
-      // remembering it for the life of the process makes one transient error permanent.
+      // if the discovery either threw or had to guess because its SAMPLE failed — whatever it
+      // guessed, including "no link" for a prefix off the name ladder. An answer derived from a
+      // bad second is not a fact about the tenant, and remembering it for the life of the
+      // process makes one transient error permanent.
       const found = discover(entity, entitySet).then(
-        (link) => {
-          if (link?.foundBy === 'name' && link.sampleFailed === true) cache.delete(key);
+        ({ link, sampleFailed }) => {
+          if (sampleFailed) cache.delete(key);
           return link;
         },
         (error: unknown) => {

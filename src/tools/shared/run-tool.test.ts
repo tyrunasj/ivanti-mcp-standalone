@@ -6,6 +6,7 @@ import type { Logger, LogLevel } from '../../logger.js';
 import { IvantiApiError, ResponseTooLargeError } from '../../ivanti/http/errors.js';
 import { type CallUsage, withCallUsage } from '../../usage/call-usage.js';
 import { IvantiBusyError } from '../../ivanti/http/request-limiter.js';
+import { WriteUnconfirmedError } from '../../ivanti/write/validated-write.js';
 import { runTool } from './run-tool.js';
 
 interface Line {
@@ -36,6 +37,22 @@ const failWith = (status: number): IvantiApiError =>
   });
 
 describe('runTool', () => {
+  it('does not call a read-back the limiter refused "nothing changed": the write was accepted', async () => {
+    const { logger } = recorder();
+    const cause = new IvantiBusyError(16, 30_000);
+
+    const result = await runTool('create_record', logger, () =>
+      Promise.reject(new WriteUnconfirmedError('incidents', 'abc', cause)),
+    );
+    const message = JSON.stringify(result.content);
+
+    expect(result.isError).toBe(true);
+    expect(message).toContain('do not repeat the write');
+    expect(message).toContain("incidents('abc')");
+    expect(message).not.toContain('Nothing was changed');
+    expect(message).not.toContain('Trying once more is safe');
+  });
+
   // Never sent: reporting it as "may have been applied" would send someone checking a record for
   // a change that cannot have happened.
   it('says a request held back by the cap was never sent, and nothing changed', async () => {

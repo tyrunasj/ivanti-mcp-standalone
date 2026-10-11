@@ -4,12 +4,12 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Config } from '../config/env-schema.js';
 import type { Logger } from '../logger.js';
-import type { ToolContext } from '../tools/register-tools.js';
+import type { ToolContext } from '../tools/select-tools.js';
 import { ENTITY_NAMING } from './entity-naming.js';
 import { FIELD_NAMES } from './field-names.js';
 import { PICKLISTS } from './picklists.js';
 import { QUERIES } from './queries.js';
-import { WORKFLOW } from './workflow.js';
+import { workflowFor } from './workflow.js';
 import { WRITE_RECIPES } from './write-recipes.js';
 
 /**
@@ -75,7 +75,7 @@ export function selectResources(config: Config, context: ToolContext): ResourceD
     reference(
       'write-recipes',
       'Writing to Ivanti',
-      'Child records under a parent, notes as Journals, required fields the schema does not flag, and the conditional incident lifecycle.',
+      'Child records under a parent, where a note goes (add_note), required fields the schema does not flag, and the conditional incident lifecycle.',
       WRITE_RECIPES,
     ),
   ];
@@ -99,7 +99,7 @@ export function selectResources(config: Config, context: ToolContext): ResourceD
         'workflow',
         'Running the tenant’s procedures',
         'Quick actions over raw writes, approvals as votes, the unlink that damages a third record, and why an attachment is not linked.',
-        WORKFLOW,
+        workflowFor(context.ivanti.capability.canImpersonate === true),
       ),
     );
   }

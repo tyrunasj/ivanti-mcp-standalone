@@ -21,6 +21,8 @@ const transport = (fetchImpl: FetchLike) =>
     apiKey: 'super-secret-key',
     logger: logger(),
     fetchImpl,
+    timeoutMs: 10_000,
+    writeTimeoutMs: 30_000,
   });
 
 describe('createTransport', () => {
@@ -79,6 +81,17 @@ describe('createTransport', () => {
     const t = transport(() => Promise.resolve(reply(200, '<html>Sign in</html>')));
 
     await expect(t.request('https://t/x')).rejects.toThrow(/not JSON/);
+  });
+
+  it('names the status it got, and warns that a write may have landed', async () => {
+    const created = transport(() => Promise.resolve(reply(201, '<html>proxy</html>')));
+
+    await expect(created.request('https://t/x', { method: 'POST', body: {} })).rejects.toMatchObject({
+      status: 201,
+      message: expect.stringMatching(/answered 201 .*not JSON.*may still have been applied/) as string,
+    });
+    await expect(transport(() => Promise.resolve(reply(200, '<html/>'))).request('https://t/x')).rejects
+      .toThrow(/answered 200 with a body that is not JSON$/);
   });
 
   it('serialises a body and sets Content-Type only when there is one', async () => {
@@ -295,9 +308,10 @@ describe('how long a write may take', () => {
       logger: logger(),
       fetchImpl,
       timeoutMs: 10,
+      writeTimeoutMs: 1_000,
     });
 
-  it('waits longer for a write than for a read, even when only the read timeout is set', async () => {
+  it('waits longer for a write than for a read, when the read timeout is short', async () => {
     const t = quick(slow(60));
 
     await expect(t.request('https://t/x', { method: 'POST', body: {} })).resolves.toEqual({

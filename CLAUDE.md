@@ -64,8 +64,8 @@ One line each; the reasoning is in [`docs/architecture.md`](docs/architecture.md
 - **The form's required and read-only rules are conditional** — report them, never refuse on them.
 - **Annotate every tool explicitly.** Unannotated means destructive and open-world; additive
   writes need `destructiveHint: false`; tools returning ticket text keep `openWorldHint: true`.
-- **New config keys fail closed** in `validateConfig`; settings naming tenant things are also
-  checked against the tenant at startup.
+- **New config keys fail closed** in `validateConfig`, and a setting its axis never reads is
+  refused, not ignored. `ENDUSER_BUSINESS_OBJECTS` is also checked against the tenant at startup.
 - **`MCP_PUBLIC_URL` is required and never derived from the request**, and Origin validation
   applies to every HTTP mode.
 - **The API key and session internals are scrubbed from every Ivanti error body**; only `debug`

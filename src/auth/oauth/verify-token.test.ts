@@ -19,6 +19,7 @@ import {
   createTokenVerifier,
   extractScopes,
   looksLikeJwt,
+  type TokenVerifier,
 } from './verify-token.js';
 
 const ISSUER = 'https://id.example.com';
@@ -39,15 +40,19 @@ interface TokenOverrides {
   signWith?: CryptoKey;
   /** RFC 9068 makes `exp` REQUIRED; a server that omits it is what this guards against. */
   noExpiry?: boolean;
+  /** The JOSE `typ` header; absent by default, as most IdPs' access tokens are typed or not. */
+  typ?: string;
+  /** Extra payload claims, for the markers of an OIDC ID token. */
+  claims?: Record<string, unknown>;
 }
 
 const issueToken = async (overrides: TokenOverrides = {}): Promise<string> => {
-  const claims: Record<string, unknown> = {};
+  const claims: Record<string, unknown> = { ...overrides.claims };
   if (overrides.scope !== undefined) claims.scope = overrides.scope;
   if (overrides.scp !== undefined) claims.scp = overrides.scp;
 
   let jwt = new SignJWT(claims)
-    .setProtectedHeader({ alg: 'RS256' })
+    .setProtectedHeader({ alg: 'RS256', ...(overrides.typ === undefined ? {} : { typ: overrides.typ }) })
     .setIssuedAt()
     .setIssuer(overrides.issuer ?? ISSUER)
     .setAudience(overrides.audience ?? AUDIENCE);
@@ -89,6 +94,48 @@ describe('extractScopes', () => {
 
   it('returns nothing when neither claim is present', () => {
     expect(extractScopes({})).toEqual([]);
+  });
+});
+
+describe('createTokenVerifier: an ID token is not an access token', () => {
+  // Zitadel per the docs: OAUTH_AUDIENCE is the client id, which is also an ID token's `aud`.
+  it.each([
+    ['typ ID', { typ: 'ID' }],
+    ['typ id_token', { typ: 'id_token' }],
+    ['a nonce', { claims: { nonce: 'n-0S6' } }],
+    ['an at_hash', { claims: { at_hash: 'abc' } }],
+    ['a c_hash', { claims: { c_hash: 'abc' } }],
+    ['token_use id', { claims: { token_use: 'id' } }],
+  ] satisfies [string, TokenOverrides][])('rejects a token with %s', async (_name, overrides) => {
+    const result = await verifier()(await issueToken(overrides));
+
+    expect(result).toMatchObject({ ok: false, status: 401, error: 'invalid_token' });
+  });
+
+  it('still accepts an access token typed at+jwt or untyped', async () => {
+    expect((await verifier()(await issueToken({ typ: 'at+jwt' }))).ok).toBe(true);
+    expect((await verifier()(await issueToken())).ok).toBe(true);
+  });
+
+  describe('with the typ header required', () => {
+    // Built per call: the key resolver exists only once `beforeAll` has run.
+    const strict: TokenVerifier = (token) =>
+      createTokenVerifier({
+        issuer: ISSUER,
+        audience: [AUDIENCE],
+        keyResolver,
+        requireAccessTokenTyp: true,
+      })(token);
+
+    it('rejects typ JWT and a missing typ', async () => {
+      expect(await strict(await issueToken({ typ: 'JWT' }))).toMatchObject({ ok: false, status: 401 });
+      expect(await strict(await issueToken())).toMatchObject({ ok: false, status: 401 });
+    });
+
+    it('accepts at+jwt and application/at+jwt', async () => {
+      expect((await strict(await issueToken({ typ: 'at+jwt' }))).ok).toBe(true);
+      expect((await strict(await issueToken({ typ: 'application/at+jwt' }))).ok).toBe(true);
+    });
   });
 });
 

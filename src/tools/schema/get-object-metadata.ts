@@ -12,6 +12,7 @@ import { knownObjectNames } from '../shared/object-names.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type CallContext, type ToolDefinition } from '../tool-definition.js';
 import { OBJECT_ARGUMENT_IN_FULL } from '../shared/object-argument.js';
+import { isPersonRefused } from '../shared/try-read.js';
 import { FIELDS_FORMAT, fieldRows, renderRows, rowMatches } from './field-table.js';
 
 /**
@@ -28,6 +29,8 @@ import { FIELDS_FORMAT, fieldRows, renderRows, rowMatches } from './field-table.
  * them because a label lookup failed would be a far worse trade.
  */
 interface FormFacts {
+  /** The form could not be read, as opposed to there being no form to read. */
+  unreadable?: true;
   labels: Record<string, string>;
   /** Fields a required rule governs — which is not the same as fields required now. */
   sometimesRequired: ReadonlySet<string>;
@@ -52,8 +55,11 @@ async function formFacts(
       readOnly: new Set(form.readOnlyFields),
     };
   } catch (error) {
-    deps.logger.debug('no form for this object', { object: entityName, error });
-    return NO_FORM;
+    // The person's own session lapsing is not "no form": it ends the call, so the session is
+    // renewed, rather than reporting the role as having no labels.
+    if (isPersonRefused(error)) throw error;
+    deps.logger.debug('form unreadable for this object', { object: entityName, error });
+    return { ...NO_FORM, unreadable: true };
   }
 }
 
@@ -133,7 +139,10 @@ export function createGetObjectMetadataTool(deps: IvantiToolDeps): ToolDefinitio
          */
         const labelled = allRows.filter((row) => row.label !== undefined).length;
         const labelsNote = registersFormTools(deps)
-          ? labelled === 0
+          ? form.unreadable === true
+            ? 'The form could not be read just now, so labels are missing for that reason and not ' +
+              'because the fields have none — ask again before reporting technical names.'
+            : labelled === 0
             ? 'No field on this object carries a label this role can see, so its technical names ' +
               'are the only names it has here.'
             : undefined

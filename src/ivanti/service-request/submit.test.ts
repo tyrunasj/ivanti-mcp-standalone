@@ -339,7 +339,6 @@ describe('submitWithAttachments', () => {
       callHandler: () => Promise.reject(new Error('unused')),
       uploadToHandler: () => Promise.reject(new Error('unused')),
       identity: () => Promise.resolve({ role: 'Admin', displayName: 'Service Account' }),
-      identityIfKnown: () => undefined,
     };
     return { session, calls };
   }

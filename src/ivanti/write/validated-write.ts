@@ -3,13 +3,15 @@
 
 import type { Logger } from '../../logger.js';
 import type { EntityMetadata } from '../metadata/csdl.js';
-import { toCsdlEntity } from '../metadata/entity-names.js';
+import { toObjectId } from '../metadata/entity-names.js';
 import { buildQuery, withQuery } from '../odata/query.js';
 import type { OdataRecord } from '../odata/response.js';
 import { constrainedBy, type ResolvedForm } from '../session/form-context.js';
 import { readPickLists } from '../session/pick-lists.js';
 import type { IvantiConnection } from '../connect.js';
 import type { IvantiTransport } from '../http/transport.js';
+import { IvantiApiError } from '../http/errors.js';
+import { IvantiBusyError } from '../http/request-limiter.js';
 import { comparable, compareStored } from './compare-stored.js';
 
 /**
@@ -171,6 +173,35 @@ export class WriteNotStoredError extends Error {
   }
 }
 
+/**
+ * The write was sent and accepted, and reading the record back then failed — a timeout, a gateway
+ * error, a refusal, or this server's own request cap. Whether every value took is unknown, which is
+ * not the same as "nothing happened": the record exists, and repeating the write duplicates it.
+ *
+ * Carries status and code only, never an echoed body: Ivanti repeats what was submitted.
+ */
+export class WriteUnconfirmedError extends Error {
+  constructor(
+    readonly entitySet: string,
+    readonly recId: string,
+    override readonly cause: unknown,
+  ) {
+    const why =
+      cause instanceof IvantiApiError
+        ? `status ${String(cause.status)}${cause.code === undefined ? '' : `, ${cause.code}`}`
+        : cause instanceof IvantiBusyError
+          ? 'this server\'s request cap was full'
+          : 'it failed';
+    super(
+      `The write to ${entitySet}('${recId}') was sent and accepted, but reading the record back ` +
+        `failed (${why}), so whether every value took is unknown. READ THE RECORD before doing ` +
+        'anything else; do not repeat the write — the record exists and repeating it can create a ' +
+        'duplicate or re-run the tenant\'s workflow.',
+    );
+    this.name = 'WriteUnconfirmedError';
+  }
+}
+
 export interface ResolvedValidatedWrite {
   /** `<field>_Valid` style identifiers to write beside the values. */
   companions: OdataRecord;
@@ -182,17 +213,7 @@ export interface ResolvedValidatedWrite {
 
 const EMPTY: ResolvedValidatedWrite = { companions: {}, values: {}, confirm: {} };
 
-/**
- * The CSDL name back to the AdminUI id the session services take.
- *
- * `incident` → `incident#`, `ci__computer` → `ci#computer`. A **subtype keeps no trailing `#`**:
- * `CI#Computer` is the whole id, while a base object is `Incident#`. The services are
- * case-insensitive here, which is why the lowercase CSDL spelling is fine.
- */
-export function toObjectId(name: string): string {
-  const bare = toCsdlEntity(name);
-  return bare.includes('__') ? bare.replace(/__/g, '#') : `${bare}#`;
-}
+export { toObjectId };
 
 async function storedParents(
   connection: IvantiConnection,
@@ -425,7 +446,11 @@ export async function confirmWrite(options: ConfirmWriteOptions): Promise<ReadBa
   if (confirming.size === 0 && free.length === 0) return report;
 
   const url = withQuery(transport.routes.record(entitySet, recId), buildQuery({}));
-  const read = await transport.request<OdataRecord>(url);
+  // Only this request is wrapped: the write itself already succeeded, so a failure here must not
+  // read as "nothing was changed" (the limiter's wording) or as a refusal.
+  const read = await transport.request<OdataRecord>(url).catch((error: unknown) => {
+    throw new WriteUnconfirmedError(entitySet, recId, error);
+  });
   if (read !== undefined) report.stored = read;
 
   // By name, whatever the case: the record answers in Ivanti's spelling, and a check that
@@ -458,7 +483,18 @@ export async function confirmWrite(options: ConfirmWriteOptions): Promise<ReadBa
     });
   };
 
-  for (const [name, intended] of Object.entries(confirm)) {
+  // Only what this server resolved itself is compared exactly: the stored value is the option's own
+  // spelling, so a wrong RecId/label swap is still caught. A validated field it could not resolve
+  // (no form, not on the form, list missing or not validated) holds the CALLER's spelling, and
+  // Ivanti matches its lists case-insensitively — it is compared like a free field.
+  const exact = Object.entries(confirm).filter(([name]) => resolvedNow.has(lower(name)));
+  const lenient = Object.entries(confirm).filter(([name]) => !resolvedNow.has(lower(name)));
+
+  for (const [name, intended] of exact) {
+    if (read === undefined) {
+      report.notConfirmed.push(`${name} — the record could not be read back`);
+      continue;
+    }
     if (comparable(storedAs(name)) !== comparable(intended)) miss(name, intended, storedAs(name));
   }
 
@@ -466,12 +502,20 @@ export async function confirmWrite(options: ConfirmWriteOptions): Promise<ReadBa
   // at another object's option. Checked only when the record echoes it: a missing field is not
   // evidence of a wrong one.
   for (const [name, intended] of Object.entries(companions)) {
+    if (read === undefined) {
+      report.notConfirmed.push(`${name} — the record could not be read back`);
+      continue;
+    }
     if (!returned(name)) continue;
     if (comparable(storedAs(name)) !== comparable(intended)) miss(name, intended, storedAs(name), true);
   }
 
-  for (const name of free) {
-    const intended = written[name];
+  const compared: [string, unknown][] = [
+    ...lenient,
+    ...free.map((name): [string, unknown] => [name, written[name]]),
+  ];
+
+  for (const [name, intended] of compared) {
     // Nothing to compare against is not evidence either way — said, rather than passed silently.
     if (read === undefined) {
       report.notConfirmed.push(`${name} — the record could not be read back`);

@@ -6,6 +6,8 @@ import { connectionFixture, field } from '../../ivanti/connection.fixture.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
 import { OPEN_ACTIONS } from '../shared/action-gate.js';
 import type { Logger } from '../../logger.js';
+import { IvantiApiError } from '../../ivanti/http/errors.js';
+import { withCallUsage, type CallUsage } from '../../usage/call-usage.js';
 import { createGetObjectMetadataTool } from './get-object-metadata.js';
 import { formFixture } from '../../ivanti/session/form.fixture.js';
 
@@ -184,10 +186,29 @@ describe('get_object_metadata', () => {
       await labelledTool({}, () => Promise.reject(new Error('ASMX said no'))).handler({ object: 'incident' }),
     );
 
-    // And the failure is reported as "no labels", not swallowed into "labels exist but are equal":
-    // that note is how the caller knows it may fall back to the key.
+    // And the failure is reported as unread, NOT as "no field carries a label": that would be a
+    // fact about the role, narrated from a read that never happened.
     expect(body).toMatchObject({ object: 'incident', fieldCount: 4 });
-    expect(body.labelsNote).toContain('only names it has here');
+    expect(body.labelsNote).toContain('could not be read');
+    expect(body.labelsNote).not.toContain('only names it has here');
+  });
+
+  it('does not swallow a lapsed person session into "no labels" — it ends the call', async () => {
+    const lapsed = new IvantiApiError({
+      status: 401,
+      method: 'POST',
+      url: 'u',
+      credential: 'person',
+    });
+    const usage: CallUsage = { ivantiRequests: 0 };
+
+    const result = await withCallUsage(usage, () =>
+      labelledTool({}, () => Promise.reject(lapsed)).handler({ object: 'incident' }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('No field on this object carries a label');
+    expect(usage.personRefused).toBe(true);
   });
 
   it("hides Ivanti's internal _Valid pointer fields", async () => {

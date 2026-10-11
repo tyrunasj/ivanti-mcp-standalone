@@ -5,9 +5,11 @@ import { describe, expect, it } from 'vitest';
 import {
   assertSupportedFilter,
   findUnsupportedFilter,
-  maskStringLiterals,
   referencedFieldNames,
+  scanStringLiterals,
 } from './filter.js';
+
+const maskStringLiterals = (filter: string): string => scanStringLiterals(filter).masked;
 
 describe('maskStringLiterals', () => {
   it('hides literal contents but keeps the quotes and length', () => {

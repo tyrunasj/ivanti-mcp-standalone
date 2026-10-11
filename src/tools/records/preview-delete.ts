@@ -7,7 +7,7 @@ import { toObjectId } from '../../ivanti/write/validated-write.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
-import { runTool } from '../shared/run-tool.js';
+import { isUnanswered, runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { IvantiApiError } from '../../ivanti/http/errors.js';
 import { connectionFor } from '../shared/connection-for.js';
@@ -82,7 +82,17 @@ export function createPreviewDeleteTool(deps: IvantiToolDeps): ToolDefinition {
           },
           )
           .catch((error: unknown) => {
-            if (!(error instanceof IvantiApiError) || error.status < 500) throw error;
+            // Only a 500 means Ivanti could not EVALUATE the cascade. A gateway that did not
+            // answer (502, 504, status 0) or a service that is down (503) says nothing about the
+            // cascade, and "no preview, proceed" over it hid a cascade nobody had seen.
+            if (
+              !(error instanceof IvantiApiError) ||
+              error.status < 500 ||
+              error.status === 503 ||
+              isUnanswered(error)
+            ) {
+              throw error;
+            }
             return undefined;
           });
 

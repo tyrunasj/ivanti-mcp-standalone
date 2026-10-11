@@ -318,7 +318,7 @@ describe('upload_attachment', () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(text(result)).toContain('decoded to nothing');
+    expect(text(result)).toContain('not valid base64');
   });
 
   it('explains a missing parent instead of reporting an Ivanti status', async () => {

@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { capabilityFixture } from '../ivanti/session/capability.fixture.js';
+import { TIER_CAPPED_REASON } from '../ivanti/session/capability.js';
 import { buildInstructions } from './instructions.js';
 
 describe('buildInstructions', () => {
@@ -185,5 +186,16 @@ describe('buildInstructions', () => {
     expect(withDocs).toContain('ivanti://reference/entity-naming');
     // Nothing to point at is nothing to say: an empty sentence costs every session.
     expect(without).not.toContain('Reference documents');
+  });
+
+  it('says the deployment is configured read-only when IVANTI_MAX_TIER capped it, not that the key failed', () => {
+    const capped = buildInstructions({
+      capability: capabilityFixture({ tier: 'odata', reason: TIER_CAPPED_REASON }),
+    });
+    const refused = buildInstructions({ capability: capabilityFixture({ tier: 'odata', reason: '401' }) });
+
+    expect(capped).toContain('read-only against OData');
+    expect(capped).not.toContain('could not open a session');
+    expect(refused).toContain('could not open a session');
   });
 });

@@ -58,7 +58,6 @@ describe('createCustomerLinks', () => {
     );
 
     expect(link?.recIdField).toBe('ProfileLink_RecID');
-    expect(link?.ambiguous).toBe(false);
   });
 
   it('keeps the tenant’s own spelling of the category', async () => {
@@ -81,7 +80,7 @@ describe('createCustomerLinks', () => {
       },
     ]);
 
-    expect(link?.ambiguous).toBe(true);
+    expect(link?.recIdField).toBeDefined();
   });
 
   it('falls back to the name when the object has no records to learn from', async () => {
@@ -148,6 +147,64 @@ describe('a sample that failed is not remembered', () => {
     // And the casing the tenant actually stores, which the guess could not know.
     expect(measured?.categoriesSeen).toEqual(['Employee']);
     expect(reads()).toBe(2);
+  });
+
+  // The 2026-09-14 fix covered the name ladder only; a prefix off it came back `undefined`,
+  // which was cached with nothing to say the sample had failed.
+  it('samples again when the failed sample left a prefix off the name ladder with no link', async () => {
+    const off = entityFixture('hrcase', {
+      fields: [field('RecId'), field('ReporterLink_RecID'), field('ReporterLink_Category')],
+    });
+    let seen = 0;
+    const { connection } = connectionFixture({ entities: { incident: {}, employee: {} } });
+    const transport = {
+      ...connection.transport,
+      request: () => {
+        seen += 1;
+        return seen === 1
+          ? Promise.reject(new Error('Ivanti 503'))
+          : Promise.resolve({ value: [{ ReporterLink_RecID: 'e1', ReporterLink_Category: 'Employee' }] });
+      },
+    } as typeof connection.transport;
+    const quiet = () => undefined;
+    const links = createCustomerLinks({
+      transport,
+      personObjects: () => Promise.resolve(['employee']),
+      logger: { debug: quiet, info: quiet, warn: quiet, error: quiet },
+    });
+
+    const first = await links.forEntity(off, 'hrcases');
+    const second = await links.forEntity(off, 'hrcases');
+
+    expect(first).toBeUndefined();
+    expect(second?.foundBy).toBe('data');
+    expect(seen).toBe(2);
+  });
+
+  it('still remembers that an off-ladder prefix with no data and no failure has no link', async () => {
+    const off = entityFixture('hrcase', {
+      fields: [field('RecId'), field('ReporterLink_RecID'), field('ReporterLink_Category')],
+    });
+    let seen = 0;
+    const { connection } = connectionFixture({ entities: { incident: {}, employee: {} } });
+    const transport = {
+      ...connection.transport,
+      request: () => {
+        seen += 1;
+        return Promise.resolve({ value: [] });
+      },
+    } as typeof connection.transport;
+    const quiet = () => undefined;
+    const links = createCustomerLinks({
+      transport,
+      personObjects: () => Promise.resolve(['employee']),
+      logger: { debug: quiet, info: quiet, warn: quiet, error: quiet },
+    });
+
+    await links.forEntity(off, 'hrcases');
+    await links.forEntity(off, 'hrcases');
+
+    expect(seen).toBe(1);
   });
 
   // The other direction, and why the cache exists: an answer that really was derived from the

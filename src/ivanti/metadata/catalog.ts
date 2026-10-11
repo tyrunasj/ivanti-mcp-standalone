@@ -2,9 +2,8 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Logger } from '../../logger.js';
-import { looksLikeCsdl, parseCsdl, type CsdlDocument, type EntityMetadata } from './csdl.js';
+import { EmptyCsdlError, parseCsdl, type CsdlDocument, type EntityMetadata } from './csdl.js';
 import { toCsdlEntity, toEnglishSingular, toGuessedEntitySet } from './entity-names.js';
-import { IvantiApiError } from '../http/errors.js';
 import { suggestNames, toStem } from './suggest-names.js';
 import type { IvantiTransport } from '../http/transport.js';
 
@@ -30,6 +29,27 @@ export class UnknownEntityError extends Error {
 }
 
 /**
+ * The schema could not be read just now, so whether the object exists is unknown. Not an
+ * `UnknownEntityError`: nothing is claimed about the name, no suggestions are made, and the
+ * failure is never cached.
+ */
+export class MetadataUnavailableError extends Error {
+  constructor(consequence: string, cause?: string) {
+    super(
+      `Ivanti's $metadata could not be read just now${cause === undefined ? '' : ` (${cause})`}, ` +
+        `so ${consequence}. This is not a refusal and nothing was changed. Try again in a moment.`,
+    );
+    this.name = 'MetadataUnavailableError';
+  }
+}
+
+/** What reading one CSDL URL came to; only the first two are remembered. */
+type Fetched =
+  | { kind: 'document'; document: CsdlDocument }
+  | { kind: 'missing' }
+  | { kind: 'unavailable'; cause: string };
+
+/**
  * Graph roots worth reading to build a Business Object catalog without a session.
  *
  * A CSDL graph names the entities *related* to its root, so no single document lists the tenant.
@@ -53,7 +73,9 @@ export interface MetadataCatalog {
   entity: (ref: string) => Promise<EntityMetadata>;
   /** Every entity name the catalog has seen, lowercase, sorted. */
   entityNames: () => Promise<string[]>;
-  /** Parses one more graph into the catalog, widening it. Undefined when the graph is unusable. */
+  /** The same, and whether the last `widen()` could not read some graphs, so the list is short. */
+  entityNamesDetailed: () => Promise<{ names: string[]; incomplete: boolean }>;
+  /** Parses one more graph into the catalog, widening it. Undefined when the graph is unusable or absent. */
   graph: (entitySet: string) => Promise<CsdlDocument | undefined>;
   /** Reads every well-known graph once, so `entityNames` answers for the tenant, not one graph. */
   widen: () => Promise<void>;
@@ -88,74 +110,46 @@ export interface MetadataCatalogDeps {
  */
 export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalog {
   const { transport, seedUrl, logger, suggestionNames } = deps;
-  const documents = new Map<string, Promise<CsdlDocument | undefined>>();
+  const documents = new Map<string, Promise<Fetched>>();
+  // Graphs the last `widen()` could not read; reset by each call.
+  let widenFailures = 0;
 
-  const fetchDocument = (url: string): Promise<CsdlDocument | undefined> => {
+  const fetchDocument = (url: string): Promise<Fetched> => {
     const existing = documents.get(url);
     if (existing !== undefined) return existing;
 
-    const pending = (async (): Promise<CsdlDocument | undefined> => {
-      // Two phases, and they fail for different reasons. Fetching can fail because the tenant is
-      // having a bad moment, which must not be remembered. Parsing fails because something
-      // ANSWERED and the answer was not a schema — and only when that something was Ivanti, with
-      // the fabricated field-less document it returns for an unknown entity set, is it definitive
-      // and worth remembering, or every mistyped name costs a round trip on every call.
+    const pending = (async (): Promise<Fetched> => {
+      // Three outcomes, and only two are remembered. A document is a fact about the tenant. A
+      // `missing` is Ivanti's own definitive answer for an entity set that does not exist: a 200
+      // carrying a CSDL-shaped, field-less document. Everything else — a thrown error of ANY
+      // status, a body that is not CSDL — says nothing about the schema, only that this moment
+      // could not be read, and is evicted so the next call asks again. A status denylist here
+      // once cached every unlisted 4xx as "no such entity" for the life of the process.
       let body: string;
       try {
         body = await transport.requestText(url);
       } catch (error: unknown) {
-        // Only a DEFINITIVE answer from Ivanti is cached. A 200 carrying the fabricated
-        // field-less document, or a 404, really does mean "no such entity", and caching it makes
-        // a mistyped name cost one round trip rather than one per call.
-        //
-        // Everything else is the tenant having a bad moment, and caching it turns that moment
-        // into a permanent, confidently-worded lie: the process answers "Ivanti has no Business
-        // Object named 'Incident#'" for the rest of its life, making no further request, logged
-        // at debug as `retryable: false`. Because `routes.metadata('incidents')` is byte-identical
-        // to the startup probe's URL, poisoning the seed kills the most-used object of all.
-        //
-        // The old test was `status === 0` alone, which missed every 5xx and every 401/403/429 —
-        // one app-pool recycle and the process answers "Ivanti has no Business Object named
-        // 'Incident#'" for the rest of its life, making no further request. And because
-        // `routes.metadata('incidents')` is byte-identical to the startup probe's URL, poisoning
-        // the seed kills the most-used object of all.
-        const retryable =
-          !(error instanceof IvantiApiError) ||
-          error.status === 0 ||
-          error.status >= 500 ||
-          error.status === 401 ||
-          error.status === 403 ||
-          error.status === 429;
-        if (retryable) documents.delete(url);
-        logger.debug('csdl unavailable', {
-          url,
-          retryable,
-          reason: error instanceof Error ? error.message.slice(0, 120) : 'unknown',
-        });
-        return undefined;
+        documents.delete(url);
+        const cause = error instanceof Error ? error.message.slice(0, 120) : 'unknown';
+        logger.debug('csdl unavailable', { url, cause });
+        return { kind: 'unavailable', cause };
       }
 
       try {
         const document = parseCsdl(body);
         logger.debug('csdl parsed', { url, entities: document.entities.size });
-        return document;
+        return { kind: 'document', document };
       } catch (error: unknown) {
-        // Only Ivanti's OWN answer is cached: a CSDL document declaring nothing with fields, which
-        // is what it fabricates for an entity set that does not exist. That is how a typo
-        // arrives, and it should cost one round trip rather than one per call.
-        //
-        // Anything that is not CSDL-shaped at all is someone else answering — a WAF block page, a
-        // maintenance page, a login redirect — and says nothing about the schema. This branch once
-        // cached those too, contradicting rule 3 above: a WAF page on the seed URL made Incidents
-        // unknown until a restart, which is the exact outage the rule was written against.
-        const retryable = !looksLikeCsdl(body);
-        if (retryable) documents.delete(url);
-        logger.debug('csdl unusable', {
-          url,
-          retryable,
-          reason: error instanceof Error ? error.message.slice(0, 120) : 'unknown',
-        });
-        return undefined;
+        if (error instanceof EmptyCsdlError) {
+          logger.debug('csdl names no entity', { url });
+          return { kind: 'missing' };
+        }
+        // Not CSDL at all — a WAF block page, a maintenance page, a login redirect — or CSDL the
+        // parser could not read. Someone else answered; never cached.
+        documents.delete(url);
+        const cause = error instanceof Error ? error.message.slice(0, 120) : 'unknown';
+        logger.debug('csdl unusable', { url, cause });
+        return { kind: 'unavailable', cause };
       }
     })();
 
@@ -163,12 +157,15 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
     return pending;
   };
 
+  const documentOf = (fetched: Fetched): CsdlDocument | undefined =>
+    fetched.kind === 'document' ? fetched.document : undefined;
+
   const resolved = async (): Promise<CsdlDocument[]> => {
     const all = await Promise.all([...documents.values()]);
-    return all.filter((document): document is CsdlDocument => document !== undefined);
+    return all.flatMap((fetched) => (fetched.kind === 'document' ? [fetched.document] : []));
   };
 
-  const entityNames = async (): Promise<string[]> => {
+  const entityNamesDetailed = async (): Promise<{ names: string[]; incomplete: boolean }> => {
     await fetchDocument(seedUrl);
     const names = new Set<string>();
     for (const document of await resolved()) {
@@ -176,28 +173,32 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
     }
 
     if (names.size === 0) {
-      throw new Error(
-        `Ivanti's $metadata could not be read at ${seedUrl}, so no Business Object is known. ` +
-          'Every schema-dependent tool depends on it.',
-      );
+      throw new MetadataUnavailableError('no Business Object is known');
     }
 
-    return [...names].sort((a, b) => a.localeCompare(b));
+    return {
+      names: [...names].sort((a, b) => a.localeCompare(b)),
+      incomplete: widenFailures > 0,
+    };
   };
+
+  const entityNames = async (): Promise<string[]> => (await entityNamesDetailed()).names;
 
   return {
     entityNames,
+    entityNamesDetailed,
 
     async widen(): Promise<void> {
       // Independent documents, so fetch them together: eight round trips in series would be the
       // slowest thing the server does.
-      await Promise.all(
+      const fetched = await Promise.all(
         WELL_KNOWN_GRAPHS.map((graph) => fetchDocument(transport.routes.metadata(graph))),
       );
+      widenFailures = fetched.filter((result) => result.kind === 'unavailable').length;
     },
 
-    graph: (entitySet: string): Promise<CsdlDocument | undefined> =>
-      fetchDocument(transport.routes.metadata(entitySet)),
+    graph: async (entitySet: string): Promise<CsdlDocument | undefined> =>
+      documentOf(await fetchDocument(transport.routes.metadata(entitySet))),
 
     async entity(ref: string): Promise<EntityMetadata> {
       /**
@@ -221,7 +222,15 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
         return undefined;
       };
 
-      const shared = lookup(await fetchDocument(seedUrl));
+      // Every fetch that could not be read, so "not found" is only said when nothing failed.
+      const failures: string[] = [];
+      const read = async (url: string): Promise<CsdlDocument | undefined> => {
+        const fetched = await fetchDocument(url);
+        if (fetched.kind === 'unavailable') failures.push(fetched.cause);
+        return documentOf(fetched);
+      };
+
+      const shared = lookup(await read(seedUrl));
       if (shared !== undefined && shared.relationships.length > 0) return shared;
 
       /**
@@ -246,7 +255,7 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
       // Either the seed graph does not name it, or it named it without relationships — which is
       // what every non-root entity looks like there.
       for (const graph of graphs) {
-        const own = lookup(await fetchDocument(transport.routes.metadata(graph)));
+        const own = lookup(await read(transport.routes.metadata(graph)));
         if (own !== undefined) return own;
       }
 
@@ -260,14 +269,15 @@ export function createMetadataCatalog(deps: MetadataCatalogDeps): MetadataCatalo
       // extra round trip, on the failure path only, to turn "no such object" into its name.
       const singular = toEnglishSingular(ref);
       if (singular !== undefined) {
-        const corrected = await fetchDocument(
-          transport.routes.metadata(toGuessedEntitySet(singular)),
-        );
+        const corrected = await read(transport.routes.metadata(toGuessedEntitySet(singular)));
         const match = corrected?.entities.get(singular.toLowerCase());
         if (match !== undefined) {
           throw new UnknownEntityError(ref, [toGuessedEntitySet(singular)]);
         }
       }
+
+      // Something could not be read, so the name may well exist: say that, not "no such object".
+      if (failures.length > 0) throw new MetadataUnavailableError(`whether '${ref}' exists is unknown`, failures[0]);
 
       // Stem both dialects: the caller may have said `Categories` (English plural of the set)
       // or `Categorie#` (English plural of the AdminUI id), and only one of the two stems

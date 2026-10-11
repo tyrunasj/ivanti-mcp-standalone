@@ -8,12 +8,16 @@ import { IvantiApiError } from './errors.js';
 import { exchange, readText } from './exchange.js';
 
 /**
- * Ivanti tenants serve the API either under `/HEAT` or at the root, and which one is not
- * discoverable from anything but trying. Most tenants have the prefix; some do not.
- *
- * Probed once at startup rather than configured, because it is the kind of setting someone gets
- * wrong and then debugs as an authentication failure.
+ * The tenant answered and refused the API key (401/403). A setting to correct, not an outage:
+ * the caller maps it to a configuration exit, so a supervisor does not retry a wrong key forever.
  */
+export class TenantRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TenantRefusedError';
+  }
+}
+
 export const BASE_PATH_CANDIDATES = ['/HEAT', ''] as const;
 
 /**
@@ -30,12 +34,8 @@ export const METADATA_GRAPHS: readonly (string | undefined)[] = [
   'businessobject',
 ];
 
-/**
- * Kept separate from the transport's timeout: this one runs before the process serves anything,
- * and an unreachable tenant must fail the startup rather than hang it. A container stuck part-way
- * through starting is harder to diagnose than one that exits.
- */
-export const PROBE_TIMEOUT_MS = 10_000;
+/** The reason recorded for a 2xx whose body was not a CSDL document. */
+const NOT_METADATA = 'answered, but not with $metadata';
 
 export type ProbeFetch = (
   url: string,
@@ -62,6 +62,12 @@ const SILENT: Logger = {
 };
 
 /**
+ * Ivanti tenants serve the API either under `/HEAT` or at the root, and which one is not
+ * discoverable from anything but trying. Most tenants have the prefix; some do not.
+ *
+ * Probed once at startup rather than configured, because it is the kind of setting someone gets
+ * wrong and then debugs as an authentication failure.
+ *
  * Finds the base path by asking for `$metadata` under each candidate.
  *
  * `$metadata` is the right probe: it is authenticated, and its body is checkable — a 200 carrying
@@ -69,6 +75,9 @@ const SILENT: Logger = {
  *
  * It must be asked for as **XML**: `Accept: application/json` turns the same URL into a 500,
  * because Ivanti tries to render CSDL as JSON and throws.
+ *
+ * `timeoutMs` is `IVANTI_TIMEOUT_MS` and bounds EACH attempt, not the probe: up to six attempts
+ * (two base paths by three CSDL forms) can run before the startup gives up.
  *
  * Through `exchange()` like every other Ivanti request. This was the last bare `fetch`, and its
  * `catch {}` recorded every network failure as the word "error" — so a tenant hostname that did not
@@ -79,7 +88,7 @@ export async function probeBasePath(
   baseUrl: string,
   apiKey: string,
   fetchImpl: ProbeFetch,
-  timeoutMs: number = PROBE_TIMEOUT_MS,
+  timeoutMs: number,
   logger: Logger = SILENT,
 ): Promise<BasePathProbe> {
   const attempted: BasePathProbe['attempted'] = [];
@@ -98,8 +107,12 @@ export async function probeBasePath(
           context,
           readText,
         );
-        attempted.push({ url, status });
-        if (looksLikeCsdl(body)) return { basePath: candidate, metadataUrl: url, attempted };
+        if (looksLikeCsdl(body)) {
+          attempted.push({ url, status });
+          return { basePath: candidate, metadataUrl: url, attempted };
+        }
+        // Answered, but not with a schema: a login page, a proxy or a captive portal.
+        attempted.push({ url, status, reason: NOT_METADATA });
       } catch (error: unknown) {
         // Status 0 is "no answer", and its body is why — `exchange` has already scrubbed it.
         if (error instanceof IvantiApiError && error.status > 0) {
@@ -119,17 +132,33 @@ export async function probeBasePath(
   // to check DNS and firewalls when the tenant answered perfectly well and refused the key.
   const refused = attempted.find((a) => a.status === 401 || a.status === 403);
   if (refused !== undefined) {
-    throw new Error(
+    throw new TenantRefusedError(
       `Ivanti refused the API key: ${String(refused.status)} at ${refused.url}. The tenant is ` +
         'reachable, so check IVANTI_API_KEY (or IVANTI_API_KEY_FILE) rather than IVANTI_BASE_URL.',
     );
   }
 
+  // Something answered with a page that is not the schema. Saying "could not reach" sends the
+  // reader to DNS and firewalls when the host answered; the usual cause is that
+  // IVANTI_BASE_URL points at a login page, a proxy or the wrong host.
+  const answered = attempted.find((a) => a.reason === NOT_METADATA);
+  if (answered !== undefined) {
+    throw new Error(
+      `Ivanti's $metadata was not returned: ${String(answered.status)} at ${answered.url} ` +
+        'answered with something that is not a $metadata document (a login page, a proxy or ' +
+        'the wrong host). Check that IVANTI_BASE_URL is the tenant itself. Tried:\n  ' +
+        describeAttempts(attempted),
+    );
+  }
+
   throw new Error(
     `Could not reach Ivanti OData under either base path. Tried:\n  ` +
-      attempted
-        .map((a) => `${String(a.status)} ${a.url}${a.reason === undefined ? '' : ` (${a.reason})`}`)
-        .join('\n  ') +
+      describeAttempts(attempted) +
       '\nCheck IVANTI_BASE_URL and that the API key is valid.',
   );
 }
+
+const describeAttempts = (attempted: BasePathProbe['attempted']): string =>
+  attempted
+    .map((a) => `${String(a.status)} ${a.url}${a.reason === undefined ? '' : ` (${a.reason})`}`)
+    .join('\n  ');

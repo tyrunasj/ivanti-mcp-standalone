@@ -15,6 +15,7 @@ import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
+import { decodeBase64Argument, NOT_BASE64 } from '../shared/decode-base64.js';
 import { transportFor } from '../shared/transport-for.js';
 
 /**
@@ -108,20 +109,13 @@ export function createUploadAttachmentTool(deps: IvantiToolDeps): ToolDefinition
         // to the process that closed it.
         await assertRecordWritable(deps, context, target, args.recordId);
 
-        let bytes: Buffer;
-        try {
-          bytes = Buffer.from(args.contentBase64, 'base64');
-        } catch {
-          return errorResult('`contentBase64` is not valid base64, so there is nothing to upload.');
+        const bytes = decodeBase64Argument(args.contentBase64);
+        if (bytes === undefined) {
+          return errorResult(`\`contentBase64\` ${NOT_BASE64}, so there is nothing to upload.`);
         }
 
-        // Buffer.from accepts almost anything and silently drops what it cannot decode, so an
-        // empty result means the input was not base64 rather than that the file was empty.
         if (bytes.byteLength === 0) {
-          return errorResult(
-            '`contentBase64` decoded to nothing. Either the file is empty or the value is not ' +
-              'base64 — Ivanti would store an empty file either way.',
-          );
+          return errorResult('`contentBase64` decoded to nothing — the file is empty.');
         }
 
         if (bytes.byteLength > MAX_BYTES) {

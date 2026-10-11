@@ -36,7 +36,6 @@ function session(answers: {
         : Promise.resolve(answers.upload ?? '');
     },
     identity: () => Promise.resolve({ role: 'Admin', displayName: 'Service Account' }),
-    identityIfKnown: () => undefined,
   };
   return { stub, log, forms };
 }

@@ -21,6 +21,10 @@ export interface AuthorizationContext {
   resourceMetadataUrl?: string;
 }
 
+const exhaustive = (mode: never): never => {
+  throw new Error(`AUTH_MODE=${String(mode)} is not handled by authorizeRequest`);
+};
+
 const OK: AuthorizationResult = { authorized: true, status: 200 };
 
 export function extractBearerToken(header: string | undefined): string | undefined {
@@ -67,11 +71,10 @@ export async function authorizeRequest(
     case 'oauth': {
       const { verifier, resourceMetadataUrl } = context;
       if (verifier === undefined || resourceMetadataUrl === undefined) {
-        return {
-          authorized: false,
-          status: 500,
-          reason: 'OAuth verifier was not initialised',
-        };
+        // Not a state a request can be in: `startHttp` refuses to listen in oauth mode without
+        // both. A wiring mistake that reached here throws into the listener's 500 and error log,
+        // rather than being modelled as an authorization verdict.
+        throw new Error('AUTH_MODE=oauth reached authorizeRequest without a verifier and metadata URL');
       }
 
       const token = extractBearerToken(headers.authorization);
@@ -120,11 +123,11 @@ export async function authorizeRequest(
       return { ...OK, identity: verification.identity };
     }
 
+    case undefined:
+      // `validateConfig` refuses HTTP without an AUTH_MODE; an unset one never opens the door.
+      throw new Error('authorizeRequest was called with no AUTH_MODE');
+
     default:
-      return {
-        authorized: false,
-        status: 501,
-        reason: `AUTH_MODE=${config.AUTH_MODE} is not served over HTTP`,
-      };
+      return exhaustive(config.AUTH_MODE);
   }
 }

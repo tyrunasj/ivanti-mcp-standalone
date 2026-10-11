@@ -18,9 +18,11 @@ import { createLogger } from './logger.js';
 import { createServerFactory, SERVER_NAME, SERVER_VERSION } from './server/create-server.js';
 import { readSdkVersion } from './version.js';
 import { startReadiness, type Readiness } from './server/http/readiness.js';
-import { ListenError, startHttp, type HttpServer } from './server/start-http.js';
+import { startHttp, type HttpServer } from './server/start-http.js';
 import { startStdio, type StdioServer } from './server/start-stdio.js';
+import { classifyStartupFailure, closeStarted, EXIT_CONFIG } from './server/startup.js';
 import { registry as metricsRegistry, watchServer } from './metrics/server-metrics.js';
+import { observeIvantiRequests } from './observe-ivanti.js';
 import { startMetrics, type MetricsServer } from './server/start-metrics.js';
 
 /**
@@ -33,6 +35,7 @@ import { startMetrics, type MetricsServer } from './server/start-metrics.js';
 const SHUTDOWN_GRACE_MS = 8_000;
 
 async function main(): Promise<void> {
+  observeIvantiRequests();
   const config = loadConfig(process.env);
   const logger = createLogger(config.LOG_LEVEL);
 
@@ -100,20 +103,27 @@ async function main(): Promise<void> {
   });
 
   let stdio: StdioServer | undefined;
+  let http: HttpServer | undefined;
+  let readiness: Readiness | undefined;
+  let metrics: MetricsServer | undefined;
+
+  // Each step below may bind something before a later one throws (OAuth setup, a port in use, a
+  // metrics listener). Whatever is already serving is closed on the way out, or its Ivanti
+  // session would be left open on the tenant by a process that never got as far as `shutdown`.
+  try {
   if (config.STDIO_TRANSPORT_ON) {
     // Process trust: whoever can run this binary is the caller, and nothing vouches for who
     // they are. One process is one conversation, so there is no session id either.
-    stdio = await startStdio(factory.create({ identity: ANONYMOUS }));
+    const stdioContext = { identity: ANONYMOUS };
+    stdio = await startStdio(factory.create(stdioContext));
     logger.info('listening on stdio', {
       mcpMode: config.MCP_MODE,
       ivanti: ivanti !== undefined,
-      ...factory.manifest,
+      ...factory.manifestFor(stdioContext),
       tools: factory.toolNames,
     });
   }
 
-  let http: HttpServer | undefined;
-  let readiness: Readiness | undefined;
   if (config.HTTP_TRANSPORT_ON) {
     // `enduser` scopes records to one person per MCP session, and a session is whatever the
     // client opened — so a gateway that multiplexes many people onto one connection would show
@@ -165,17 +175,22 @@ async function main(): Promise<void> {
   // and ends in SIGKILL either way. Installed for stdio too: without it SIGTERM killed a stdio-only
   // process outright, with the impersonated session still open on the tenant.
   // Last, once there is something to report: the gauges read what was started above.
-  let metrics: MetricsServer | undefined;
   if (config.METRICS_ON) {
     const live = http;
+    const probe = readiness;
     watchServer({
       version: SERVER_VERSION,
       mcpMode: config.MCP_MODE,
-      ...(readiness === undefined ? {} : { ready: (): boolean => readiness.state().ready }),
+      ...(probe === undefined ? {} : { ready: (): boolean => probe.state().ready }),
       ...(ivanti?.limiter === undefined ? {} : { limiter: ivanti.limiter }),
       ...(live === undefined ? {} : { sessions: (): number => live.sessionCount() }),
     });
     metrics = await startMetrics(config, logger, metricsRegistry);
+  }
+  } catch (error: unknown) {
+    readiness?.stop();
+    await closeStarted([stdio, http, metrics], logger);
+    throw error;
   }
 
   let stopping = false;
@@ -221,12 +236,14 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  if (error instanceof ConfigError) {
-    process.stderr.write(`${error.message}\n`);
-    process.exit(78); // EX_CONFIG
+  const failure = classifyStartupFailure(error);
+  if (failure.kind === 'config') {
+    process.stderr.write(`${failure.message}\n`);
+    process.exit(EXIT_CONFIG);
   }
   // Already logged by `startHttp`, with what to change; a stack would only bury it.
-  if (error instanceof ListenError) process.exit(1);
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+  if (failure.kind === 'logged') process.exit(1);
+  // The level is unknown here (the config may be what failed), and a startup failure is an error at any.
+  createLogger('error').error('startup failed', { error });
   process.exit(1);
 });

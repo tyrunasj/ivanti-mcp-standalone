@@ -75,10 +75,18 @@ describe('authorizeRequest', () => {
     expect(result.authorized).toBe(false);
   });
 
-  it('fails closed when oauth mode has no verifier wired in', async () => {
-    const result = await authorizeRequest(config({ AUTH_MODE: 'oauth' }), {});
+  // Not an authorization verdict: the listener refuses to start in this state, so reaching it is a
+  // wiring bug, and it must surface as one rather than as a 500 that reads like a policy answer.
+  it('throws when oauth mode has no verifier wired in', async () => {
+    await expect(authorizeRequest(config({ AUTH_MODE: 'oauth' }), {})).rejects.toThrow(
+      /without a verifier/,
+    );
+  });
 
-    expect(result).toMatchObject({ authorized: false, status: 500 });
+  it('throws when there is no auth mode at all, rather than answering for one', async () => {
+    await expect(authorizeRequest(config({ AUTH_MODE: undefined }), {})).rejects.toThrow(
+      /no AUTH_MODE/,
+    );
   });
 });
 

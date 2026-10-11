@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import {
   createSessionPin,
   IdentityConflictError,
-  initialIdentity,
   VerifiedSessionError,
   type PinnedPerson,
 } from './identity-pin.js';
@@ -99,12 +98,5 @@ describe('createSessionPin', () => {
 
     expect(first.person()?.displayName).toBe('John Smith');
     expect(second.person()?.displayName).toBe('Ada Dale');
-  });
-});
-
-describe('initialIdentity', () => {
-  it('is the verified identity when there is one, and anonymous otherwise', () => {
-    expect(initialIdentity(VERIFIED)).toBe(VERIFIED);
-    expect(initialIdentity(undefined)).toEqual(ANONYMOUS);
   });
 });

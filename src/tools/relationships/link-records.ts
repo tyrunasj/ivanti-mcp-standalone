@@ -9,12 +9,12 @@ import { UnknownEntityError } from '../../ivanti/metadata/catalog.js';
 import { suggestNames } from '../../ivanti/metadata/suggest-names.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
-import { readRows } from '../shared/read-rows.js';
 import { errorResult, jsonResult } from '../shared/result.js';
 import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { transportFor } from '../shared/transport-for.js';
+import { confirmLinked, isLinkedTo, notConfirmed } from './membership.js';
 
 /** Ivanti's "it worked" code on the relationship endpoints. Anything else is a failure in a 200. */
 export const RELATIONSHIP_OK = 'ISM_2000';
@@ -216,14 +216,13 @@ export function createLinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
         // Any other relationship: a link that is already there answers as such, not as "linked".
         // Best effort — the list is only for the wording, so a failed read just links.
         if (child === undefined || child.kind === 'unknown') {
-          const relatedUrl = transport.routes.related(entitySet, args.recordId, relationship);
-          const linked = await transport
-            .request<OdataRecord>(relatedUrl)
-            .then((payload) => readRows<OdataRecord>(payload, relatedUrl))
-            .catch(() => [] as OdataRecord[]);
-          const there = linked.some(
-            (row) => typeof row['RecId'] === 'string' && sameId(row['RecId'], args.targetId),
-          );
+          const there = await isLinkedTo(
+            transport,
+            entitySet,
+            args.recordId,
+            relationship,
+            args.targetId,
+          ).catch(() => false);
           if (there) {
             return unchanged(`${args.targetId} is already linked to this record via ${relationship}`);
           }
@@ -266,6 +265,27 @@ export function createLinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
               `Ivanti answered the link with ${RELATIONSHIP_OK}, but ${args.targetId} does not ` +
                 'name this record as its parent when read back, so it is NOT linked. Do not ' +
                 'report it as done.',
+            );
+          }
+        }
+
+        // Every other relationship has no parent field to read, so the related rows are the proof.
+        if (child?.kind !== 'free') {
+          const linkedNow = await confirmLinked(
+            transport,
+            entitySet,
+            args.recordId,
+            relationship,
+            args.targetId,
+          );
+          if (linkedNow instanceof Error) {
+            return errorResult(notConfirmed('link', args.targetId, linkedNow));
+          }
+          if (!linkedNow) {
+            return errorResult(
+              `Ivanti answered the link with ${RELATIONSHIP_OK}, but ${args.targetId} is not ` +
+                `linked to this record via ${relationship} when read back, so it is NOT linked. ` +
+                'Do not report it as done.',
             );
           }
         }

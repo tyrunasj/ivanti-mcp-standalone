@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import type { CallContext } from '../tool-definition.js';
+
 /**
  * What an empty answer means, said in the payload rather than only in a description.
  *
@@ -36,18 +38,43 @@ export interface ZeroContext {
   scopedTo?: string | undefined;
   /** The objects this deployment allows, when a gate narrowed the answer. */
   gated?: readonly string[] | undefined;
-  /**
-   * The person Ivanti is applying access for, when the conversation is impersonating.
-   *
-   * Separate from `scopedTo` because the two are different claims: that one is a filter this
-   * server composed and can explain, this one is the tenant deciding what may be seen at all.
-   */
-  impersonating?: string | undefined;
   /** Extra sentence for whatever is specific to this tool. */
   because?: string | undefined;
 }
 
-export function zeroNote(context: ZeroContext): string {
+/**
+ * The person Ivanti is applying access for, when the conversation is impersonating.
+ *
+ * The only place that reads it. Each emitter used to pass it by hand, and the ones that forgot
+ * (`get_related_records`, `search`) told a reader a zero was "real" when it was the tenant's own
+ * access control answering — so `zeroNote` and `noHitsNote` read it from the call themselves.
+ * Separate from `scopedTo`, which is a filter this server composed and can explain; this is the
+ * tenant deciding what may be seen at all.
+ */
+export function impersonatedAs(call: CallContext): string | undefined {
+  return call.impersonation?.session()?.loginId;
+}
+
+/** What an impersonated zero means, short enough to append to any empty answer. */
+export function impersonatedZeroSentence(login: string): string {
+  return (
+    `AND THIS IS NOT THE STRONG KIND OF ZERO AFTER ALL: Ivanti answered it as ${login}, ` +
+    'applying their own access. A record they may not see is absent here exactly as though it ' +
+    'did not exist. Say that nothing is visible to them rather than that nothing exists, and do ' +
+    'not report it as a fact about the tenant.'
+  );
+}
+
+/**
+ * A note with the impersonation retraction appended when the call is impersonating, unchanged
+ * otherwise — for the emitters whose zero text is their own and cannot be built by `zeroNote`.
+ */
+export function withImpersonation(note: string, call: CallContext): string {
+  const login = impersonatedAs(call);
+  return login === undefined ? note : `${note} ${impersonatedZeroSentence(login)}`;
+}
+
+export function zeroNote(context: ZeroContext, call: CallContext): string {
   const parts: string[] = [];
 
   if (context.keyword !== undefined && context.keyword !== '') {
@@ -75,14 +102,8 @@ export function zeroNote(context: ZeroContext): string {
     );
   }
 
-  if (context.impersonating !== undefined) {
-    parts.push(
-      `AND THIS IS NOT THE STRONG KIND OF ZERO AFTER ALL: Ivanti answered it as ` +
-        `${context.impersonating}, applying their own access. A record they may not see is ` +
-        'absent here exactly as though it did not exist. Say that nothing is visible to them ' +
-        'rather than that nothing exists, and do not report it as a fact about the tenant.',
-    );
-  }
+  const impersonating = impersonatedAs(call);
+  if (impersonating !== undefined) parts.push(impersonatedZeroSentence(impersonating));
 
   if (context.gated !== undefined && context.gated.length > 0) {
     parts.push(

@@ -4,6 +4,7 @@
 import { createServer as createNetServer, type AddressInfo, type Server as NetServer } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { metadataUrl } from '../auth/oauth/protected-resource-metadata.js';
 import { createImpersonationSlot } from '../auth/impersonation.js';
 import type { TokenVerifier } from '../auth/oauth/verify-token.js';
 import { configFixture } from '../config/config.fixture.js';
@@ -13,6 +14,7 @@ import { impersonatedSessionFixture } from '../ivanti/session/impersonated-sessi
 import type { Logger } from '../logger.js';
 import { releaseOnClose, type McpConnection } from './create-server.js';
 import type { Readiness } from './http/readiness.js';
+import { MINIMAL_HEALTH } from './http/health.js';
 import { EVICTION_FLOOR_MS } from './http/session-manager.js';
 import {
   HEADERS_TIMEOUT_MS,
@@ -236,6 +238,33 @@ describe('startHttp: shutdown', () => {
 
     expect(opened.released()).toBe(2);
   });
+
+  /**
+   * The standalone `GET /mcp` stream is an in-flight response held open for the client's life, so
+   * `http.close()` never finishes while one is attached. Closing the sessions first is what ends
+   * the stream; reverse the two and this hangs instead of resolving.
+   */
+  it('closes sessions before the listener, so an attached stream cannot hold shutdown forever', async () => {
+    const { createMcpServer, opened } = impersonatingConnections(5);
+    const http = await startHttp(httpConfig(), spyLogger(), deps({ createMcpServer }));
+    const { sessionId } = await post(http, INITIALIZE);
+    const stream = new AbortController();
+    const attached = await fetch(urlOf(http), {
+      method: 'GET',
+      headers: { accept: 'text/event-stream', 'mcp-session-id': sessionId ?? '' },
+      signal: stream.signal,
+    });
+    expect(attached.status).toBe(200);
+
+    const outcome = await Promise.race([
+      http.close().then(() => 'closed'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 3_000)),
+    ]);
+    stream.abort();
+
+    expect(outcome).toBe('closed');
+    expect(opened.released()).toBe(1);
+  });
 });
 
 describe('startHttp: the session cap', () => {
@@ -441,5 +470,217 @@ describe('startHttp: /ready', () => {
 
     expect(await get(http)).toEqual({ status: 503, body: { status: 'not-ready' } });
     expect((await get(http, { authorization: `Bearer ${token}` })).body).toMatchObject({ reason: 'Ivanti GET 503' });
+  });
+});
+
+/**
+ * The rules the listener applies before anything else — Origin, the door, the health detail gate —
+ * decided in its own routing, so they are exercised here through a real socket. The predicates are
+ * tested alone; nothing else notices if a refactor drops the call to one.
+ */
+describe('startHttp: the listener enforces its rules', () => {
+  const TOKEN = 't'.repeat(40);
+  const EVIL = 'https://evil.example';
+  const TRUSTED = 'http://127.0.0.1';
+  const rejectingVerifier: TokenVerifier = () =>
+    Promise.resolve({ ok: false, status: 401, error: 'invalid_token', description: 'nope' });
+  const acceptingVerifier: TokenVerifier = (token) =>
+    Promise.resolve({
+      ok: true,
+      identity: { subject: token, issuer: 'https://id.example.com', scopes: [], claims: {} },
+    });
+
+  const modes: [string, Partial<Config>, Partial<HttpDeps>, Record<string, string>][] = [
+    ['none', { AUTH_MODE: 'none' }, {}, {}],
+    ['bearer', { AUTH_MODE: 'bearer', BEARER_TOKEN: TOKEN }, {}, { authorization: `Bearer ${TOKEN}` }],
+    [
+      'oauth',
+      { AUTH_MODE: 'oauth', OAUTH_ISSUER: 'https://id.example.com' },
+      { verifier: acceptingVerifier },
+      { authorization: 'Bearer alice' },
+    ],
+  ];
+
+  const send = async (
+    http: HttpServer,
+    path: string,
+    headers: Record<string, string> = {},
+    body?: unknown,
+  ): Promise<{ status: number; headers: Headers; json: unknown }> => {
+    const response = await fetch(urlOf(http).replace(/\/mcp$/, path), {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: {
+        ...(body === undefined
+          ? {}
+          : { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }),
+        ...headers,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const text = await response.text();
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = undefined;
+    }
+    return { status: response.status, headers: response.headers, json };
+  };
+
+  describe.each(modes)('Origin validation under AUTH_MODE=%s', (_mode, overrides, extra, credentials) => {
+    it('refuses an untrusted Origin with 403 and opens no session', async () => {
+      const http = await start(httpConfig(overrides), spyLogger(), deps(extra));
+
+      const refused = await send(http, '/mcp', { ...credentials, origin: EVIL }, INITIALIZE);
+
+      expect(refused.status).toBe(403);
+      expect(refused.json).toEqual({ error: 'forbidden_origin' });
+      expect(http.sessionCount()).toBe(0);
+    });
+
+    it('lets a trusted Origin and an absent one through', async () => {
+      const http = await start(httpConfig(overrides), spyLogger(), deps(extra));
+
+      const trusted = await send(http, '/mcp', { ...credentials, origin: TRUSTED }, INITIALIZE);
+      const absent = await send(http, '/mcp', credentials, INITIALIZE);
+
+      expect(trusted.status).toBe(200);
+      expect(absent.status).toBe(200);
+      expect(http.sessionCount()).toBe(2);
+    });
+
+    it('also refuses an untrusted Origin on GET', async () => {
+      const http = await start(httpConfig(overrides), spyLogger(), deps(extra));
+
+      const refused = await send(http, '/mcp', {
+        ...credentials,
+        origin: EVIL,
+        'mcp-session-id': 'whatever',
+        accept: 'text/event-stream',
+      });
+
+      expect(refused.status).toBe(403);
+    });
+  });
+
+  // Origin is judged before the credential: a page that cannot be trusted learns nothing about the
+  // door, and a refactor that authorizes first would answer 401 here.
+  it('judges the Origin before the credential', async () => {
+    const http = await start(
+      httpConfig({ AUTH_MODE: 'bearer', BEARER_TOKEN: TOKEN }),
+      spyLogger(),
+      deps(),
+    );
+
+    const answer = await send(http, '/mcp', { origin: EVIL, authorization: 'Bearer wrong' }, INITIALIZE);
+
+    expect(answer.status).toBe(403);
+  });
+
+  describe('the 401', () => {
+    it('answers a wrong bearer token with 401 and the generic body', async () => {
+      const http = await start(
+        httpConfig({ AUTH_MODE: 'bearer', BEARER_TOKEN: TOKEN }),
+        spyLogger(),
+        deps(),
+      );
+
+      const answer = await send(http, '/mcp', { authorization: 'Bearer wrong' }, INITIALIZE);
+
+      expect(answer.status).toBe(401);
+      expect(answer.json).toEqual({ error: 'unauthorized' });
+      expect(http.sessionCount()).toBe(0);
+    });
+
+    it('carries the oauth challenge naming the metadata document, for a rejected and a missing token', async () => {
+      const config = httpConfig({
+        AUTH_MODE: 'oauth',
+        OAUTH_ISSUER: 'https://id.example.com',
+        MCP_PUBLIC_URL: 'https://mcp.example.com/mcp',
+      });
+      const http = await start(config, spyLogger(), deps({ verifier: rejectingVerifier }));
+
+      for (const headers of [{ authorization: 'Bearer bad' }, {} as Record<string, string>]) {
+        const answer = await send(http, '/mcp', headers, INITIALIZE);
+
+        expect(answer.status).toBe(401);
+        expect(answer.json).toEqual({ error: 'unauthorized' });
+        const challenge = answer.headers.get('www-authenticate') ?? '';
+        expect(challenge).toMatch(/^Bearer /);
+        expect(challenge).toContain(`resource_metadata="${metadataUrl('https://mcp.example.com/mcp')}"`);
+      }
+    });
+  });
+
+  describe('/health', () => {
+    it('tells an anonymous caller only that the process is alive', async () => {
+      const http = await start(
+        httpConfig({ AUTH_MODE: 'bearer', BEARER_TOKEN: TOKEN }),
+        spyLogger(),
+        deps(),
+      );
+
+      const answer = await send(http, '/health');
+
+      expect(answer.status).toBe(200);
+      expect(answer.json).toEqual(MINIMAL_HEALTH);
+    });
+
+    it('gives the detail to a caller holding the token', async () => {
+      const http = await start(
+        httpConfig({ AUTH_MODE: 'bearer', BEARER_TOKEN: TOKEN }),
+        spyLogger(),
+        deps({ serverName: 'ivanti', serverVersion: '9.9.9' }),
+      );
+
+      const answer = await send(http, '/health', { authorization: `Bearer ${TOKEN}` });
+
+      expect(answer.json).toMatchObject({ status: 'ok', name: 'ivanti', version: '9.9.9', sessions: 0 });
+    });
+
+    it('gives an anonymous caller no more for a wrong token', async () => {
+      const http = await start(
+        httpConfig({ AUTH_MODE: 'bearer', BEARER_TOKEN: TOKEN }),
+        spyLogger(),
+        deps(),
+      );
+
+      expect((await send(http, '/health', { authorization: 'Bearer wrong' })).json).toEqual(MINIMAL_HEALTH);
+    });
+  });
+
+  describe('the oauth metadata document', () => {
+    it('is served unauthenticated, and only in oauth mode', async () => {
+      const oauth = await start(
+        httpConfig({
+          AUTH_MODE: 'oauth',
+          OAUTH_ISSUER: 'https://id.example.com',
+          MCP_PUBLIC_URL: 'https://mcp.example.com/mcp',
+        }),
+        spyLogger(),
+        deps({ verifier: rejectingVerifier }),
+      );
+      const none = await start(httpConfig(), spyLogger(), deps());
+      const path = '/.well-known/oauth-protected-resource/mcp';
+
+      expect((await send(oauth, path)).json).toMatchObject({
+        resource: 'https://mcp.example.com/mcp',
+        authorization_servers: ['https://id.example.com'],
+      });
+      expect((await send(none, path)).status).toBe(404);
+    });
+  });
+
+  // `authorizeRequest` models none of these: the listener refuses to start in a state where oauth
+  // has no verifier or no resource to name.
+  it('refuses to start in oauth mode without a verifier', async () => {
+    const failure = startHttp(
+      httpConfig({ AUTH_MODE: 'oauth', OAUTH_ISSUER: 'https://id.example.com' }),
+      spyLogger(),
+      deps(),
+    );
+
+    await expect(failure).rejects.toBeInstanceOf(ConfigError);
+    await expect(failure).rejects.toThrow(/token verifier/);
   });
 });

@@ -140,6 +140,20 @@ function toEntityMetadata(raw: RawEntityType): EntityMetadata {
 }
 
 /**
+ * A CSDL document that declares no entity type with fields — the answer Ivanti fabricates for an
+ * entity set that does not exist. The one parse failure that is Ivanti's own, definitive answer.
+ */
+export class EmptyCsdlError extends Error {
+  constructor() {
+    super(
+      'CSDL document declares no entity types with fields — Ivanti answers this for an entity ' +
+        'set that does not exist, so the name is almost certainly wrong',
+    );
+    this.name = 'EmptyCsdlError';
+  }
+}
+
+/**
  * Parses one CSDL document.
  *
  * Throws on anything that is not CSDL rather than returning an empty map: a caller that caches an
@@ -167,10 +181,7 @@ export function parseCsdl(xml: string): CsdlDocument {
   }
 
   if (entities.size === 0) {
-    throw new Error(
-      'CSDL document declares no entity types with fields — Ivanti answers this for an entity ' +
-        'set that does not exist, so the name is almost certainly wrong',
-    );
+    throw new EmptyCsdlError();
   }
 
   return { entities };

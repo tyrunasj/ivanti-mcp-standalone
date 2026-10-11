@@ -92,4 +92,61 @@ describe('createTenantOffsetReader', () => {
 
     expect(urls).toHaveLength(1);
   });
+
+  it('ignores free text that ends like an offset and prefers the row’s own clock', async () => {
+    const { offset } = reader({
+      servicereqs: {
+        value: [
+          {
+            Subject: 'Outage window 09:00-12:30',
+            LastModDateTime: '2026-09-28T10:00:00+02:00',
+          },
+        ],
+      },
+    });
+
+    expect((await offset.get())?.minutes).toBe(120);
+  });
+
+  it('never takes the decoy when it is the only candidate', async () => {
+    const { offset } = reader({
+      servicereqs: { value: [{ Subject: 'Outage window 09:00-12:30' }] },
+    });
+
+    expect(await offset.get()).toBeUndefined();
+  });
+
+  it.each(['2026-09-28T10:00:00+99:99', '2026-09-28T10:00:00+15:00', '2026-09-28T10:00:00+05:60'])(
+    'rejects the impossible offset in %s',
+    async (stamp) => {
+      const { offset } = reader({ servicereqs: { value: [{ LastModDateTime: stamp }] } });
+
+      expect(await offset.get()).toBeUndefined();
+    },
+  );
+
+  it('accepts fractional seconds, +05:45 and +14:00', async () => {
+    for (const [stamp, minutes] of [
+      ['2026-09-28T10:00:00.123+05:45', 345],
+      ['2026-09-28T10:00+14:00', 840],
+    ] as const) {
+      const { offset } = reader({ servicereqs: { value: [{ LastModDateTime: stamp }] } });
+
+      expect((await offset.get())?.minutes).toBe(minutes);
+    }
+  });
+
+  it('does not remember a failure: the next call looks again', async () => {
+    const { connection } = connectionFixture({ responses: {} });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Ivanti 500'))
+      .mockRejectedValueOnce(new Error('Ivanti 500'))
+      .mockRejectedValueOnce(new Error('Ivanti 500'))
+      .mockResolvedValue({ value: [{ LastModDateTime: '2026-09-28T10:00:00+02:00' }] });
+    const offset = createTenantOffsetReader({ ...connection.transport, request }, logger());
+
+    expect(await offset.get()).toBeUndefined();
+    expect((await offset.get())?.minutes).toBe(120);
+  });
 });

@@ -18,10 +18,14 @@ const debugLogger = (): { debug: (message: string, context?: Record<string, unkn
 });
 
 const options = (overrides: Partial<RoleChoiceOptions> = {}): RoleChoiceOptions => ({
-  mode: 'full',
-  enduserRole: 'SelfServiceMobile',
+  policy: { mode: 'full', setting: 'IVANTI_IMPERSONATION_ROLE' },
   activeRole: '',
   ...overrides,
+});
+
+const pinned = (pinnedRole: string, activeRole = ''): RoleChoiceOptions => ({
+  policy: { mode: 'full', pinnedRole, setting: 'IVANTI_IMPERSONATION_ROLE' },
+  activeRole,
 });
 
 const role = (name: string, selfService?: boolean): IvantiRole => ({
@@ -81,18 +85,21 @@ describe('parseNamedRoles', () => {
 
 describe('chooseRole in enduser mode', () => {
   const enduser = (overrides: Partial<RoleChoiceOptions> = {}): RoleChoiceOptions =>
-    options({ mode: 'enduser', ...overrides });
+    options({
+      policy: { mode: 'enduser', role: 'SelfServiceMobile', setting: 'ENDUSER_ROLE' },
+      ...overrides,
+    });
 
   it('takes the configured role when the person holds it', () => {
     const choice = chooseRole([ANALYST, PORTAL], enduser({ activeRole: 'ServiceDeskAnalyst' }));
 
-    expect(choice).toEqual({ ok: true, role: 'SelfServiceMobile', mustSelect: true });
+    expect(choice).toEqual({ ok: true, role: 'SelfServiceMobile', mustSelect: true, basis: 'configured' });
   });
 
   it('does not call SelectRole when the active role is already the one wanted', () => {
     const choice = chooseRole([PORTAL], enduser({ activeRole: 'SelfServiceMobile' }));
 
-    expect(choice).toMatchObject({ ok: true, mustSelect: false });
+    expect(choice).toMatchObject({ ok: true, mustSelect: false, basis: 'configured' });
   });
 
   it('falls back to another self-service role, saying which and why', () => {
@@ -114,8 +121,10 @@ describe('chooseRole in enduser mode', () => {
   // An unflagged role is unknown, not self-service. Guessing here is what would quietly open an
   // agent role in an end-user deployment.
   it('does not treat an unflagged role as self-service', () => {
-    const choice = chooseRole([role('Mystery')], enduser({ activeRole: 'Mystery' }));
+    const choice = chooseRole([role('Mystery'), role('Other')], enduser({ activeRole: 'Mystery' }));
 
+    // Kept as the active role, never picked up as a self-service one on the 'flag' basis.
+    expect(choice).toMatchObject({ ok: true, role: 'Mystery', basis: 'active', mustSelect: false });
     expect(choice).toHaveProperty('note', expect.stringContaining('no self-service role'));
   });
 
@@ -130,7 +139,7 @@ describe('chooseRole in full mode', () => {
   it('keeps the role Ivanti made active', () => {
     const choice = chooseRole([ANALYST, PORTAL], options({ activeRole: 'ServiceDeskAnalyst' }));
 
-    expect(choice).toEqual({ ok: true, role: 'ServiceDeskAnalyst', mustSelect: false });
+    expect(choice).toEqual({ ok: true, role: 'ServiceDeskAnalyst', mustSelect: false, basis: 'active' });
   });
 
   it('moves off a self-service active role onto a working one', () => {
@@ -149,7 +158,7 @@ describe('chooseRole in full mode', () => {
   it('takes the pinned role when the person holds it', () => {
     const choice = chooseRole(
       [ANALYST, role('Admin', false)],
-      options({ pinnedRole: 'Admin', activeRole: 'ServiceDeskAnalyst' }),
+      pinned('Admin', 'ServiceDeskAnalyst'),
     );
 
     expect(choice).toMatchObject({ ok: true, role: 'Admin', mustSelect: true });
@@ -159,7 +168,7 @@ describe('chooseRole in full mode', () => {
   it('refuses a pinned role the person does not hold, and names what they do', () => {
     const choice = chooseRole(
       [ANALYST],
-      options({ pinnedRole: 'Admin', activeRole: 'ServiceDeskAnalyst' }),
+      pinned('Admin', 'ServiceDeskAnalyst'),
     );
 
     expect(choice).toMatchObject({ ok: false });
@@ -183,7 +192,7 @@ describe('chooseRole in full mode', () => {
 
   // Role ids are Ivanti's own text and their casing is not guaranteed to match configuration.
   it('matches role names without regard to case', () => {
-    const choice = chooseRole([ANALYST], options({ pinnedRole: 'servicedeskanalyst' }));
+    const choice = chooseRole([ANALYST], pinned('servicedeskanalyst'));
 
     expect(choice).toMatchObject({ ok: true, role: 'ServiceDeskAnalyst' });
   });
@@ -267,5 +276,17 @@ describe('selectRole', () => {
     await expect(selectRole({ call: call as never }, 'Admin')).rejects.toBeInstanceOf(
       RoleNotAppliedError,
     );
+  });
+});
+
+describe('chooseRole basis', () => {
+  it('says what a choice rested on', () => {
+    expect(chooseRole([ANALYST, PORTAL], pinned('ServiceDeskAnalyst'))).toMatchObject({ basis: 'configured' });
+    expect(chooseRole([ANALYST, PORTAL], options({ activeRole: 'ServiceDeskAnalyst' }))).toMatchObject({
+      basis: 'active',
+    });
+    expect(chooseRole([PORTAL, ANALYST], options())).toMatchObject({ basis: 'flag' });
+    expect(chooseRole([role('A'), role('B')], options())).toMatchObject({ basis: 'order' });
+    expect(chooseRole([PORTAL], options({ activeRole: 'SelfServiceMobile' }))).toMatchObject({ basis: 'only' });
   });
 });

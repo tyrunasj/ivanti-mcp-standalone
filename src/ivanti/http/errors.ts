@@ -12,8 +12,7 @@ const ERROR_BODY_MAX_BYTES = 1024;
  * and `/rest/Attachment` answers `400` with "not found" in the body. Callers that treat 404 as
  * "absent" and 400 as "my request was wrong" get both cases backwards, so the dialect is
  * encoded here once rather than re-derived at each call site.
- */
-/**
+ *
  * `ISM_4000` on its own is NOT one of these, though it once was.
  *
  * It is Ivanti's code for "invalid request payload" generally — a missing record answers it with
@@ -154,22 +153,20 @@ export function pathOf(url: string): string {
   }
 }
 
+/**
+ * Caps a body at `maxBytes` of UTF-8. The cap is in bytes, so the cut is made in bytes: slicing
+ * UTF-16 units kept up to three times the cap for a non-Latin body. The cut backs off to a
+ * character boundary rather than leaving half a character behind.
+ */
 export function truncate(body: string, maxBytes: number = ERROR_BODY_MAX_BYTES): string {
-  if (Buffer.byteLength(body, 'utf8') <= maxBytes) return body;
-  return `${body.slice(0, maxBytes)}… [truncated]`;
+  const bytes = Buffer.from(body, 'utf8');
+  if (bytes.length <= maxBytes) return body;
+  let end = maxBytes;
+  // A continuation byte (10xxxxxx) cannot start a character, so the cut would split one.
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+  return `${bytes.subarray(0, end).toString('utf8')}… [truncated]`;
 }
 
-/**
- * Redacts every credential the call carried — the API key, a session SID — then caps the body.
- *
- * Ivanti echoes submitted values back in failures, and the ASMX session hands the key over as a
- * **body parameter** rather than a header — so a fault on that call is the realistic way the
- * credential ends up in a log line or in front of the model.
- *
- * Only the key itself, never a generic "key-shaped token" pass: Ivanti RecIds are 32-char hex and
- * the model needs to read them out of error text. `overlord-service` removed exactly such a pass
- * for that reason.
- */
 /**
  * Session internals Ivanti volunteers in an unhandled-exception body.
  *
@@ -194,21 +191,50 @@ export function truncate(body: string, maxBytes: number = ERROR_BODY_MAX_BYTES):
  * escape .NET serialisers write for `"`. So the delimiter is a CLASS of tokens, and the closing
  * quote must be the same token as the opening one.
  */
-const QUOTE = String.raw`\\*(?:"|&(?:amp;)*(?:quot|#0*34|#x0*22);)|\\+u0022`;
+// Escaping depth and entity repetition are bounded: unbounded `\\*` and `(?:amp;)*` make a long run
+// of backslashes or `&amp;amp;…` quadratic, because every offset inside the run starts a scan to
+// its end. No real body nests this deep.
+const MAX_ESCAPES = 32;
+const MAX_AMP = 8;
+const QUOTE = String.raw`\\{0,${MAX_ESCAPES}}(?:"|&(?:amp;){0,${MAX_AMP}}(?:quot|#0*34|#x0*22);)|\\{1,${MAX_ESCAPES}}u0022`;
 
 const SENSITIVE_FIELD_NAMES =
   'SessionId|SessionKey|ConnectionString|TenantId|LoginId|Hostname|ServiceName|ClientIpAddress';
 
-// The value runs to the first closing quote that is not itself escaped. The value class admits
-// anything: an earlier one excluded the backslash, and a domain-qualified login
-// (`\"LoginId\":\"CORP\\\\jsmith\"`) then failed to match at all and went through whole while the
-// fields either side of it redacted correctly. `(?<!\\)(?:\\\\)*` lets a value end in an escaped
-// backslash, while a lone backslash before the quote means the quote belongs to the value.
-// Unbounded on purpose: a match that runs long redacts too much, a bounded one that misses leaks.
-const SENSITIVE_FIELDS = new RegExp(
-  String.raw`(${QUOTE})(${SENSITIVE_FIELD_NAMES})\1\s*:\s*\1[\s\S]*?(?<!\\)(?:\\\\)*\1`,
+// Only the OPENER is a regex: `"SessionId":"` in any of the quote spellings. Where the value ends
+// is found by `fieldValueEnd`, a linear scan. A single regex with a lazy `[\s\S]*?` to the closer
+// was quadratic on an unbounded body that Ivanti echoes, so one caller could stall every session.
+const SENSITIVE_FIELD_OPENERS = new RegExp(
+  String.raw`(${QUOTE})(${SENSITIVE_FIELD_NAMES})\1\s*:\s*\1`,
   'gi',
 );
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Where a field's value ends: the first closing quote token that is not itself escaped.
+ *
+ * The value admits anything, so a domain-qualified login (`\"LoginId\":\"CORP\\\\jsmith\"`) is
+ * redacted whole. A quote is the closer when the backslashes before it number the token's own
+ * leading backslashes plus an even count; an odd extra backslash means the quote belongs to the
+ * value. Returns the end of the body when there is no closer: an opener with no closer must not
+ * leave its value behind, so the rest of the body is the value.
+ */
+function fieldValueEnd(body: string, from: number, quote: string): number {
+  const own = /^\\*/.exec(quote)?.[0].length ?? 0;
+  const token = quote.slice(own);
+  const finder = new RegExp(escapeRegExp(token), 'gi');
+  finder.lastIndex = from;
+  for (let hit = finder.exec(body); hit !== null; hit = finder.exec(body)) {
+    let backslashes = 0;
+    while (hit.index - backslashes - 1 >= from && body[hit.index - backslashes - 1] === '\\') {
+      backslashes += 1;
+    }
+    if (backslashes >= own && (backslashes - own) % 2 === 0) return hit.index + token.length;
+    if (hit[0] === '') finder.lastIndex += 1;
+  }
+  return body.length;
+}
 
 /**
  * The same fields again, as XML elements.
@@ -220,15 +246,45 @@ const SENSITIVE_FIELDS = new RegExp(
  * Its brackets come in the same variety the quotes do — `&lt;` when an HTML error page quotes the
  * XML, `<` when a JSON body does — and the closing tag is spelled like the opening one.
  */
-const OPEN_BRACKET = String.raw`<|&(?:amp;)*(?:lt|#0*60|#x0*3c);|\\+u003c`;
-const CLOSE_BRACKET = String.raw`>|&(?:amp;)*(?:gt|#0*62|#x0*3e);|\\+u003e`;
+const OPEN_BRACKET = String.raw`<|&(?:amp;){0,${MAX_AMP}}(?:lt|#0*60|#x0*3c);|\\{1,${MAX_ESCAPES}}u003c`;
+const CLOSE_BRACKET = String.raw`>|&(?:amp;){0,${MAX_AMP}}(?:gt|#0*62|#x0*3e);|\\{1,${MAX_ESCAPES}}u003e`;
 const SENSITIVE_ELEMENT_NAMES =
   '(?:DB)?ConnectionString|SessionId|SessionKey|PrimaryEncryptionKey|SecondaryKeyParams|' +
   'TenantId|LoginId|Hostname|ServiceName|ClientIpAddress';
-const SENSITIVE_ELEMENTS = new RegExp(
-  String.raw`(${OPEN_BRACKET})(${SENSITIVE_ELEMENT_NAMES})(${CLOSE_BRACKET})[\s\S]*?\1\\*\/\2\3`,
+const SENSITIVE_ELEMENT_OPENERS = new RegExp(
+  String.raw`(${OPEN_BRACKET})(${SENSITIVE_ELEMENT_NAMES})(${CLOSE_BRACKET})`,
   'gi',
 );
+
+/** Where an element's closing tag ends, or the end of the body when it has none (see above). */
+function elementEnd(body: string, from: number, open: string, element: string, close: string): number {
+  const closer = new RegExp(
+    `${escapeRegExp(open)}\\\\{0,${String(MAX_ESCAPES)}}\\/${escapeRegExp(element)}${escapeRegExp(close)}`,
+    'gi',
+  );
+  closer.lastIndex = from;
+  const hit = closer.exec(body);
+  return hit === null ? body.length : hit.index + hit[0].length;
+}
+
+/** Replaces each match of `openers` with `redact(...)`, consuming through the value's end. */
+function redactSpans(
+  body: string,
+  openers: RegExp,
+  endOf: (match: RegExpExecArray) => number,
+  redact: (match: RegExpExecArray) => string,
+): string {
+  openers.lastIndex = 0;
+  let out = '';
+  let copied = 0;
+  for (let match = openers.exec(body); match !== null; match = openers.exec(body)) {
+    const end = endOf(match);
+    out += body.slice(copied, match.index) + redact(match);
+    copied = end;
+    openers.lastIndex = end;
+  }
+  return out + body.slice(copied);
+}
 
 /**
  * Every spelling of a credential worth looking for. A SID is `tenant#guid#n`, and echoed back
@@ -237,18 +293,34 @@ const SENSITIVE_ELEMENTS = new RegExp(
 const spellingsOf = (secret: string): string[] =>
   secret === '' ? [] : [...new Set([secret, encodeURIComponent(secret)])];
 
+/**
+ * Redacts every credential the call carried — the API key, a session SID — then caps the body.
+ *
+ * Ivanti echoes submitted values back in failures, and the ASMX session hands the key over as a
+ * **body parameter** rather than a header — so a fault on that call is the realistic way the
+ * credential ends up in a log line or in front of the model.
+ *
+ * Only the key itself, never a generic "key-shaped token" pass: Ivanti RecIds are 32-char hex and
+ * the model needs to read them out of error text. `overlord-service` removed exactly such a pass
+ * for that reason.
+ */
 export function scrubErrorBody(body: string, ...secrets: string[]): string {
   const withoutKey = secrets
     .flatMap(spellingsOf)
     .reduce((text, secret) => text.split(secret).join('[REDACTED-API-KEY]'), body);
-  const withoutInternals = withoutKey.replace(
-    SENSITIVE_FIELDS,
-    (_match, quote: string, field: string) => `${quote}${field}${quote}:${quote}[REDACTED]${quote}`,
+  const withoutInternals = redactSpans(
+    withoutKey,
+    SENSITIVE_FIELD_OPENERS,
+    (match) => fieldValueEnd(withoutKey, match.index + match[0].length, match[1] ?? ''),
+    (match) => `${match[1] ?? ''}${match[2] ?? ''}${match[1] ?? ''}:${match[1] ?? ''}[REDACTED]${match[1] ?? ''}`,
   );
-  const withoutElements = withoutInternals.replace(
-    SENSITIVE_ELEMENTS,
-    (_match, open: string, element: string, close: string) =>
-      `${open}${element}${close}[REDACTED]${open}/${element}${close}`,
+  const withoutElements = redactSpans(
+    withoutInternals,
+    SENSITIVE_ELEMENT_OPENERS,
+    (match) =>
+      elementEnd(withoutInternals, match.index + match[0].length, match[1] ?? '', match[2] ?? '', match[3] ?? ''),
+    (match) =>
+      `${match[1] ?? ''}${match[2] ?? ''}${match[3] ?? ''}[REDACTED]${match[1] ?? ''}/${match[2] ?? ''}${match[3] ?? ''}`,
   );
   return truncate(withoutElements);
 }

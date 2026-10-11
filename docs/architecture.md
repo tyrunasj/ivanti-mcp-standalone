@@ -26,7 +26,21 @@ are in [`notes.md`](./notes.md). The directory map is in `CLAUDE.md`.
 - **`tools/` is the tuned surface** — descriptions, arguments, annotations — so it sits at the top
   of `src/`. It never builds a URL or parses a response; that is `ivanti/`, which knows nothing
   about MCP.
-- **One reason to change per file**, tests beside it (`foo.ts` / `foo.test.ts`).
+- **One reason to change per file**, tests beside it (`foo.ts` / `foo.test.ts`). The tool call
+  pipeline (identity gate, mode narrowing, audit and usage wrapping) lives in `tools/call/`,
+  `selectTools()` in `tools/select-tools.ts` with the audience narrowing in `tools/audience.ts`, and
+  `register-tools.ts` only composes them. `runTool` maps a failure to its reply through the
+  `REFUSALS` table; a refusal class missing from it fails `run-tool.refusals.test.ts`.
+- **`ivanti/` imports nothing above it.** Request counts reach the usage line and the metrics
+  through `ivanti/http/request-observer.ts`, wired by `src/observe-ivanti.ts`; the ASMX call stack
+  and its envelope rule are in `ivanti/session/asmx-calls.ts`. An ESLint rule holds the direction.
+- **One object-id conversion.** `toObjectId` / `fromObjectId` in `ivanti/metadata/entity-names.ts`
+  are the only place a CSDL name becomes an AdminUI object id (`Base#Sub`) and back; a second,
+  hand-rolled copy once made every subtype look like it had no form.
+- **Shared read plumbing** in `tools/shared/`: `read-preflight.ts` (one filter check for every
+  tool that takes `filter`), `compact-rows.ts` (the compact default and its note),
+  `zero-note.ts` (one empty-result caveat, with the impersonation retraction), `try-read.ts` (a
+  secondary read that says so when it could not be made) and `ivanti/records/read-record.ts`.
 - **Config loads in three phases, in this order:** secrets (`*_FILE` → value), then shape
   (`env-schema.ts`, *what a setting is*), then rules (`validate-config.ts`, *which combinations
   are allowed*). "Bearer mode needs a token" cannot be judged before the secret file is read. The

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Logger } from '../../logger.js';
-import { servesEntity, toCsdlEntity } from '../metadata/entity-names.js';
+import { servesEntity, toObjectId } from '../metadata/entity-names.js';
 import type { IvantiSession } from './asmx-session.js';
 import type { WorkspaceCatalog } from './workspaces.js';
 
@@ -124,7 +124,7 @@ export function createFormContext(
   const cache = new Map<string, Promise<ResolvedForm | undefined>>();
 
   const resolve = async (entityRef: string): Promise<ResolvedForm | undefined> => {
-    const objectId = `${toCsdlEntity(entityRef).replace(/__/g, '#')}#`.replace(/##$/, '#');
+    const objectId = toObjectId(entityRef);
     const candidates = await workspaces.list();
 
     // The workspace whose object this is, first; the rest are not worth walking.
@@ -211,7 +211,7 @@ export function createFormContext(
 
   return {
     get: (entityRef: string): Promise<ResolvedForm | undefined> => {
-      const key = toCsdlEntity(entityRef).toLowerCase();
+      const key = toObjectId(entityRef).toLowerCase();
       const cached = cache.get(key);
       if (cached !== undefined) return cached;
 

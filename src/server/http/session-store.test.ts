@@ -142,4 +142,39 @@ describe('SessionStore', () => {
     expect(sessions.drain()).toHaveLength(2);
     expect(sessions.size).toBe(0);
   });
+
+  describe('a running request versus an attached stream', () => {
+    it('does not sweep a session with a request in flight, however old', () => {
+      const sessions = store(3, 100);
+      sessions.set('writing', 'x');
+      sessions.begin('writing');
+      clock += 10_000;
+
+      expect(sessions.sweep()).toEqual([]);
+
+      sessions.end('writing');
+      clock += 101;
+      expect(sessions.sweep()).toEqual([{ id: 'writing', value: 'x' }]);
+    });
+
+    it('does not sweep a session whose client is attached, and counts the detach as use', () => {
+      const sessions = store(3, 100);
+      sessions.set('a', 'x');
+      sessions.attach('a');
+      clock += 10_000;
+
+      expect(sessions.sweep()).toEqual([]);
+
+      sessions.detach('a');
+      expect(sessions.leastRecentlySeen(() => true)).toMatchObject({ idleMs: 0, attached: 0 });
+    });
+
+    it('tells the two apart: a stream is not a request in flight', () => {
+      const sessions = store(3);
+      sessions.set('a', 'x');
+      sessions.attach('a');
+
+      expect(sessions.leastRecentlySeen(() => true)).toMatchObject({ inFlight: 0, attached: 1 });
+    });
+  });
 });

@@ -473,6 +473,7 @@ STDIO_TRANSPORT_ON=false
 HTTP_TRANSPORT_ON=true
 AUTH_MODE=bearer
 BEARER_TOKEN_FILE=/run/secrets/bearer-token
+MCP_PORT=3000                                    # no default; keep it equal to the port in MCP_PUBLIC_URL and the publish
 MCP_PUBLIC_URL=https://mcp.example.com/mcp
 TRUSTED_ORIGINS=https://claude.ai
 ```
@@ -602,6 +603,13 @@ Ivanti's place is asked again on the next call.
 | `metrics listen beyond this machine with no token` at **warn** | `METRICS_BIND` is not loopback and no `METRICS_TOKEN` is set. Expected in a container published on the host's `127.0.0.1`, or a pod behind a NetworkPolicy: the server sees only its own bind. Otherwise set a token. |
 | `/metrics` answers `403` in a browser | By design: a request with `Origin` or `Sec-Fetch-Site` is a browser's, refused so a web page cannot read metrics through DNS rebinding. Use `curl` or Prometheus. |
 | `/metrics` answers `401` | `METRICS_TOKEN` is set and the scraper sent none, or another. Prometheus: `authorization: { credentials_file: … }` pointing at a copy of the same token. |
+| `<setting> is set, but AUTH_MODE is …, which never reads it` | `BEARER_TOKEN` outside `AUTH_MODE=bearer`, or any `OAUTH_*` outside `oauth`: a leftover from the mode you moved away from. Remove it, or set the mode that reads it. |
+| `IVANTI_MAX_TIER is set, but no tenant is configured` / `IVANTI_IMPERSONATION_ROLE is set, but impersonation is not configured` | The setting would sit there looking as though it did something. Configure the tenant, or the ConfigDB pair, or remove it. |
+| `<KEY>_FILE points at …, which could not be read` | The path is unreadable (permissions, mount); the message names the setting that pointed at it. |
+| `IVANTI_MAX_CONCURRENT_REQUESTS … is outside 1–256` / `MCP_MAX_CALLS_PER_MINUTE … is outside 1–10000` | Out of the range that protects the tenant without stopping it. |
+| `OAUTH_REQUIRED_SCOPES carries …, which cannot appear in a WWW-Authenticate header` | A quote, backslash or non-ASCII character in a scope or in `MCP_PUBLIC_URL`; the 401 challenge would advertise another value than configured. |
+| The tenant refused the API key at startup, exit `78` | A 401/403 from the base-path probe is a setting to correct (`IVANTI_API_KEY`), not an outage, so a supervisor does not retry it forever. |
+| `Ivanti's $metadata could not be read just now` | A transient outage: nothing was changed and the answer says nothing about the object's name. Try again. |
 | `MCP_MAX_SESSIONS_PER_SUBJECT needs AUTH_MODE=oauth` | Only a verified token names a subject; under `none` and `bearer` every caller is the same one. Remove it, or use `oauth`. |
 | `Authorization server metadata at … names the signing keys at "http://…"` | The IdP's discovery document publishes its keys over plain http. Set `OAUTH_JWKS_URI` to their https address. |
 | `the IdP signing keys could not be refreshed; verifying with the last good set` at **warn** | The IdP is unreachable. Tokens keep verifying against the keys already loaded; one signed by a key those lack answers 503 until the IdP is back. |

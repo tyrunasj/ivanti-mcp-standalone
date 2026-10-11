@@ -40,12 +40,17 @@ server:
   authMode: bearer      # none | bearer | oauth
   port: 3000
   maxSessions: 100
-  # MCP_MAX_SESSIONS_PER_SUBJECT — optional; see .env.example. Empty = unset.
+  # MCP_MAX_SESSIONS_PER_SUBJECT — optional; see .env.example. Empty = unset. oauth only,
+  # and no more than maxSessions.
   maxSessionsPerSubject: ""
   # MCP_MAX_CALLS_PER_MINUTE — tool calls per conversation per minute. Empty = the
   # server default (120).
   maxCallsPerMinute: ""
   sessionIdleTtlSeconds: 1800
+  # MCP_IDENTITY_IDLE_TTL_SECONDS — how long a conversation may go quiet before the pinned
+  # person is forgotten. Separate from the session TTL above: that bounds memory, this bounds
+  # whose records stay reachable.
+  identityIdleTtlSeconds: 1800
   logLevel: info        # debug logs every Ivanti query, which names people; diagnose, then revert
 
   # Required when mode is enduser. Technical Business Object names; the gate is
@@ -82,11 +87,17 @@ ivanti:
 
 oauth:
   issuer: ""
+  # Accepted `aud` values: one string, or a list (a token is accepted when its aud holds any).
+  # Empty = server.publicUrl.
   audience: ""
   jwksUri: ""
   scopesSupported: []
   requiredScopes: []
   identityClaim: ""
+  # OAUTH_REQUIRE_TYP — true refuses a token whose header `typ` is not `at+jwt` (RFC 9068), which
+  # is what stops an ID token whose `aud` is the client id from verifying. Leave false for an IdP
+  # that types its access tokens `JWT` (Entra v2, stock Keycloak): they would all be refused.
+  requireTyp: false
 
 # The API key and bearer token are mounted as FILES, never as environment
 # variables: `kubectl describe pod` and /proc/<pid>/environ both show the

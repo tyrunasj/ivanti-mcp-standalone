@@ -26,7 +26,6 @@ const session = (): { session: IvantiSession; calls: string[] } => {
     calls,
     session: {
       identity: () => Promise.resolve({ role: 'Admin' }),
-      identityIfKnown: () => ({ role: 'Admin' }),
       callHandler: () => Promise.reject(new Error('unused')),
       uploadToHandler: () => Promise.reject(new Error('no handler in this fixture')),
       call: (servicePath: string, method: string) => {
@@ -82,7 +81,6 @@ describe('listWorkspaceObjects', () => {
     let attempts = 0;
     const live = {
       identity: () => Promise.resolve({ role: 'Admin' }),
-      identityIfKnown: () => ({ role: 'Admin' }),
       call: (_service: string, method: string) => {
         if (method === 'GetRoleWorkspaces') {
           attempts += 1;

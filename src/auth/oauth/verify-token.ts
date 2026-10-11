@@ -6,6 +6,7 @@ import {
   createRemoteJWKSet,
   errors,
   jwtVerify,
+  type JWTHeaderParameters,
   type JWTPayload,
   type JWTVerifyGetKey,
 } from 'jose';
@@ -53,6 +54,11 @@ export interface TokenVerifierOptions {
    */
   audience: readonly string[];
   requiredScopes?: readonly string[];
+  /**
+   * Require the RFC 9068 `typ: at+jwt` header (jose also accepts `application/at+jwt`). Opt-in,
+   * because Entra v2 and stock Keycloak type their access tokens `JWT` and would be refused.
+   */
+  requireAccessTokenTyp?: boolean;
   clockToleranceSeconds?: number;
   keyResolver: JWTVerifyGetKey;
   /**
@@ -222,6 +228,22 @@ function describeFailure(error: unknown): string {
   }
 }
 
+/** Claims an access token has no business carrying and an OIDC ID token always can. */
+const ID_TOKEN_ONLY_CLAIMS = ['nonce', 'at_hash', 'c_hash'] as const;
+
+/**
+ * Whether this is recognisably an ID token: a person's proof of sign-in, handed to front-ends and
+ * kept by SPAs, never a credential for this API. Partial by nature — an ID token without any of
+ * these markers looks like an access token — so `OAUTH_REQUIRED_SCOPES` (ID tokens carry no
+ * `scope`/`scp`), a distinct API audience or `OAUTH_REQUIRE_TYP` is the complete control.
+ */
+export function looksLikeIdToken(header: JWTHeaderParameters, claims: JWTPayload): boolean {
+  const typ = typeof header.typ === 'string' ? header.typ.toLowerCase() : '';
+  if (typ === 'id' || typ === 'id_token') return true;
+  if (ID_TOKEN_ONLY_CLAIMS.some((claim) => claim in claims)) return true;
+  return (claims as { token_use?: unknown }).token_use === 'id';
+}
+
 export function createTokenVerifier(options: TokenVerifierOptions): TokenVerifier {
   const required = options.requiredScopes ?? [];
 
@@ -244,6 +266,7 @@ export function createTokenVerifier(options: TokenVerifierOptions): TokenVerifie
     }
 
     let claims: JWTPayload;
+    let header: JWTHeaderParameters;
 
     try {
       const result = await jwtVerify(token, options.keyResolver, {
@@ -255,8 +278,10 @@ export function createTokenVerifier(options: TokenVerifierOptions): TokenVerifie
         // permanent credential for the whole tool surface.
         requiredClaims: ['exp'],
         clockTolerance: options.clockToleranceSeconds ?? 30,
+        ...(options.requireAccessTokenTyp === true ? { typ: 'at+jwt' } : {}),
       });
       claims = result.payload;
+      header = result.protectedHeader;
     } catch (error) {
       if (isUnreachable(error)) {
         // Not the caller's fault, and the only place the cause is visible at all: `describeFailure`
@@ -282,6 +307,15 @@ export function createTokenVerifier(options: TokenVerifierOptions): TokenVerifie
         status: 401,
         error: 'invalid_token',
         description: describeFailure(error),
+      };
+    }
+
+    if (looksLikeIdToken(header, claims)) {
+      return {
+        ok: false,
+        status: 401,
+        error: 'invalid_token',
+        description: 'This is an ID token, not an access token',
       };
     }
 

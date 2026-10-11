@@ -6,7 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { connectionFixture, entityFixture } from '../../ivanti/connection.fixture.js';
 import type { Logger } from '../../logger.js';
 import { OPEN_GATE } from '../shared/object-gate.js';
-import { OPEN_ACTIONS } from '../shared/action-gate.js';
+import { configFixture } from '../../config/config.fixture.js';
+import { OPEN_ACTIONS, createActionGate } from '../shared/action-gate.js';
 import { createListQuickActionsTool } from './list-quick-actions.js';
 import { createPreviewQuickActionTool } from './preview-quick-action.js';
 import { createRunQuickActionTool } from './run-quick-action.js';
@@ -219,5 +220,194 @@ describe('run_quick_action', () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain('change nothing');
+  });
+});
+
+/** Drives the protocol call by call, recording what each SaveDataExecuteAction was sent. */
+function protocol(options: {
+  prompts: unknown[];
+  records?: unknown[];
+  actions?: typeof OPEN_ACTIONS;
+}) {
+  const { connection } = connectionFixture({
+    entities: { incident: entityFixture('incident') },
+    capability: { tier: 'session', identity: { role: 'Admin' } },
+    sessionCalls: { GetObjectQuickActions: ACTIONS, ...FORM_CHAIN },
+  });
+  const saves: Record<string, unknown>[] = [];
+  const original = connection.session.call.bind(connection.session);
+  const session: typeof connection.session = {
+    ...connection.session,
+    call: <T,>(service: string, method: string, args?: Record<string, unknown>): Promise<T> => {
+      if (method !== 'SaveDataExecuteAction') return original<T>(service, method, args);
+      saves.push(args ?? {});
+      return Promise.resolve(
+        args?.shouldSave === true
+          ? { saved: true }
+          : { promptParams: options.prompts, parentActionExecutionInstanceId: 'token-1' },
+      ) as Promise<T>;
+    },
+  };
+  // The first read is the writable check on the record; the rest are before and after.
+  const rows: unknown[] = [{ RecId: 'rec-1' }, ...(options.records ?? [])];
+  vi.spyOn(connection.transport, 'request').mockImplementation((() =>
+    rows.length === 0
+      ? Promise.reject(new Error('record read refused'))
+      : Promise.resolve(rows.shift())));
+  return {
+    saves,
+    deps: {
+      connection: { ...connection, session },
+      gate: OPEN_GATE,
+      logger: logger(),
+      ownRecordsOnly: false,
+      actions: options.actions ?? OPEN_ACTIONS,
+    },
+  };
+}
+
+const committed = (saves: Record<string, unknown>[]): Array<{ FieldName: string; Value: unknown }> =>
+  (saves.find((call) => call.shouldSave === true)?.promptParams ?? []) as Array<{
+    FieldName: string;
+    Value: unknown;
+  }>;
+
+describe('run_quick_action answers', () => {
+  const NOTES = [{ FieldName: 'Notes', Label: 'Notes' }];
+
+  it('settles a mis-cased key to the prompt’s own spelling, so the value is sent', async () => {
+    const { deps: d, saves } = protocol({ prompts: NOTES });
+
+    const result = await createRunQuickActionTool(d).handler({ ...ARGS, answers: { notes: 'x' } });
+
+    expect(result.isError).toBeUndefined();
+    expect(committed(saves)).toEqual([{ FieldName: 'Notes', Label: 'Notes', Value: 'x' }]);
+  });
+
+  it('refuses a key that matches no prompt, naming it and the real ones, and commits nothing', async () => {
+    const { deps: d, saves } = protocol({ prompts: NOTES });
+
+    const result = await createRunQuickActionTool(d).handler({
+      ...ARGS,
+      answers: { Notes: 'x', Nonexistent: 'y' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('Nonexistent');
+    expect(text(result)).toContain('Notes');
+    expect(text(result)).toContain('Nothing was run');
+    expect(saves.some((call) => call.shouldSave === true)).toBe(false);
+  });
+
+  it('refuses any answer when the action asks for nothing', async () => {
+    const { deps: d, saves } = protocol({ prompts: [] });
+
+    const result = await createRunQuickActionTool(d).handler({ ...ARGS, answers: { Notes: 'x' } });
+
+    expect(result.isError).toBe(true);
+    expect(saves.some((call) => call.shouldSave === true)).toBe(false);
+  });
+
+  it('refuses two keys that differ only by case', async () => {
+    const { deps: d, saves } = protocol({ prompts: NOTES });
+
+    const result = await createRunQuickActionTool(d).handler({
+      ...ARGS,
+      answers: { Notes: 'a', notes: 'b' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(saves.some((call) => call.shouldSave === true)).toBe(false);
+  });
+
+  it('counts a required prompt answered under another case as answered', async () => {
+    const { deps: d } = protocol({ prompts: [{ FieldName: 'Note', Required: true }] });
+
+    const result = await createRunQuickActionTool(d).handler({ ...ARGS, answers: { note: 'hi' } });
+
+    expect(result.isError).toBeUndefined();
+  });
+});
+
+describe('run_quick_action reads the record around the commit', () => {
+  it('reports no changedFields when the record is identical before and after', async () => {
+    const row = { RecId: 'rec-1', Status: 'Active' };
+    const { deps: d } = protocol({ prompts: [], records: [row, { ...row }] });
+
+    const result = body(await createRunQuickActionTool(d).handler(ARGS));
+
+    expect(result).toMatchObject({ ran: true, saved: true });
+    expect(result).not.toHaveProperty('changedFields');
+  });
+
+  it('names the fields that differ, and never their values', async () => {
+    const { deps: d } = protocol({
+      prompts: [],
+      records: [
+        { RecId: 'rec-1', Status: 'Active', Subject: 'secret' },
+        { RecId: 'rec-1', Status: 'Resolved', Subject: 'secret' },
+      ],
+    });
+
+    const result = await createRunQuickActionTool(d).handler(ARGS);
+
+    expect(body(result).changedFields).toEqual(['Status']);
+    expect(text(result)).not.toContain('Resolved');
+  });
+
+  it('still runs when the record cannot be read', async () => {
+    const { deps: d } = protocol({ prompts: [], records: [] });
+
+    const result = body(await createRunQuickActionTool(d).handler(ARGS));
+
+    expect(result).toMatchObject({ ran: true });
+    expect(result).not.toHaveProperty('changedFields');
+  });
+});
+
+describe('the enduser quick-action allowlist', () => {
+  const gate = createActionGate(
+    configFixture({ MCP_MODE: 'enduser', ENDUSER_QUICK_ACTIONS: ['Add Change'] }),
+  );
+
+  it('list_quick_actions shows only the allowed actions', async () => {
+    const { deps: d } = deps({});
+
+    const result = body(await createListQuickActionsTool({ ...d, actions: gate }).handler({ object: 'Incidents' }));
+
+    expect(result.actions).toEqual([
+      expect.objectContaining({ name: 'Add Change', actionId: 'act-ui' }),
+    ]);
+  });
+
+  it('preview_quick_action refuses an action outside the list, with the text of what is allowed', async () => {
+    const { deps: d, urls } = deps({});
+
+    const result = await createPreviewQuickActionTool({ ...d, actions: gate }).handler(ARGS);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('It allows: Add Change');
+    expect(urls.some((url) => url.includes('SaveDataExecuteAction'))).toBe(false);
+  });
+
+  it('run_quick_action refuses an action outside the list and commits nothing', async () => {
+    const { deps: d, saves } = protocol({ prompts: [], actions: gate });
+
+    const result = await createRunQuickActionTool(d).handler(ARGS);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('It allows: Add Change');
+    expect(saves).toEqual([]);
+  });
+
+  it('run_quick_action says no action is allowed when the list is empty', async () => {
+    const none = createActionGate(configFixture({ MCP_MODE: 'enduser', ENDUSER_QUICK_ACTIONS: [] }));
+    const { deps: d, saves } = protocol({ prompts: [], actions: none });
+
+    const result = await createRunQuickActionTool(d).handler(ARGS);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('or any other quick action');
+    expect(saves).toEqual([]);
   });
 });

@@ -2,7 +2,6 @@
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
 import type { Logger } from '../../logger.js';
-import { countIvantiRequest } from '../../usage/call-usage.js';
 import { IvantiBusyError, type RequestLimiter } from './request-limiter.js';
 import {
   IvantiApiError,
@@ -11,7 +10,7 @@ import {
   ResponseTooLargeError,
   scrubErrorBody,
 } from './errors.js';
-import { recordIvantiRequest, recordIvantiRequestNotSent } from '../../metrics/server-metrics.js';
+import { countIvantiRequest, recordIvantiRequest, recordIvantiRequestNotSent } from './request-observer.js';
 
 export interface FetchResponse {
   ok: boolean;
