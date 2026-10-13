@@ -22,7 +22,7 @@ ARG PNPM_VERSION=10.20.0
 # ──────────────────────────────────────────────────────────────────────────────
 # Build: the toolchain never reaches the final image.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
+FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS build
 WORKDIR /app
 ARG PNPM_VERSION
 RUN npm install --global "pnpm@${PNPM_VERSION}"
@@ -42,7 +42,7 @@ RUN pnpm build
 # which does not survive a COPY into another image: the links point at paths
 # that are not there. `--node-linker=hoisted` writes real directories instead.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS deps
+FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS deps
 WORKDIR /app
 ARG PNPM_VERSION
 RUN npm install --global "pnpm@${PNPM_VERSION}"
