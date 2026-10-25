@@ -194,8 +194,9 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
         )
         .optional()
         .describe(
-          'Answers so far, by parameter Name. Adds `evaluation`: what is shown, required, still ' +
-            'missing, and how to fetch each filtered list. Call again after each answer.',
+          'Answers so far, by parameter Name. Returns only `evaluation` (needs `subscriptionId`, ' +
+            'not `templateId`): what is shown, required, missing, and how to fetch each filtered ' +
+            'list. Call again after each answer.',
         ),
     },
     handler: (args, context) =>
@@ -255,6 +256,47 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
           });
         }
 
+        // Answers are evaluated against the form as the portal receives it, which is keyed by the
+        // offering's subscriptionId alone — so no template read, and no repeat of the parameter
+        // list on every call. The names and descriptions were read once, without answers.
+        if (args.answers !== undefined) {
+          if (args.subscriptionId === undefined || args.subscriptionId === '') {
+            return errorResult(
+              '`answers` is evaluated against the offering as the portal receives it, which is ' +
+                "keyed by the offering's `subscriptionId` (from list_request_offerings). Pass it.",
+            );
+          }
+          const offset = await deps.connection.serviceRequests.tenantOffset.get().catch(() => undefined);
+          const form = await readFormPackage(transport, args.subscriptionId, -(offset?.minutes ?? 0));
+          const person = context?.pin?.person();
+          const user =
+            person === undefined
+              ? undefined
+              : {
+                  displayName: person.displayName,
+                  fields: { RecId: person.recId },
+                  ...(person.loginId === undefined ? {} : { loginId: person.loginId }),
+                  ...(person.primaryEmail === undefined ? {} : { email: person.primaryEmail }),
+                };
+          return jsonResult({
+            subscriptionId: args.subscriptionId,
+            evaluation: {
+              ...evaluateForm({
+                parameters: form,
+                answers: args.answers,
+                ...(user === undefined ? {} : { user }),
+              }),
+              note:
+                "Computed here from Ivanti's own rules, as the portal does in the browser. " +
+                '`missing` is what to ask next; send each `defaults` value as the answer unless ' +
+                'the person chooses otherwise; leave `autoFilled` out (Ivanti fills them); drop ' +
+                '`answeredButHidden`; fetch each `options` entry only when `waitingOn` is empty. ' +
+                '`cannotTell` lists rules this could not read — treat those parameters as ' +
+                'unknown, not hidden. Ivanti still judges the submit.',
+            },
+          });
+        }
+
         if (args.templateId === undefined || args.templateId === '') {
           return errorResult(
             'Give me a `templateId` to see what an offering asks for, or a `requestId` to see ' +
@@ -286,41 +328,6 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
         );
         const decoded = projected.map((parameter) => decodeParameter(parameter, names));
 
-        let evaluation: Record<string, unknown> | undefined;
-        if (args.answers !== undefined) {
-          if (args.subscriptionId === undefined || args.subscriptionId === '') {
-            return errorResult(
-              '`answers` is evaluated against the offering as the portal receives it, which is ' +
-                "keyed by the offering's `subscriptionId` (from list_request_offerings, beside " +
-                'the `templateId` you passed). Pass both.',
-            );
-          }
-          const offset = await deps.connection.serviceRequests.tenantOffset.get().catch(() => undefined);
-          const form = await readFormPackage(transport, args.subscriptionId, -(offset?.minutes ?? 0));
-          const person = context?.pin?.person();
-          const user =
-            person === undefined
-              ? undefined
-              : {
-                  displayName: person.displayName,
-                  fields: { RecId: person.recId },
-                  ...(person.loginId === undefined ? {} : { loginId: person.loginId }),
-                  ...(person.primaryEmail === undefined ? {} : { email: person.primaryEmail }),
-                };
-          evaluation = {
-            ...evaluateForm({
-              parameters: form,
-              answers: args.answers,
-              ...(user === undefined ? {} : { user }),
-            }),
-            note:
-              'Computed here from Ivanti\'s own rules, as the portal does in the browser. ' +
-              '`missing` is what to ask next; send each `defaults` value as the answer unless the person ' +
-              'chooses otherwise; drop `answeredButHidden`; fetch each `options` ' +
-              'entry only when `waitingOn` is empty. `cannotTell` lists rules this could not ' +
-              'read — treat those parameters as unknown, not hidden. Ivanti still judges the submit.',
-          };
-        }
         const filtered = decoded.filter((parameter) => parameter['filteredBy'] !== undefined).length;
         const conditional = decoded.filter((parameter) => parameter['conditionedOn'] !== undefined).length;
 
@@ -346,7 +353,6 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
                   'fetch options that were filtered by it. If the option a person needs is not ' +
                   'under the parent they chose, say so and ask — do not guess another one.',
               }),
-          ...(evaluation === undefined ? {} : { evaluation }),
           answerable,
           ...(answerable === projected.length
             ? {}

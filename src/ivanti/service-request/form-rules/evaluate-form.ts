@@ -37,6 +37,8 @@ export interface FormEvaluation {
   answeredButHidden: string[];
   /** What the portal pre-fills where unanswered. Send it as the answer unless the person says otherwise. */
   defaults: Record<string, unknown>;
+  /** Visible parameters Ivanti fills in from another answer (a picked person's email, say). */
+  autoFilled: string[];
   /** Visible lists filtered by other answers: how to ask for their options. */
   options: Record<string, OptionsRequest>;
   /** Parameters whose rules use something this evaluator does not know, and what. */
@@ -113,6 +115,7 @@ export function evaluateForm(input: EvaluateFormInput): FormEvaluation {
     missing: [],
     answeredButHidden: [],
     defaults: {},
+    autoFilled: [],
     options: {},
     cannotTell,
     unknownAnswers,
@@ -132,6 +135,11 @@ export function evaluateForm(input: EvaluateFormInput): FormEvaluation {
     }
 
     evaluation.visible.push(parameter.name);
+    // Ivanti computes these from the trigger's record; asking the person for them only invites a
+    // value that disagrees with the one Ivanti would have filled.
+    const autoFilled = parameter.autoFill !== undefined;
+    if (autoFilled) evaluation.autoFilled.push(parameter.name);
+
     let defaulted = false;
     if (!answered && parameter.value !== undefined) {
       const value = evaluate(parameter, parameter.value);
@@ -145,7 +153,7 @@ export function evaluateForm(input: EvaluateFormInput): FormEvaluation {
     // portal pre-fills is not left to ask — but its default still has to be sent as an answer.
     if (flag(parameter, parameter.required, false)) {
       evaluation.required.push(parameter.name);
-      if (!answered && !defaulted) evaluation.missing.push(parameter.name);
+      if (!answered && !defaulted && !autoFilled) evaluation.missing.push(parameter.name);
     }
     if (flag(parameter, parameter.readOnly, false)) evaluation.readOnly.push(parameter.name);
 

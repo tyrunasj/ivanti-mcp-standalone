@@ -1491,6 +1491,21 @@ then gets `queryFieldName: Department`). A parameter with a default (`Employment
 `missing`, but its default must be sent. Not covered: auto-fill
 (`$([…]PrimaryEmail)`), which needs the picked record, and `valueRule` date checks.
 
+**What a real conversation showed about form evaluation (ChatGPT desktop, 2026-10-25).** The
+evaluator and the scope notes did their jobs — the model stopped at "not listed under
+Administration" and the final `evaluation` was `missing: []`. Four costs remained, now fixed:
+it read all 201 requesters under a department (~25 KB) to confirm one person was absent — option
+answers now cap at 100 with `total` / `hasMore` and point at `search`; its first evaluation call
+failed because `templateId` was required though the portal's form is keyed by `subscriptionId` —
+`answers` now needs only that and returns `evaluation` alone, without repeating the parameter list;
+it typed Requester E-Mail by hand — `autoFilled` names what Ivanti fills in; and, finding the
+person's `Department` blank, it **edited their Employee record** to make the form accept them —
+the options note and `ivanti://reference/picklists` now call that a data fix for an administrator.
+The deeper cause was deployment, not wording: `full` mode with the impersonation role unset
+(Admin taken from the role list's order) and an unverified `act_as` is a chat that can write
+directory data as anyone. `enduser` mode, `IVANTI_IMPERSONATION_ROLE` set to a self-service role and
+`AUTH_MODE=oauth` remove it.
+
 ## Observability
 
 **`/health` must answer without a token, so everything it returns is public.**

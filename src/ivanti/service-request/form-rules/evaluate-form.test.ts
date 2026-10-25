@@ -149,3 +149,25 @@ describe('evaluateForm — what it cannot read', () => {
     expect(result.cannotTell).toEqual({ X: ['function NoSuchThing'] });
   });
 });
+
+describe('evaluateForm — what Ivanti fills in itself', () => {
+  const parameters: FormParameter[] = [
+    {
+      name: 'Email',
+      type: 'text',
+      sequence: 1,
+      constraints: [],
+      hidden: false,
+      required: { Tree: { Kind: 0, Value: true }, FieldRefs: [] },
+      autoFill: { Tree: { Kind: 0, Value: 'x' }, FieldRefs: [] },
+    },
+  ];
+
+  it('lists it, and never asks the person for it', () => {
+    const result = evaluateForm({ parameters, answers: {} });
+
+    expect(result.autoFilled).toEqual(['Email']);
+    expect(result.required).toEqual(['Email']);
+    expect(result.missing).toEqual([]);
+  });
+});
