@@ -4,6 +4,23 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
+## 0.3.5 — 2026-10-25
+
+**Upgrading.** Nothing to check; swap the version. No setting, tool name or required argument changed.
+
+- **`get_service_request_parameters` can evaluate a form.** Pass `subscriptionId` and `answers` and it
+  returns `evaluation`: what is shown, hidden, required and still missing, which answers to drop,
+  the defaults to send, and the exact `constraints` for each filtered list. Ivanti's portal does
+  this in the browser and no call exists for anyone else; this reads the same parsed rules. It
+  informs and never refuses, and rules it cannot read are named in `cannotTell`. Not covered:
+  auto-fill fields, date-rule checks, and `BeginningOfWeek`.
+- **Each parameter says what it depends on.** `filteredBy` (its options depend on those answers),
+  `conditionedOn` (whether it is shown or required depends on them) and `valueRule` (a date's lower
+  bound, which Ivanti keeps only in `ConfigOptions`).
+- **A filtered list is complete for its parent only.** Option answers now say so, so a person missing
+  from a list prompts a question instead of a retry loop. `ivanti://reference/picklists` covers
+  both kinds of dependency.
+
 ## 0.3.4 — 2026-10-11
 
 **Upgrading.** A full code review ([`docs/review/2026-10-11-full-review.md`](docs/review/2026-10-11-full-review.md))
