@@ -96,4 +96,35 @@ describe('get_service_request_parameter_options', () => {
     expect(result.returned).toBe(0);
     expect(String(result.note)).toContain('constrained by another answer');
   });
+
+  it('caps a long list and says how to narrow it instead of sending every row', async () => {
+    const rows = Array.from({ length: 250 }, (_, n) => [`r${String(n)}`, `v${String(n)}`, `L${String(n)}`]);
+    const { options } = tools({ ValidationList: rows });
+
+    const result = body(await options.handler({ parameterId: 'p1' }));
+
+    expect(result.returned).toBe(100);
+    expect(result).toMatchObject({ total: 250, hasMore: true });
+    expect(String(result['moreNote'])).toContain('`search`');
+  });
+
+  it('does not report a cut-off on a list that fits', async () => {
+    const { options } = tools({ ValidationList: [['r1', 'A', 'A']] });
+
+    expect(body(await options.handler({ parameterId: 'p1' }))).not.toHaveProperty('hasMore');
+  });
+
+  it('tells a person missing under their parent that fixing their record is an administrator job', async () => {
+    const { options } = tools({ ValidationList: [] });
+
+    const result = body(
+      await options.handler({
+        parameterId: 'p1',
+        constraints: [{ queryFieldName: 'Department', value: 'Sales' }],
+      }),
+    );
+
+    expect(String(result['scopeNote'])).toContain('administrator');
+    expect(String(result['scopeNote'])).toContain('do not edit the record');
+  });
 });

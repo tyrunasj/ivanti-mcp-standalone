@@ -269,6 +269,22 @@ describe('get_service_request_parameters, evaluating a form against answers', ()
     expect(urls.some((url) => url.includes('PackageData/sub1/Default?timeZone='))).toBe(true);
   });
 
+  it('needs only the subscriptionId, and answers with the evaluation alone', async () => {
+    const { parameters, urls } = setup({
+      'ServiceRequest/PackageData/sub1/Default': portalForm,
+    });
+
+    const result = body(
+      await parameters.handler(
+        { subscriptionId: 'sub1', answers: { ComputerRequired: true } },
+        pinned(),
+      ),
+    );
+
+    expect(Object.keys(result).sort()).toEqual(['evaluation', 'subscriptionId']);
+    expect(urls.some((url) => url.includes('servicereqtemplateparams'))).toBe(false);
+  });
+
   it('asks for the subscriptionId rather than evaluating against nothing', async () => {
     const { parameters } = setup({ servicereqtemplateparams: { '@odata.count': 0, value: [] } });
 

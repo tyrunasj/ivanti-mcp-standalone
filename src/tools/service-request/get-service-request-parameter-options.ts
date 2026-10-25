@@ -9,6 +9,9 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { transportFor } from '../shared/transport-for.js';
 
+/** The most options one answer carries; the rest are reached through `search`. */
+const MAX_OPTIONS = 100;
+
 /** Each option arrives as a row of cells: `[recId, value, label?]`. */
 function toOption(row: unknown): { recId: string; value: string; label: string } | undefined {
   if (!Array.isArray(row) || row.length < 2) return undefined;
@@ -105,13 +108,25 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
           },
         });
 
-        const options = Array.isArray(rows)
+        const all = Array.isArray(rows)
           ? rows.map(toOption).filter((option) => option !== undefined)
           : [];
+        // A requester list under one department is 200 rows (~25 KB), and a caller that only
+        // needed to know whether one person is on it read all of them. `search` narrows by label.
+        const options = all.slice(0, MAX_OPTIONS);
 
         return jsonResult({
           parameterId: args.parameterId,
           returned: options.length,
+          ...(all.length > options.length
+            ? {
+                total: all.length,
+                hasMore: true,
+                moreNote:
+                  `Showing the first ${String(options.length)} of ${String(all.length)}. Narrow ` +
+                  'with `search` (it matches the START of the label) rather than reading them all.',
+              }
+            : {}),
           // Three different causes, and the old note named only one of them — so a caller whose
           // constraints were correct and whose `search` was simply the wrong shape was told to
           // go on supplying constraints. That cost one tester ~67 calls.
@@ -158,7 +173,10 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
                   'parent; it does not mean it does not exist, and retrying its spelling will ' +
                   'not find it. If the person is not listed under the parent they chose, say so ' +
                   'and ask which parent they belong to (or have the parent changed) rather than ' +
-                  'substituting someone else or looping through spellings.',
+                  'substituting someone else or looping through spellings. If their OWN record ' +
+                  'leaves that parent empty (a blank Department), the fix is a data change for ' +
+                  'their administrator: do not edit the record to make the form accept them ' +
+                  'unless they ask for exactly that.',
               }),
           options,
         });

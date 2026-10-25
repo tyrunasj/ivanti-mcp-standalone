@@ -58,6 +58,8 @@ When the value a person needs is not under the parent they chose:
 
 - Do **not** retry other spellings, other searches or other candidates — the filter was right.
 - Do **not** substitute a similar person or item. Say what was looked for, under which parent.
+- If the person's own record leaves that parent empty, that is a data fix for their administrator;
+  do not edit the record to make the form accept them unless they ask for exactly that.
 - Ask which parent applies, or whether it should be changed; look under another parent only when
   the person names one or their own record says (\`Employee.Department\`).
 

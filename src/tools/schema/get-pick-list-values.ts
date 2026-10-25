@@ -176,7 +176,7 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
                         `Valid under ${parents.join(', ')} as supplied only. A value missing ` +
                         'here may belong under a different parent — not "does not exist". If the ' +
                         'person needs one that is absent, say so and ask which parent applies; ' +
-                        'do not substitute another value.',
+                        'do not substitute another value, or edit their record to make it fit.',
                     }
                   : list,
             ];
