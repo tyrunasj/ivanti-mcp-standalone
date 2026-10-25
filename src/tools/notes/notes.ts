@@ -133,3 +133,15 @@ export async function countJournalEntries(
   // A page of one without a count says "at least one", not "one": only the empty body is exact.
   return readTotal(payload, rows.length) ?? { total: rows.length, exact: rows.length === 0 };
 }
+
+/** The note as Ivanti stored it, read by its own id rather than trusted from the POST's answer. */
+export async function readNote(
+  transport: IvantiTransport,
+  recId: string,
+): Promise<OdataRecord | undefined> {
+  const url = withQuery(
+    transport.routes.entitySet(NOTE_ENTITY_SET),
+    buildQuery({ filter: `RecId eq ${quoteOdataString(recId)}`, top: 1 }),
+  );
+  return readRows<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
+}

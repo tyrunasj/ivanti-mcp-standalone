@@ -290,6 +290,18 @@ it needs a create form, which OData cannot see.
   (`ParentLink_Category` as the AdminUI id, `Incident#`), and the row read back. A delete answers 204 for an id that never existed, so existence is checked on both sides.
   `upload_attachment` takes base64 capped at 2 MB, because the bytes cross the context twice.
   `add_note` reads its parent first on the same reasoning, and reads the note back.
+- **A change leaves a note saying why (`WRITE_AUDIT_NOTE`, default `required`).** `update_record`,
+  `delete_record`, `link_records`, `unlink_records` and `run_quick_action` take a required
+  `justification` — absent from the schema when the setting is `off`, so it is an argument rather
+  than an instruction a model can skip. `audit-note.ts` writes it as an internal journal note
+  **after** the change is confirmed, with what changed (`field: old → new`) and who asked. The
+  author is the account the API key was issued for: the note goes out on `deps.connection.transport`,
+  not `transportFor(context)`, and carries no author override — `add_note` stamps the person in
+  `enduser`, and this must not. The person appears in the body as the one who asked. A note that
+  cannot be written is `auditWarning` beside a successful result, never a failed call: the change
+  is made, and a retry of a write mails people. An object with no journal relationship gets
+  `noted: false` and no warning; a deleted record's note goes on its parent, since its own journal
+  went with it. `vote_on_approval` is left out — it already carries the voter's own `reason`.
 - **A validated field's values live on a create form**, reached workspace → layout → view → form
   (cached per object), then `GetFormValidationListData`. Rows arrive as columns: the value is at the
   lowest `FieldMap` index. Some lists cascade; a parent under a name the form lacks filters nothing,

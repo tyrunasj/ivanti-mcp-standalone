@@ -581,6 +581,14 @@ expiry — so a field or a Business Object added in Ivanti after the server star
 the schema is *not* cached: a timeout, a 5xx, a refused key, or a login or WAF page answering in
 Ivanti's place is asked again on the next call.
 
+**A note on every change.** `WRITE_AUDIT_NOTE` is `required` unless set to `off`. With it, the five
+tools that change a record (`update_record`, `delete_record`, `link_records`, `unlink_records`,
+`run_quick_action`) take a `justification`, and the server writes it onto the record as an
+**internal** journal note once the change is confirmed. The note is authored by the account the
+Ivanti API key was issued for — never by the person `act_as` named, who appears in its body as the
+one who asked. Turning it off removes the argument from the tools. A model client that cached the
+tool list before the change will be refused until it reconnects, because the argument is required.
+
 ---
 
 ## Troubleshooting

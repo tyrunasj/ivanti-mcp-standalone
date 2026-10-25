@@ -4,6 +4,21 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
+## 0.3.7 — 2026-10-25
+
+**Upgrading.** `WRITE_AUDIT_NOTE` defaults to `required`, which adds a **required** `justification`
+argument to `update_record`, `delete_record`, `link_records`, `unlink_records` and
+`run_quick_action`. A client holding the old tool list is refused until it reconnects. Set
+`WRITE_AUDIT_NOTE=off` (chart: `server.writeAuditNote: off`) to keep the tools as they were.
+
+- **A change leaves a note saying why.** The server writes the justification onto the record as an
+  internal journal note once the change is confirmed, listing what changed (`Status: Open →
+  Resolved`). The note is authored by the account the API key was issued for — not by the person
+  the conversation is acting as, who is named in the body as the one who asked.
+- **A note that cannot be left never turns a made change into a failure.** The result carries
+  `auditNote` and, when a note was owed and not written, an `auditWarning`. A record whose object
+  has no journal gets neither a note nor a warning; a deleted record's note goes on its parent.
+
 ## 0.3.6 — 2026-10-25
 
 **Upgrading.** Nothing to check; swap the version. No setting or tool name changed, and the one

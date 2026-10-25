@@ -76,6 +76,7 @@ spec:
             - { name: MCP_SESSION_IDLE_TTL_SECONDS, value: {{ .Values.server.sessionIdleTtlSeconds | quote }} }
             - { name: MCP_IDENTITY_IDLE_TTL_SECONDS, value: {{ .Values.server.identityIdleTtlSeconds | quote }} }
             - { name: LOG_LEVEL,          value: {{ .Values.server.logLevel | quote }} }
+            - { name: WRITE_AUDIT_NOTE,   value: {{ .Values.server.writeAuditNote | quote }} }
             - { name: IVANTI_BASE_URL,    value: {{ .Values.ivanti.baseUrl | quote }} }
             - { name: IVANTI_API_KEY_FILE, value: "{{ .Values.secrets.mountPath }}/ivanti-api-key" }
             {{- if .Values.ivanti.maxTier }}

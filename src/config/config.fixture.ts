@@ -43,6 +43,7 @@ export const configFixture = (overrides: Partial<Config> = {}): Config => ({
   // Mirrors the schema default, so a test that does not care about the role still gets the one a
   // real enduser deployment would run under.
   ENDUSER_ROLE: 'SelfServiceMobile',
+  WRITE_AUDIT_NOTE: 'required',
   LOG_LEVEL: 'info',
   METRICS_ON: false,
   METRICS_BIND: '127.0.0.1',

@@ -22,6 +22,7 @@ import { connectionFor } from '../shared/connection-for.js';
 import { transportFor } from '../shared/transport-for.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
 import { settleAnswers } from './answers.js';
+import { auditArguments, describeRecord, justificationOf, leaveAuditNote } from '../shared/audit-note.js';
 
 /** Best effort: the record as it stands, or undefined when it cannot be read. */
 async function snapshot(read: () => Promise<OdataRecord | undefined>): Promise<OdataRecord | undefined> {
@@ -90,6 +91,7 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
         .record(z.string(), z.string())
         .optional()
         .describe('Values for the prompts preview_quick_action reported, keyed by field name.'),
+      ...auditArguments(deps),
     },
     handler: (args, context) =>
       runTool('run_quick_action', deps.logger, async () => {
@@ -195,12 +197,24 @@ export function createRunQuickActionTool(deps: IvantiToolDeps): ToolDefinition {
 
         deps.logger.info('ivanti quick action run', { object: objectId, action: action.name });
 
+        const audit = await leaveAuditNote(deps, context, {
+          parent: resolved,
+          recordId: args.recordId,
+          action: `Ran quick action '${action.name}' on ${describeRecord(entity.name, args.recordId, before)}`,
+          changes: [
+            ...Object.keys(answers).map((field) => `Answered ${field}`),
+            ...changedFields.map((field) => `${field} changed`),
+          ],
+          justification: justificationOf(args),
+        });
+
         return jsonResult({
           object: entity.name,
           action: action.name,
           ran: true,
           ...(result.saved === undefined ? {} : { saved: result.saved }),
           ...(changedFields.length === 0 ? {} : { changedFields }),
+          ...audit,
           // Ivanti hands back a bare `{ <RecId>: <RecId> }` map with no object names in it, so
           // on its own it says only "something was created" — a tester could not tell whether
           // the action had made a task, a journal entry or a child ticket.

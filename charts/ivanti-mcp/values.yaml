@@ -52,6 +52,9 @@ server:
   # whose records stay reachable.
   identityIdleTtlSeconds: 1800
   logLevel: info        # debug logs every Ivanti query, which names people; diagnose, then revert
+  # required | off. Required: every change tool takes a `justification`, and the server writes it
+  # onto the record as an internal journal note, authored by the API key's own account.
+  writeAuditNote: required
 
   # Required when mode is enduser. Technical Business Object names; the gate is
   # resolved against the tenant at startup, so a misspelling exits 78.

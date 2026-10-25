@@ -1506,6 +1506,16 @@ The deeper cause was deployment, not wording: `full` mode with the impersonation
 directory data as anyone. `enduser` mode, `IVANTI_IMPERSONATION_ROLE` set to a self-service role and
 `AUTH_MODE=oauth` remove it.
 
+**The note saying why a change was made must be written by the key's account, not the person.**
+`add_note` stamps the person's name in `enduser` (`authorFields`); a copy of that path for the
+audit note would have shown someone as the author of text they never saw. `audit-note.ts` posts on
+`deps.connection.transport` with no author override, and `credential-guard.test.ts` lists it as
+service-account-by-design with that reason. Verified live 2026-10-25: after `act_as` a person, the
+note's `CreatedBy` was the API key's account and its body named the person as the one who asked.
+The change is already made when the note is written, so a failed note is `auditWarning` beside a
+success, never an error — an error over an updated record invites a retry, and a retry mails people.
+A record deleted with no parent has nowhere for a note (its own journal went with it).
+
 ## Observability
 
 **`/health` must answer without a token, so everything it returns is public.**

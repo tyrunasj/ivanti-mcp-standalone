@@ -246,6 +246,17 @@ export const envSchema = z.object({
    */
   ENDUSER_ROLE: z.string().min(1).default('SelfServiceMobile'),
 
+  /**
+   * Whether a change leaves a note on the record saying why.
+   *
+   * `required`: `update_record`, `delete_record`, `link_records`, `unlink_records` and
+   * `run_quick_action` take a `justification`, and once the change is confirmed the server writes
+   * it onto the record as an internal journal note — authored by the account the API key was
+   * issued for, never by the person the conversation is acting as. `off` leaves the tools as they
+   * were. On by default: a change nobody explained is the one that needs explaining later.
+   */
+  WRITE_AUDIT_NOTE: z.enum(['required', 'off']).default('required'),
+
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
 
   /**
