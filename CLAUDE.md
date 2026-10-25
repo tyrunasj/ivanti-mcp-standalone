@@ -125,7 +125,7 @@ src/
     session/       ASMX session, capability tier, forms, pick-lists, workspaces, roles, impersonation
     write/         validated-write — resolve picklists, confirm by reading back
     people/        directory (act_as matching), customer-link discovery
-    service-request/, attachments/, quick-actions/
+    service-request/ (form-rules/: the portal's show/required/default rules, evaluated), attachments/, quick-actions/
   tools/           defineTool → strictInput → register-tools (mode, identity gate, audit)
     shared/        gates, resolve-object, field and refusal explanations, session-stamp
     schema/ records/ search/ relationships/ notes/ knowledge/ attachments/

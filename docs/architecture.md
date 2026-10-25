@@ -308,6 +308,27 @@ it needs a create form, which OData cannot see.
   submit paths send it (`localOffset` on the ASMX one). A `time` answer is stored as an instant on
   the day of submission, so it is compared as the wall clock that instant shows in the tenant's
   frame — compared as a date, a correct submit read as `storedDifferently`.
+- **A form has two kinds of dependency, and only Ivanti's rules say which applies.** A list's
+  *options* can depend on another answer (`ValidationConstraints`, sent as `constraintParams` to the
+  `ValidationList` POST), and whether a parameter is *shown or required* can depend on another
+  (`VisibilityExpression` / `RequiredExpression`). `New Employee On-boarding` is mostly the second —
+  `ComputerRequired` → `ComputerType` → `UltraPortable` / `PrimaryMonitor`. A filtered list is
+  complete for its parent only: a person absent under the chosen parent is a membership answer, not
+  a failed search. Each parameter carries `filteredBy` and `conditionedOn` (`parameter-shape.ts`),
+  and a date's lower bound, which Ivanti keeps only in `ConfigOptions`, comes out as `valueRule`.
+- **The form is evaluated here, because nothing else will.** The portal downloads the whole form once
+  (`GET /api/rest/ServiceRequest/PackageData/{subscriptionId}/Default`, rules already parsed into
+  trees whose `FieldRefs` name what each reads) and evaluates it in the browser; ticking a checkbox
+  sends nothing (HAR, 2026-10-25). `get_service_request_parameters` with `subscriptionId` + `answers`
+  does the same in `ivanti/service-request/form-rules/`: `form-package.ts` reads the form,
+  `evaluate-form.ts` walks it (shown, required, `missing`, `answeredButHidden`, `defaults`, and the
+  `constraints` each filtered list needs), and `evaluate-expression.ts` + `functions/` are a port of
+  `ivanti-mobile`'s evaluator, which mirrors Ivanti's own client. **It informs and never refuses** —
+  the form's rules are conditional and the submit is Ivanti's to judge — and a rule it cannot read
+  (an unknown function, a stored expression `$[this]Name()`) is named in `cannotTell`, never guessed.
+  Not covered: auto-fill (`$([…]PrimaryEmail)`, needs the picked record), `valueRule` checks, and
+  `BeginningOfWeek` (locale-dependent). A parameter with a default is not `missing`, but its default
+  must still be sent as an answer.
 - **Files are staged before the request exists, inside the submit.** `GetPackageDataSDA` →
   `GetUploadTicket` → multipart `UploadAttachmentHandler.ashx`, then an ASMX submit — the only path
   that binds them (REST drops an `attachments` field). A staging id is one-shot, so nothing reuses it.
