@@ -49,19 +49,87 @@ export function parseConstraints(raw: unknown): ParameterConstraint[] {
 }
 
 /**
+ * The value rule hidden in `ConfigOptions`, such as `$(StartDate>=CurrentDate()+14)`.
+ *
+ * It is the only place a date's lower bound is written: `Description` says "Minimum two weeks lead
+ * time" in words, and a submit that breaks the rule is a refusal the caller was never shown the
+ * cause of. The rest of `ConfigOptions` is layout (widths, margins) and is dropped.
+ */
+export function valueRule(configOptions: unknown): string | undefined {
+  if (typeof configOptions !== 'string' || configOptions.trim() === '') return undefined;
+
+  try {
+    const parsed = JSON.parse(configOptions) as {
+      configData?: { dateValidation?: { expr?: unknown } };
+    };
+    const expr = parsed.configData?.dateValidation?.expr;
+    return typeof expr === 'string' && expr !== '' ? expr : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The parameters of this form an expression reads.
+ *
+ * Quoted strings are dropped first, so `ComputerType != "Desktop"` reads `ComputerType` and not a
+ * parameter that happens to be called `Desktop`. Only names the form actually has are returned:
+ * the expression language has its own words (`true`, `and`) that are not answers.
+ */
+export function referencedParameters(expression: unknown, names: ReadonlySet<string>): string[] {
+  if (typeof expression !== 'string') return [];
+
+  const bare = expression.replace(/"[^"]*"|'[^']*'/g, ' ');
+  const found = new Set<string>();
+  for (const token of bare.match(/[A-Za-z0-9_]+/g) ?? []) {
+    if (names.has(token)) found.add(token);
+  }
+  return [...found];
+}
+
+/**
  * Adds the decoded fields beside the raw ones.
  *
  * The originals are kept: a conditional rule still needs its expression, and dropping it would
  * hide *why* `required` is absent.
+ *
+ * `names` is every parameter name on the form. With it the two ways one answer can depend on
+ * another are named, and they are different jobs:
+ *   - `filteredBy`: the OPTIONS of this list depend on those answers (a constraint).
+ *   - `conditionedOn`: whether this parameter is SHOWN or REQUIRED depends on those answers.
+ * Neither is evaluated here — a conditional rule is Ivanti's to judge — only pointed at.
  */
-export function decodeParameter(row: Record<string, unknown>): Record<string, unknown> {
+export function decodeParameter(
+  row: Record<string, unknown>,
+  names: ReadonlySet<string> = new Set(),
+): Record<string, unknown> {
   const decoded = { ...row };
 
   const required = literalRequired(row['RequiredExpression']);
   if (required !== undefined) decoded['required'] = required;
 
   const constraints = parseConstraints(row['ValidationConstraints']);
-  if (constraints.length > 0) decoded['constraints'] = constraints;
+  if (constraints.length > 0) {
+    decoded['constraints'] = constraints;
+    const parents = constraints
+      .map((constraint) => constraint.FormFieldName)
+      .filter((name): name is string => typeof name === 'string' && name !== '');
+    if (parents.length > 0) decoded['filteredBy'] = parents;
+  }
+
+  const rule = valueRule(row['ConfigOptions']);
+  if (rule !== undefined) decoded['valueRule'] = rule;
+  // Layout, not an answer — and ~600 characters on every parameter.
+  delete decoded['ConfigOptions'];
+
+  const own = row['Name'];
+  const conditions = [
+    ...new Set([
+      ...referencedParameters(row['VisibilityExpression'], names),
+      ...referencedParameters(row['RequiredExpression'], names),
+    ]),
+  ].filter((name) => name !== own);
+  if (conditions.length > 0) decoded['conditionedOn'] = conditions;
 
   return decoded;
 }

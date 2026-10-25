@@ -47,6 +47,63 @@ than an order of magnitude.
 To enumerate everything a field could ever hold, read its backing object directly —
 \`list_business_objects\` with \`includeValidationLists\`, then \`list_records\` on what it names.
 
+## Absent under a parent is not nonexistent
+
+A cascaded list is complete **for the parents you gave it**, and for nothing else. An \`Owner\`
+filtered by \`OwnerTeam\` holds that team's members; a service request \`Requester\` filtered by
+\`Department\` holds that department's people. Someone missing from it is usually a member of a
+different parent — or of none, when the person's own record leaves that field empty.
+
+When the value a person needs is not under the parent they chose:
+
+- Do **not** retry other spellings, other searches or other candidates — the filter was right.
+- Do **not** substitute a similar person or item. Say what was looked for, under which parent.
+- Ask which parent applies, or whether it should be changed; look under another parent only when
+  the person names one or their own record says (\`Employee.Department\`).
+
+## Answers that depend on answers, on service request forms
+
+A service request template has two kinds of dependency, usually both. This server points at them;
+it does not evaluate them.
+
+**1. A list's options depend on another answer** (\`filteredBy\`, with \`constraints\` giving the exact
+\`queryFieldName\`). \`Tablet Request\`: \`Requester\` is filtered by \`Department\`. Answer the parent,
+fetch the child's options with the parent's value, and fetch them **again** if the parent changes.
+
+**2. Whether a parameter is shown or required depends on another answer** (\`conditionedOn\`, with
+the rule in \`VisibilityExpression\` / \`RequiredExpression\`). \`New Employee On-boarding\` is full of
+it:
+
+    ComputerRequired (checkbox)
+      -> ComputerType            shown and required when ComputerRequired == true
+           -> UltraPortable, PortReplicator, WirelessBroadband
+                                 shown when ComputerType is not "Desktop"
+           -> PrimaryMonitor     shown when ComputerType is not "Notebook"
+    SecondaryMonitor (checkbox) -> 2ndMonitor   shown and required when it is ticked
+    MobilePhoneRequired         -> MobilePhone  shown when it is ticked
+
+Chains run several deep, and the condition can read a combo's value as well as a checkbox.
+
+### Walking a form
+
+\`get_service_request_parameters\` does this for you: pass \`subscriptionId\` and \`answers\` (by
+parameter Name) and \`evaluation\` says what is shown, required and \`missing\`, which answers to
+drop, and the exact \`constraints\` for each filtered list. It is computed from Ivanti's own parsed
+rules, as the portal does in the browser. By hand: go in \`SequenceNum\` order; a false
+\`VisibilityExpression\` means leave it out (an unanswered checkbox is false, an unanswered combo
+empty); a visible parameter whose \`RequiredExpression\` holds is mandatory; fetch a filtered list's
+options only after its \`filteredBy\` parents are answered. When an answer changes, re-check every
+parameter that names it: drop answers now hidden, re-fetch options filtered by it.
+
+Answering a hidden parameter, or omitting one an answer just revealed, is how a submit is refused.
+
+### Rules on the value itself
+
+A parameter may carry \`valueRule\`, a condition its own answer must meet — a date's lower bound,
+for instance: \`New Employee On-boarding\`'s \`StartDate\` is \`$(StartDate>=CurrentDate()+14)\`, which
+its description only hints at ("Minimum two weeks lead time"). Check an answer against it before
+submitting rather than learning it from a refusal.
+
 ## \`validated\` is a floor, not a ceiling
 
 \`get_object_metadata\` reports \`validated\` from \`$metadata\`, and a field **without** the flag

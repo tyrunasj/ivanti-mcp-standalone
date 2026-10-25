@@ -1,0 +1,726 @@
+{
+ "lstParamCategories": [
+  {
+   "lstParameters": [
+    {
+     "strExistingRecId": "DF9E2D2AA0794C2BA8C42BED1B06DF11",
+     "strName": "FirstName",
+     "strType": "text",
+     "nSequenceNum": 0,
+     "visibilityExpression": null,
+     "requiredExpression": {
+      "Description": null,
+      "FieldRefs": [],
+      "IsFullExpression": false,
+      "Name": null,
+      "Tree": {
+       "Value": "true",
+       "LongImage": null,
+       "IsHex": false,
+       "IsVerbatimText": false,
+       "Kind": 0
+      },
+      "Source": "true",
+      "ValidationStatus": 0
+     },
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "E674689D9FA7431FBB7B3F554C3C54ED",
+     "strName": "Department",
+     "strType": "combo",
+     "nSequenceNum": 0,
+     "visibilityExpression": null,
+     "requiredExpression": {
+      "Description": null,
+      "FieldRefs": [],
+      "IsFullExpression": false,
+      "Name": null,
+      "Tree": {
+       "Value": "true",
+       "LongImage": null,
+       "IsHex": false,
+       "IsVerbatimText": false,
+       "Kind": 0
+      },
+      "Source": "true",
+      "ValidationStatus": 0
+     },
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "d7421e724d784aac996114d4097faa98",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "F5662613F08641CF93B94A562BB0B26E",
+     "strName": "EmploymentType_1",
+     "strType": "combo",
+     "nSequenceNum": 0,
+     "visibilityExpression": null,
+     "requiredExpression": {
+      "Description": null,
+      "FieldRefs": [],
+      "IsFullExpression": false,
+      "Name": null,
+      "Tree": {
+       "Value": "true",
+       "LongImage": null,
+       "IsHex": false,
+       "IsVerbatimText": false,
+       "Kind": 0
+      },
+      "Source": "true",
+      "ValidationStatus": 0
+     },
+     "readOnlyExpression": null,
+     "valueExpression": {
+      "Description": null,
+      "FieldRefs": [],
+      "IsFullExpression": false,
+      "Name": null,
+      "Tree": {
+       "Value": "Full Time",
+       "LongImage": null,
+       "IsHex": false,
+       "IsVerbatimText": false,
+       "Kind": 0
+      },
+      "Source": "Full Time",
+      "ValidationStatus": 0
+     },
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "8E0165207F9145ACAEC24E6EDEA9EE71",
+     "strName": "StartDate",
+     "strType": "date",
+     "nSequenceNum": 0,
+     "visibilityExpression": null,
+     "requiredExpression": {
+      "Description": null,
+      "FieldRefs": [],
+      "IsFullExpression": false,
+      "Name": null,
+      "Tree": {
+       "Value": "true",
+       "LongImage": null,
+       "IsHex": false,
+       "IsVerbatimText": false,
+       "Kind": 0
+      },
+      "Source": "true",
+      "ValidationStatus": 0
+     },
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "DEEE35EA5DEE46AC8D385E7A7FD9821D",
+     "strName": "ComputerRequired",
+     "strType": "checkbox",
+     "nSequenceNum": 0,
+     "visibilityExpression": null,
+     "requiredExpression": null,
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "BC40017B5DE149F4B2DD4416A356BD70",
+     "strName": "ComputerType",
+     "strType": "combo",
+     "nSequenceNum": 0,
+     "visibilityExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "ComputerRequired"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 0,
+       "Left": {
+        "FieldIndex": 0,
+        "Details": {
+         "Container": null,
+         "Selector": "ComputerRequired",
+         "SubSelector": null,
+         "IsObjectSelector": false,
+         "Qualifiers": [],
+         "Kind": 10
+        },
+        "Kind": 1
+       },
+       "Right": {
+        "Value": true,
+        "LongImage": null,
+        "IsHex": false,
+        "IsVerbatimText": false,
+        "Kind": 0
+       },
+       "Kind": 3
+      },
+      "Source": "$(ComputerRequired == true)",
+      "ValidationStatus": 0
+     },
+     "requiredExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "ComputerRequired"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 0,
+       "Left": {
+        "FieldIndex": 0,
+        "Details": {
+         "Container": null,
+         "Selector": "ComputerRequired",
+         "SubSelector": null,
+         "IsObjectSelector": false,
+         "Qualifiers": [],
+         "Kind": 10
+        },
+        "Kind": 1
+       },
+       "Right": {
+        "Value": true,
+        "LongImage": null,
+        "IsHex": false,
+        "IsVerbatimText": false,
+        "Kind": 0
+       },
+       "Kind": 3
+      },
+      "Source": "$(ComputerRequired == true)",
+      "ValidationStatus": 0
+     },
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "0A12675B08B74662BE6D6947AB0F96AB",
+     "strName": "UltraPortable",
+     "strType": "checkbox",
+     "nSequenceNum": 0,
+     "visibilityExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "ComputerRequired",
+       "ComputerType"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 10,
+       "Left": {
+        "Op": 10,
+        "Left": {
+         "Op": 0,
+         "Left": {
+          "FieldIndex": 0,
+          "Details": {
+           "Container": null,
+           "Selector": "ComputerRequired",
+           "SubSelector": null,
+           "IsObjectSelector": false,
+           "Qualifiers": [],
+           "Kind": 10
+          },
+          "Kind": 1
+         },
+         "Right": {
+          "Value": true,
+          "LongImage": null,
+          "IsHex": false,
+          "IsVerbatimText": false,
+          "Kind": 0
+         },
+         "Kind": 3
+        },
+        "Right": {
+         "Op": 1,
+         "Left": {
+          "FieldIndex": 1,
+          "Details": {
+           "Container": null,
+           "Selector": "ComputerType",
+           "SubSelector": null,
+           "IsObjectSelector": false,
+           "Qualifiers": [],
+           "Kind": 10
+          },
+          "Kind": 1
+         },
+         "Right": {
+          "Value": "Desktop",
+          "LongImage": null,
+          "IsHex": false,
+          "IsVerbatimText": false,
+          "Kind": 0
+         },
+         "Kind": 3
+        },
+        "Kind": 3
+       },
+       "Right": {
+        "Op": 1,
+        "Left": {
+         "FieldIndex": 1,
+         "Details": {
+          "Container": null,
+          "Selector": "ComputerType",
+          "SubSelector": null,
+          "IsObjectSelector": false,
+          "Qualifiers": [],
+          "Kind": 10
+         },
+         "Kind": 1
+        },
+        "Right": {
+         "Value": "",
+         "LongImage": null,
+         "IsHex": false,
+         "IsVerbatimText": false,
+         "Kind": 0
+        },
+        "Kind": 3
+       },
+       "Kind": 3
+      },
+      "Source": "$(ComputerRequired == true && ComputerType != \"Desktop\" && ComputerType != \"\")",
+      "ValidationStatus": 0
+     },
+     "requiredExpression": null,
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "F044F629E9654F2087509D58A2A3BCC1",
+     "strName": "PortReplicator",
+     "strType": "checkbox",
+     "nSequenceNum": 0,
+     "visibilityExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "ComputerRequired",
+       "ComputerType"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 10,
+       "Left": {
+        "Op": 10,
+        "Left": {
+         "Op": 0,
+         "Left": {
+          "FieldIndex": 0,
+          "Details": {
+           "Container": null,
+           "Selector": "ComputerRequired",
+           "SubSelector": null,
+           "IsObjectSelector": false,
+           "Qualifiers": [],
+           "Kind": 10
+          },
+          "Kind": 1
+         },
+         "Right": {
+          "Value": true,
+          "LongImage": null,
+          "IsHex": false,
+          "IsVerbatimText": false,
+          "Kind": 0
+         },
+         "Kind": 3
+        },
+        "Right": {
+         "Op": 1,
+         "Left": {
+          "FieldIndex": 1,
+          "Details": {
+           "Container": null,
+           "Selector": "ComputerType",
+           "SubSelector": null,
+           "IsObjectSelector": false,
+           "Qualifiers": [],
+           "Kind": 10
+          },
+          "Kind": 1
+         },
+         "Right": {
+          "Value": "Desktop",
+          "LongImage": null,
+          "IsHex": false,
+          "IsVerbatimText": false,
+          "Kind": 0
+         },
+         "Kind": 3
+        },
+        "Kind": 3
+       },
+       "Right": {
+        "Op": 1,
+        "Left": {
+         "FieldIndex": 1,
+         "Details": {
+          "Container": null,
+          "Selector": "ComputerType",
+          "SubSelector": null,
+          "IsObjectSelector": false,
+          "Qualifiers": [],
+          "Kind": 10
+         },
+         "Kind": 1
+        },
+        "Right": {
+         "Value": "",
+         "LongImage": null,
+         "IsHex": false,
+         "IsVerbatimText": false,
+         "Kind": 0
+        },
+        "Kind": 3
+       },
+       "Kind": 3
+      },
+      "Source": "$(ComputerRequired == true && ComputerType != \"Desktop\" && ComputerType != \"\")",
+      "ValidationStatus": 0
+     },
+     "requiredExpression": null,
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "B202ACE3DA7044FEB22861B319AC8C01",
+     "strName": "PrimaryMonitor",
+     "strType": "combo",
+     "nSequenceNum": 0,
+     "visibilityExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "ComputerRequired",
+       "ComputerType"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 10,
+       "Left": {
+        "Op": 10,
+        "Left": {
+         "Op": 0,
+         "Left": {
+          "FieldIndex": 0,
+          "Details": {
+           "Container": null,
+           "Selector": "ComputerRequired",
+           "SubSelector": null,
+           "IsObjectSelector": false,
+           "Qualifiers": [],
+           "Kind": 10
+          },
+          "Kind": 1
+         },
+         "Right": {
+          "Value": true,
+          "LongImage": null,
+          "IsHex": false,
+          "IsVerbatimText": false,
+          "Kind": 0
+         },
+         "Kind": 3
+        },
+        "Right": {
+         "Op": 1,
+         "Left": {
+          "FieldIndex": 1,
+          "Details": {
+           "Container": null,
+           "Selector": "ComputerType",
+           "SubSelector": null,
+           "IsObjectSelector": false,
+           "Qualifiers": [],
+           "Kind": 10
+          },
+          "Kind": 1
+         },
+         "Right": {
+          "Value": "Notebook",
+          "LongImage": null,
+          "IsHex": false,
+          "IsVerbatimText": false,
+          "Kind": 0
+         },
+         "Kind": 3
+        },
+        "Kind": 3
+       },
+       "Right": {
+        "Op": 1,
+        "Left": {
+         "FieldIndex": 1,
+         "Details": {
+          "Container": null,
+          "Selector": "ComputerType",
+          "SubSelector": null,
+          "IsObjectSelector": false,
+          "Qualifiers": [],
+          "Kind": 10
+         },
+         "Kind": 1
+        },
+        "Right": {
+         "Value": "",
+         "LongImage": null,
+         "IsHex": false,
+         "IsVerbatimText": false,
+         "Kind": 0
+        },
+        "Kind": 3
+       },
+       "Kind": 3
+      },
+      "Source": "$(ComputerRequired == true && ComputerType != \"Notebook\" && ComputerType != \"\")",
+      "ValidationStatus": 0
+     },
+     "requiredExpression": null,
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "A7E1F3DCF8F84E5C966321E6C5A3DA97",
+     "strName": "SecondaryMonitor",
+     "strType": "checkbox",
+     "nSequenceNum": 0,
+     "visibilityExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "ComputerRequired"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 0,
+       "Left": {
+        "FieldIndex": 0,
+        "Details": {
+         "Container": null,
+         "Selector": "ComputerRequired",
+         "SubSelector": null,
+         "IsObjectSelector": false,
+         "Qualifiers": [],
+         "Kind": 10
+        },
+        "Kind": 1
+       },
+       "Right": {
+        "Value": true,
+        "LongImage": null,
+        "IsHex": false,
+        "IsVerbatimText": false,
+        "Kind": 0
+       },
+       "Kind": 3
+      },
+      "Source": "$(ComputerRequired == true)",
+      "ValidationStatus": 0
+     },
+     "requiredExpression": null,
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "54D80C8755354E368048EE6BEA5D1151",
+     "strName": "2ndMonitor",
+     "strType": "combo",
+     "nSequenceNum": 0,
+     "visibilityExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "SecondaryMonitor"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 0,
+       "Left": {
+        "FieldIndex": 0,
+        "Details": {
+         "Container": null,
+         "Selector": "SecondaryMonitor",
+         "SubSelector": null,
+         "IsObjectSelector": false,
+         "Qualifiers": [],
+         "Kind": 10
+        },
+        "Kind": 1
+       },
+       "Right": {
+        "Value": true,
+        "LongImage": null,
+        "IsHex": false,
+        "IsVerbatimText": false,
+        "Kind": 0
+       },
+       "Kind": 3
+      },
+      "Source": "$(SecondaryMonitor == true)",
+      "ValidationStatus": 0
+     },
+     "requiredExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "SecondaryMonitor"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 0,
+       "Left": {
+        "FieldIndex": 0,
+        "Details": {
+         "Container": null,
+         "Selector": "SecondaryMonitor",
+         "SubSelector": null,
+         "IsObjectSelector": false,
+         "Qualifiers": [],
+         "Kind": 10
+        },
+        "Kind": 1
+       },
+       "Right": {
+        "Value": true,
+        "LongImage": null,
+        "IsHex": false,
+        "IsVerbatimText": false,
+        "Kind": 0
+       },
+       "Kind": 3
+      },
+      "Source": "$(SecondaryMonitor == true)",
+      "ValidationStatus": 0
+     },
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "3603ACD37716431B80611D9DAC447A6F",
+     "strName": "MobilePhoneRequired",
+     "strType": "checkbox",
+     "nSequenceNum": 0,
+     "visibilityExpression": null,
+     "requiredExpression": null,
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    },
+    {
+     "strExistingRecId": "9EA826C8AB83429AA5E1E8B95B43C7F1",
+     "strName": "MobilePhone",
+     "strType": "combo",
+     "nSequenceNum": 0,
+     "visibilityExpression": {
+      "Description": null,
+      "FieldRefs": [
+       "MobilePhoneRequired"
+      ],
+      "IsFullExpression": true,
+      "Name": null,
+      "Tree": {
+       "Op": 0,
+       "Left": {
+        "FieldIndex": 0,
+        "Details": {
+         "Container": null,
+         "Selector": "MobilePhoneRequired",
+         "SubSelector": null,
+         "IsObjectSelector": false,
+         "Qualifiers": [],
+         "Kind": 10
+        },
+        "Kind": 1
+       },
+       "Right": {
+        "Value": true,
+        "LongImage": null,
+        "IsHex": false,
+        "IsVerbatimText": false,
+        "Kind": 0
+       },
+       "Kind": 3
+      },
+      "Source": "$(MobilePhoneRequired == true)",
+      "ValidationStatus": 0
+     },
+     "requiredExpression": null,
+     "readOnlyExpression": null,
+     "valueExpression": null,
+     "autoFillExpression": null,
+     "validationConstraints": null,
+     "strValidationConstraints": "",
+     "strValidationListRecId": "",
+     "bIsHidden": false
+    }
+   ]
+  }
+ ]
+}

@@ -166,7 +166,19 @@ export function createGetPickListValuesTool(deps: IvantiToolDeps): ToolDefinitio
                       '`filters` before presenting these as the options, or read the backing ' +
                       'object for everything the field could ever hold.',
                   }
-                : list,
+                : parents.length > 0
+                  ? {
+                      ...list,
+                      constrainedBy: parents,
+                      // Complete for THESE parents, not for the field. A value absent here
+                      // (an Owner, a Category) may be legal under another parent.
+                      scopeNote:
+                        `Valid under ${parents.join(', ')} as supplied only. A value missing ` +
+                        'here may belong under a different parent — not "does not exist". If the ' +
+                        'person needs one that is absent, say so and ask which parent applies; ' +
+                        'do not substitute another value.',
+                    }
+                  : list,
             ];
           }),
         );

@@ -1440,6 +1440,57 @@ model the sign-in already names the person — which a stdio connection has no t
 still refuses until `act_as` succeeds, so nothing leaks; the model just learns it one refusal
 later. Run the two transports as separate processes if that matters. *(Known limit, 2026-09-29.)*
 
+**A cascaded list is complete for its parent only, and "not on the list" is a membership answer.**
+Ordering a `Tablet Request` as a person whose `Employee.Department` is empty: `Requester` is
+filtered by `Department`, no department listed them, and the model — correctly — said they were not
+in the department. It then tried three departments, searched spellings and asked a person to pick a
+requester, because nothing said that an empty or short child list is the answer rather than a
+failed search.
+
+**A service request form has two kinds of dependency, and only one was visible.** List options
+depend on another answer (`ValidationConstraints`), and whether a parameter is shown or required
+depends on another answer (`VisibilityExpression` / `RequiredExpression`). `New Employee
+On-boarding` is mostly the second: `ComputerRequired` → `ComputerType` → `UltraPortable` /
+`PrimaryMonitor` (shown when the type is not `Desktop` / not `Notebook`), `SecondaryMonitor` →
+`2ndMonitor`. The server cannot evaluate an expression — only Ivanti can, and a parameter may be
+required by a rule over another answer — so it now *points*: `get_service_request_parameters` adds
+`filteredBy` (from `FormFieldName`) and `conditionedOn` (every parameter name the two expressions
+read, quoted strings dropped) to each parameter, plus a `dependenciesNote` that says how to walk the
+form; `get_service_request_parameter_options` echoes `scopedTo` / `scopeNote`;
+`get_pick_list_values` adds a `scopeNote` when every parent was supplied; and
+`ivanti://reference/picklists` gained "Answers that depend on answers" and "Absent under a parent".
+The tool descriptions were NOT touched — the manifest sits 80 characters under its cap. (Code 2026-10-25.)
+
+**Ivanti's portal evaluates show/hide, required and defaults in the browser, from one download.**
+A HAR of opening a service request (2026-10-25) shows the whole form arrive in one call —
+`GET /api/rest/ServiceRequest/PackageData/{subscriptionId}/Default` (also
+`ServiceSubscription.asmx/GetPackageData`) — and then only option lists (`POST …/ValidationList`,
+the same calls `get_service_request_parameter_options` makes, with `strCustomerLocation` set to
+`Default`). Nothing is sent when a checkbox is ticked, so there is no "evaluate this form" call to
+borrow; the rules have to be walked by the caller. That download also carries each expression
+pre-parsed (`requiredExpression.FieldRefs` lists the parameters it reads) — the OData template
+parameters do not, which is why `conditionedOn` reads names out of the expression text instead.
+A default value (`ValueExpression`) is resolved to its option with a `query` of `%<value>`.
+**The HAR contains no cascade interaction** (the page was only loaded), so how a child list is
+re-queried after its parent changes is still taken from the existing `constraintParams` body.
+**A value rule lives only in `ConfigOptions`:** `StartDate` says "Minimum two weeks lead time" in
+prose and `{"dateValidation":{"expr":"$(StartDate>=CurrentDate()+14)"}}` in `ConfigOptions`; it is
+now lifted into `valueRule`. *(Code 2026-10-25.)*
+
+**`get_service_request_parameters` can now evaluate a form (2026-10-25).** With `subscriptionId` +
+`answers` it fetches the package the portal fetches and walks the parsed rules
+(`src/ivanti/service-request/form-rules/`): shown, required, read-only, defaults, what is `missing`,
+answers to drop, and ready-made `constraints` for each filtered list. The evaluator is a port of
+`ivanti-mobile`'s (`utils/form/rule-engine`), which mirrors Ivanti's own client; the function
+library came with it. Differences: stored expressions (`$[this]Name()`) are not ported, and an
+unknown function or stored expression is *reported* in `cannotTell` where the app degrades to
+`null` silently. It informs and never refuses. **Verified live 2026-10-25** over stdio against the
+tenant: `PackageData` answers through this server's credential; New Employee Setup and Tablet
+Request evaluate correctly (iPad 4 reveals Color, Surface hides it, Requester waits for Department
+then gets `queryFieldName: Department`). A parameter with a default (`EmploymentType_1`) is not
+`missing`, but its default must be sent. Not covered: auto-fill
+(`$([…]PrimaryEmail)`), which needs the picked record, and `valueRule` date checks.
+
 ## Observability
 
 **`/health` must answer without a token, so everything it returns is public.**
