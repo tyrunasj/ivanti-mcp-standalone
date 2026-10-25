@@ -327,6 +327,7 @@ auth mode. Token propagation to Ivanti is settled by §11.
 | Exposing service-request staging ids | Staging happens inside the submit: an id is one-shot and a second submit *moves* the file |
 | Voting through "Approve My Vote" on the approval | "My" is the session, and an admin key's override bypasses the real approver. `vote_on_approval` acts on the approver's own vote row |
 | Voting by setting the vote row's `Status` | Stores the status, overwrites `VotedBy`, and the workflow never fires |
+| Driving a headless browser to evaluate a form's rules | Considered 2026-10-25. The portal evaluates them in JavaScript from one download, but the rules are a small expression language over parsed trees, so a port of the evaluator (from `ivanti-mobile`) is deterministic and carries no Chromium, login or markup dependency |
 | Ranking roles by object-workspace count | Built, then deleted (2026-09-14): the counts do not separate the classes, and are unavailable on an impersonated session. Ivanti's `SelfServiceRole` flag decides |
 | `SetRoleForUserSession` to select a role | `Session.asmx/SelectRole` re-points the session without re-authenticating |
 | `FindActiveTenantRecord` as the startup probe | The only probe that catches a wrong tenant — but it returns the database connection string and encryption key |
