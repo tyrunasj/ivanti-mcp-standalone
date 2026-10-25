@@ -20,6 +20,12 @@ full list of merged changes is on each [GitHub release](https://github.com/tyrun
 - **A filtered list is complete for its parent only.** Option answers now say so, so a person missing
   from a list prompts a question instead of a retry loop. `ivanti://reference/picklists` covers
   both kinds of dependency.
+- **Dependencies are current, and `pnpm audit --prod` is clean.** The MCP SDK moves to 1.32.1, `zod`
+  to 4.6.7 and `fast-xml-parser` to 5.11.2. The lockfile also takes patched versions of four
+  transitive packages that carried advisories — `body-parser` (denial of service, high), `hono`,
+  `fast-uri` and `ip-address` — and the container's `node:22-slim` base image is refreshed. Build
+  and release tooling (vitest, eslint, typescript-eslint, and the upload-artifact, metadata-action
+  and action-gh-release GitHub Actions) is updated too; none of it changes runtime behaviour.
 
 ## 0.3.4 — 2026-10-11
 
