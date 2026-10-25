@@ -25,6 +25,11 @@ export interface IvantiToolDeps {
   ownRecordsOnly: boolean;
   /** Which of the tenant's own procedures this audience may run. Open in `full`. */
   actions: ActionGate;
+  /**
+   * Whether a change must say why, and leave a note on the record saying so (`WRITE_AUDIT_NOTE`).
+   * Absent means off, which is what a test that does not care gets.
+   */
+  auditNote?: boolean;
 }
 
 /**

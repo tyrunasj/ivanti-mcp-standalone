@@ -9,6 +9,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { transportFor } from '../shared/transport-for.js';
+import { auditArguments, justificationOf, leaveAuditNote } from '../shared/audit-note.js';
 import { confirmLinked, isLinkedTo, notConfirmed } from './membership.js';
 import {
   describeUnknownRelationship,
@@ -40,11 +41,13 @@ export function createUnlinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
       recordId: z.string().describe('RecId of the source record.'),
       relationship: z.string().describe('Relationship name, e.g. `IncidentContainsTask`.'),
       targetId: z.string().describe('RecId of the record to unlink.'),
+      ...auditArguments(deps),
     },
     handler: (args, context) =>
       runTool('unlink_records', deps.logger, async () => {
         const transport = transportFor(deps.connection.transport, context);
-        const { entity, entitySet } = await resolveObject(deps, args.object);
+        const resolved = await resolveObject(deps, args.object);
+        const { entity, entitySet } = resolved;
 
         const relationship = resolveRelationship(entity.relationships, args.relationship);
         if (relationship === undefined) {
@@ -105,11 +108,20 @@ export function createUnlinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
 
         deps.logger.info('ivanti records unlinked', { object: entitySet, relationship });
 
+        const audit = await leaveAuditNote(deps, context, {
+          parent: resolved,
+          recordId: args.recordId,
+          action: `Unlinked ${args.targetId} from ${entity.name} ${args.recordId}`,
+          changes: [`${relationship}: ${args.targetId} removed`],
+          justification: justificationOf(args),
+        });
+
         return jsonResult({
           object: entitySet,
           recId: args.recordId,
           relationship,
           unlinked: args.targetId,
+          ...audit,
         });
       }),
   });

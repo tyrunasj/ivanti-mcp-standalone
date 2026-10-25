@@ -12,6 +12,7 @@ import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { transportFor } from '../shared/transport-for.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
+import { auditArguments, describeRecord, justificationOf, noteOnParent } from '../shared/audit-note.js';
 
 export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -42,6 +43,7 @@ export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
         .string()
         .describe(OBJECT_ARGUMENT),
       recordId: z.string().describe('The 32-character RecId of the record to delete.'),
+      ...auditArguments(deps),
     },
     handler: (args, context) =>
       runTool('delete_record', deps.logger, async () => {
@@ -85,7 +87,13 @@ export function createDeleteRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         deps.logger.info('ivanti record deleted', { object: entitySet });
 
-        return jsonResult({ object: entitySet, recId: args.recordId, deleted: true });
+        // The record's own journal went with it, so the note goes on the record it hung from.
+        const audit = await noteOnParent(deps, context, existing, {
+          action: `Deleted ${describeRecord(target.entity.name, args.recordId, existing)}`,
+          justification: justificationOf(args),
+        });
+
+        return jsonResult({ object: entitySet, recId: args.recordId, deleted: true, ...audit });
       }),
   });
 }

@@ -23,6 +23,7 @@ import { connectionFor } from '../shared/connection-for.js';
 import { knownFields } from '../shared/known-fields.js';
 import { assertOwnershipUntouched } from '../shared/ownership-writes.js';
 import { OBJECT_ARGUMENT } from '../shared/object-argument.js';
+import { auditArguments, describeChange, describeRecord, justificationOf, leaveAuditNote } from '../shared/audit-note.js';
 
 export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
   return defineTool({
@@ -82,6 +83,7 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
             'roughly 10 KB of JSON, which is a lot to spend confirming a write that has already ' +
             'been verified. Pass "*" for the whole record.',
         ),
+      ...auditArguments(deps),
     },
     handler: (args, context) =>
       runTool('update_record', deps.logger, async () => {
@@ -92,7 +94,7 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         // Before anything is resolved, let alone written: whether it is the caller's, and
         // whether it is still open. Ivanti happily updates a closed record.
-        await assertRecordWritable(deps, context, target, args.recordId);
+        const before = await assertRecordWritable(deps, context, target, args.recordId);
 
         // The person's connection — see create-record.ts. Validating against the service
         // account's form while writing on the person's SID validates the wrong thing.
@@ -149,11 +151,23 @@ export function createUpdateRecordTool(deps: IvantiToolDeps): ToolDefinition {
 
         deps.logger.info('ivanti record updated', { object: entitySet });
 
+        const stored = readBack.stored ?? updated;
+        const audit = await leaveAuditNote(deps, context, {
+          parent: target,
+          recordId: args.recordId,
+          action: `Updated ${describeRecord(entity.name, args.recordId, before)}`,
+          changes: changed.map((field) =>
+            describeChange(field, before?.[field], stored?.[field] ?? fields[field], before !== undefined),
+          ),
+          justification: justificationOf(args),
+        });
+
         return jsonResult({
           object: entitySet,
           recId: args.recordId,
           changed,
           ...readBackReport(readBack),
+          ...audit,
           // The read-back, not the PATCH response: that echoes what was sent — measured, it
           // reports `LastModBy` changed while the record keeps the session account.
           record: projectWritten(readBack.stored ?? updated, args.returnFields, changed),

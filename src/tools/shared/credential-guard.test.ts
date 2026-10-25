@@ -25,6 +25,10 @@ import { describe, expect, it } from 'vitest';
  * **what the tenant is**? Only the first belongs on the caller's credential.
  */
 const SERVICE_ACCOUNT_BY_DESIGN: Record<string, string> = {
+  'shared/audit-note.ts':
+    'The note saying why a change was made is authored by the account the API key was issued ' +
+    'for, never by the person the conversation acts as — a record that shows someone as having ' +
+    'written text they never saw is a worse audit trail than none.',
   'schema/get-link-fields.ts':
     'Samples rows to learn a link field\'s `_Category` spelling. That is a fact about the tenant, ' +
     'not about the caller, and reading it per person would make a process-wide answer vary by ' +

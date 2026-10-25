@@ -3,11 +3,8 @@
 
 import { z } from 'zod';
 import { tenantCategorySpelling } from '../../ivanti/parent-link.js';
-import { buildQuery, quoteOdataString, withQuery } from '../../ivanti/odata/query.js';
-import { NOTE_ENTITY_SET, resolveNoteObject, toNote } from './notes.js';
+import { NOTE_ENTITY_SET, readNote, resolveNoteObject, toNote } from './notes.js';
 import type { OdataRecord } from '../../ivanti/odata/response.js';
-import type { IvantiTransport } from '../../ivanti/http/transport.js';
-import { readRows } from '../shared/read-rows.js';
 import type { IvantiToolDeps } from '../shared/deps.js';
 import { assertRecordWritable, authorFields } from '../shared/own-records.js';
 import { errorResult, jsonResult } from '../shared/result.js';
@@ -15,18 +12,6 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { transportFor } from '../shared/transport-for.js';
-
-/** The note as Ivanti stored it, read by its own id rather than trusted from the POST's answer. */
-async function readNote(
-  transport: IvantiTransport,
-  recId: string,
-): Promise<OdataRecord | undefined> {
-  const url = withQuery(
-    transport.routes.entitySet(NOTE_ENTITY_SET),
-    buildQuery({ filter: `RecId eq ${quoteOdataString(recId)}`, top: 1 }),
-  );
-  return readRows<OdataRecord>(await transport.request<OdataRecord>(url), url)[0];
-}
 
 const sameId = (a: unknown, b: string): boolean =>
   typeof a === 'string' && a.toLowerCase() === b.toLowerCase();

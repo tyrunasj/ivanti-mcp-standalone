@@ -20,6 +20,13 @@ describe('envSchema', () => {
     expect(config.TRUSTED_ORIGINS).toEqual([]);
   });
 
+  it('asks for a note on every change unless told not to, and refuses a spelling it does not know', () => {
+    expect(envSchema.parse({}).WRITE_AUDIT_NOTE).toBe('required');
+    expect(envSchema.parse({ WRITE_AUDIT_NOTE: 'off' }).WRITE_AUDIT_NOTE).toBe('off');
+    // A typo must not quietly read as "off": the audit trail is the thing it would remove.
+    expect(envSchema.safeParse({ WRITE_AUDIT_NOTE: 'false' }).success).toBe(false);
+  });
+
   it('rejects an unknown auth mode', () => {
     expect(envSchema.safeParse({ AUTH_MODE: 'open' }).success).toBe(false);
   });

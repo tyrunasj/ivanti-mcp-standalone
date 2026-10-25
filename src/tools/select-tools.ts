@@ -78,6 +78,7 @@ export function selectTools(config: Config, context: ToolContext): ToolDefinitio
     logger: context.logger,
     ownRecordsOnly: audience.ownRecordsOnly,
     actions,
+    auditNote: config.WRITE_AUDIT_NOTE === 'required',
   };
 
   // Who the conversation is helping. First in both modes, and in `enduser` the gate every record

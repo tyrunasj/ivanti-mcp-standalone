@@ -14,6 +14,7 @@ import { resolveObject } from '../shared/resolve-object.js';
 import { runTool } from '../shared/run-tool.js';
 import { defineTool, type ToolDefinition } from '../tool-definition.js';
 import { transportFor } from '../shared/transport-for.js';
+import { auditArguments, justificationOf, leaveAuditNote } from '../shared/audit-note.js';
 import { confirmLinked, isLinkedTo, notConfirmed } from './membership.js';
 
 /** Ivanti's "it worked" code on the relationship endpoints. Anything else is a failure in a 200. */
@@ -148,6 +149,7 @@ export function createLinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
       recordId: z.string().describe('RecId of the source record.'),
       relationship: z.string().describe('Relationship name, e.g. `IncidentContainsTask`.'),
       targetId: z.string().describe('RecId of the record to link to.'),
+      ...auditArguments(deps),
     },
     handler: (args, context) =>
       runTool('link_records', deps.logger, async () => {
@@ -292,7 +294,21 @@ export function createLinkRecordsTool(deps: IvantiToolDeps): ToolDefinition {
 
         deps.logger.info('ivanti records linked', { object: entitySet, relationship });
 
-        return jsonResult({ object: entitySet, recId: args.recordId, relationship, linked: args.targetId });
+        const audit = await leaveAuditNote(deps, context, {
+          parent: { entity, entitySet },
+          recordId: args.recordId,
+          action: `Linked ${entity.name} ${args.recordId} to ${args.targetId}`,
+          changes: [`${relationship}: ${args.targetId} added`],
+          justification: justificationOf(args),
+        });
+
+        return jsonResult({
+          object: entitySet,
+          recId: args.recordId,
+          relationship,
+          linked: args.targetId,
+          ...audit,
+        });
       }),
   });
 }
