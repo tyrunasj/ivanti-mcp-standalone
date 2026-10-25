@@ -144,6 +144,22 @@ export function createGetServiceRequestParameterOptionsTool(deps: IvantiToolDeps
                   : { constraintsUsed: args.constraints }),
               }
             : {}),
+          // A constrained list is the options UNDER those parents, not the parameter's whole
+          // range. A person or item missing from it is not proof they do not exist: they may
+          // belong to another parent. Said whether or not the list is empty, because a short
+          // answer from a correct filter reads exactly like a complete one.
+          ...(args.constraints === undefined || args.constraints.length === 0
+            ? {}
+            : {
+                scopedTo: args.constraints,
+                scopeNote:
+                  'This list holds only what is valid UNDER those constraints. Something absent ' +
+                  'here — a person, a site, an item — may belong under a different value of the ' +
+                  'parent; it does not mean it does not exist, and retrying its spelling will ' +
+                  'not find it. If the person is not listed under the parent they chose, say so ' +
+                  'and ask which parent they belong to (or have the parent changed) rather than ' +
+                  'substituting someone else or looping through spellings.',
+              }),
           options,
         });
       }),

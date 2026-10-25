@@ -48,6 +48,55 @@ describe('decodeParameter', () => {
     });
   });
 
+  it('names the parameters a constrained list is filtered by', () => {
+    const decoded = decodeParameter({
+      Name: 'Requester',
+      ValidationConstraints:
+        '[{"ConstraintFieldName":"Department","FormFieldName":"Department_1"}]',
+    });
+
+    expect(decoded['filteredBy']).toEqual(['Department_1']);
+    expect(decodeParameter({ Name: 'Storage' })['filteredBy']).toBeUndefined();
+  });
+
+  it('names the answers that show or require a parameter, ignoring quoted words', () => {
+    const names = new Set(['ComputerRequired', 'ComputerType', 'Desktop', 'UltraPortable']);
+    const decoded = decodeParameter(
+      {
+        Name: 'UltraPortable',
+        VisibilityExpression:
+          '$(ComputerRequired == true && ComputerType != "Desktop" &&\r\n  ComputerType != "")',
+        RequiredExpression: '$(false)',
+      },
+      names,
+    );
+
+    expect(decoded['conditionedOn']).toEqual(['ComputerRequired', 'ComputerType']);
+  });
+
+  it('does not report a parameter as conditioned on itself, nor on nothing', () => {
+    const names = new Set(['2ndMonitor', 'SecondaryMonitor']);
+    const decoded = decodeParameter(
+      { Name: '2ndMonitor', RequiredExpression: '$(SecondaryMonitor == true)' },
+      names,
+    );
+
+    expect(decoded['conditionedOn']).toEqual(['SecondaryMonitor']);
+    expect(decodeParameter({ Name: 'A', RequiredExpression: '$(true)' }, names)['conditionedOn']).toBeUndefined();
+  });
+
+  it('lifts a date rule out of ConfigOptions and drops the layout', () => {
+    const decoded = decodeParameter({
+      Name: 'StartDate',
+      ConfigOptions:
+        '{"configData":{"width":250,"dateValidation":{"expr":"$(StartDate>=CurrentDate()+14)"}}}',
+    });
+
+    expect(decoded['valueRule']).toBe('$(StartDate>=CurrentDate()+14)');
+    expect(decoded['ConfigOptions']).toBeUndefined();
+    expect(decodeParameter({ ConfigOptions: 'not json' })['valueRule']).toBeUndefined();
+  });
+
   it('leaves `required` absent when the expression is conditional', () => {
     expect(decodeParameter({ RequiredExpression: '$(x)' }).required).toBeUndefined();
   });

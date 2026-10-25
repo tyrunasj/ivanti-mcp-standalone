@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-SYNERGY-Commercial
 // Copyright (c) 2026 SYNERGY. All rights reserved.
 
+import { readFileSync } from 'node:fs';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ANONYMOUS } from '../../auth/identity.js';
@@ -232,5 +233,58 @@ describe('get_service_request_parameters, the other branches', () => {
     expect(result.isError).toBe(true);
     expect(text(result)).toBe('No such record is available to you.');
     expect(urls.some((url) => url.includes('servicereqparams'))).toBe(false);
+  });
+});
+
+describe('get_service_request_parameters, evaluating a form against answers', () => {
+  const portalForm = JSON.parse(
+    readFileSync(
+      new URL('../../ivanti/service-request/form-rules/onboarding.fixture.json', import.meta.url),
+      'utf8',
+    ),
+  ) as unknown;
+
+  const rows = ['ComputerRequired', 'ComputerType'].map((Name, i) => ({
+    RecId: `p${String(i)}`,
+    Name,
+    SequenceNum: i,
+  }));
+
+  it('walks the portal rules: ticking the computer makes the type the next question', async () => {
+    const { parameters, urls } = setup({
+      servicereqtemplateparams: { '@odata.count': 2, value: rows },
+      'ServiceRequest/PackageData/sub1/Default': portalForm,
+    });
+
+    const result = body(
+      await parameters.handler(
+        { templateId: 't1', subscriptionId: 'sub1', answers: { ComputerRequired: true } },
+        pinned(),
+      ),
+    );
+
+    const evaluation = result['evaluation'] as { visible: string[]; missing: string[] };
+    expect(evaluation.visible).toContain('ComputerType');
+    expect(evaluation.missing).toContain('ComputerType');
+    expect(urls.some((url) => url.includes('PackageData/sub1/Default?timeZone='))).toBe(true);
+  });
+
+  it('asks for the subscriptionId rather than evaluating against nothing', async () => {
+    const { parameters } = setup({ servicereqtemplateparams: { '@odata.count': 0, value: [] } });
+
+    const result = await parameters.handler({ templateId: 't1', answers: {} }, pinned());
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('subscriptionId');
+  });
+
+  it('adds nothing when no answers are given', async () => {
+    const { parameters } = setup({
+      servicereqtemplateparams: { '@odata.count': 2, value: rows },
+    });
+
+    expect(body(await parameters.handler({ templateId: 't1' }, pinned()))).not.toHaveProperty(
+      'evaluation',
+    );
   });
 });

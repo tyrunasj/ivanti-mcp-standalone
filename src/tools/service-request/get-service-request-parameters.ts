@@ -3,6 +3,8 @@
 
 import { z } from 'zod';
 import { decodeParameter } from '../../ivanti/service-request/parameter-shape.js';
+import { readFormPackage } from '../../ivanti/service-request/form-rules/form-package.js';
+import { evaluateForm } from '../../ivanti/service-request/form-rules/evaluate-form.js';
 import { parseFieldList, projectRows } from '../../ivanti/odata/projection.js';
 import {
   buildQuery,
@@ -122,6 +124,7 @@ const PARAMETER_FIELDS = [
   'ValueExpression',
   'AutoFillExpression',
   'TriggerFields',
+  'ConfigOptions',
   'RequiresSubscription',
 ];
 
@@ -174,6 +177,26 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
         .string()
         .optional()
         .describe('Comma-separated fields, if the default set is not what you need.'),
+      subscriptionId: z
+        .string()
+        .optional()
+        .describe('With `answers`: the offering\'s `subscriptionId`.'),
+      answers: z
+        .record(
+          z.string(),
+          z.union([
+            z.string(),
+            z.number(),
+            z.boolean(),
+            z.null(),
+            z.object({ value: z.string(), recId: z.string().optional() }),
+          ]),
+        )
+        .optional()
+        .describe(
+          'Answers so far, by parameter Name. Adds `evaluation`: what is shown, required, still ' +
+            'missing, and how to fetch each filtered list. Call again after each answer.',
+        ),
     },
     handler: (args, context) =>
       runTool('get_service_request_parameters', deps.logger, async () => {
@@ -258,12 +281,72 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
           (parameter) => (parameter as { DisplayType?: unknown }).DisplayType !== 'category',
         ).length;
 
+        const names = new Set(
+          projected.map((parameter) => (parameter as { Name?: unknown }).Name).filter((n) => typeof n === 'string'),
+        );
+        const decoded = projected.map((parameter) => decodeParameter(parameter, names));
+
+        let evaluation: Record<string, unknown> | undefined;
+        if (args.answers !== undefined) {
+          if (args.subscriptionId === undefined || args.subscriptionId === '') {
+            return errorResult(
+              '`answers` is evaluated against the offering as the portal receives it, which is ' +
+                "keyed by the offering's `subscriptionId` (from list_request_offerings, beside " +
+                'the `templateId` you passed). Pass both.',
+            );
+          }
+          const offset = await deps.connection.serviceRequests.tenantOffset.get().catch(() => undefined);
+          const form = await readFormPackage(transport, args.subscriptionId, -(offset?.minutes ?? 0));
+          const person = context?.pin?.person();
+          const user =
+            person === undefined
+              ? undefined
+              : {
+                  displayName: person.displayName,
+                  fields: { RecId: person.recId },
+                  ...(person.loginId === undefined ? {} : { loginId: person.loginId }),
+                  ...(person.primaryEmail === undefined ? {} : { email: person.primaryEmail }),
+                };
+          evaluation = {
+            ...evaluateForm({
+              parameters: form,
+              answers: args.answers,
+              ...(user === undefined ? {} : { user }),
+            }),
+            note:
+              'Computed here from Ivanti\'s own rules, as the portal does in the browser. ' +
+              '`missing` is what to ask next; send each `defaults` value as the answer unless the person ' +
+              'chooses otherwise; drop `answeredButHidden`; fetch each `options` ' +
+              'entry only when `waitingOn` is empty. `cannotTell` lists rules this could not ' +
+              'read — treat those parameters as unknown, not hidden. Ivanti still judges the submit.',
+          };
+        }
+        const filtered = decoded.filter((parameter) => parameter['filteredBy'] !== undefined).length;
+        const conditional = decoded.filter((parameter) => parameter['conditionedOn'] !== undefined).length;
+
         return jsonResult({
           templateId: args.templateId,
           returned: projected.length,
           total: read.total,
           hasMore: read.hasMore,
           ...cutOffNote(read, 'parameters'),
+          ...(filtered + conditional === 0
+            ? {}
+            : {
+                dependenciesNote:
+                  'ANSWERS DEPEND ON ANSWERS HERE. Work down the form in SequenceNum order, ' +
+                  'holding what you have answered so far. `conditionedOn` names the answers that ' +
+                  'SHOW or REQUIRE a parameter: evaluate its VisibilityExpression against them ' +
+                  '— if false, leave it out; if true, answer it, and a required rule ' +
+                  'that now holds makes it mandatory. A parameter can appear only after another ' +
+                  'one is answered, and that one can itself be conditional, so a chain is ' +
+                  'normal. `filteredBy` names the answers a list\'s OPTIONS depend on: ask for the ' +
+                  'options with those values, never before. When an earlier answer changes, ' +
+                  're-check everything that names it: drop answers that are now hidden and re-' +
+                  'fetch options that were filtered by it. If the option a person needs is not ' +
+                  'under the parent they chose, say so and ask — do not guess another one.',
+              }),
+          ...(evaluation === undefined ? {} : { evaluation }),
           answerable,
           ...(answerable === projected.length
             ? {}
@@ -280,7 +363,7 @@ export function createGetServiceRequestParametersTool(deps: IvantiToolDeps): Too
                   "or offering id instead of the template's RecId.",
               }
             : {}),
-          parameters: projected.map(decodeParameter),
+          parameters: decoded,
         });
       }),
   });
