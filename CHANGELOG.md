@@ -4,6 +4,30 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
+## 0.3.6 — 2026-10-25
+
+**Upgrading.** Nothing to check; swap the version. No setting or tool name changed, and the one
+argument that became optional (`templateId` when evaluating answers) only loosens a requirement.
+
+Follow-ups to 0.3.5's form evaluation, from watching it used in a real conversation:
+
+- **Evaluating answers needs only `subscriptionId`.** `get_service_request_parameters` with
+  `subscriptionId` and `answers` returns `evaluation` alone — no template read, and no repeat of
+  the parameter list on every call.
+- **`autoFilled` names what Ivanti fills in itself** (a picked person's email, say). Those
+  parameters are never `missing`, so nobody types a value that disagrees with Ivanti's.
+- **Long option lists are capped at 100 rows.** The answer carries `total`, `hasMore` and a pointer
+  to `search`; a department's requester list is around 200 rows and was being read in full to find
+  one person.
+- **A blank field in the person's own record is a data fix for their administrator.** The option
+  notes and `ivanti://reference/picklists` now say not to edit someone's record to make a form
+  accept them unless they ask for exactly that.
+
+Worth checking in your own deployment, though nothing here changes it: `full` mode with
+`IVANTI_IMPERSONATION_ROLE` unset and `AUTH_MODE` not `oauth` lets a chat act as anyone it is told
+the name of, with Admin rights. `enduser` mode, a self-service impersonation role and `oauth`
+remove that. See `docs/configuration.md`.
+
 ## 0.3.5 — 2026-10-25
 
 **Upgrading.** Nothing to check; swap the version. No setting, tool name or required argument changed.
