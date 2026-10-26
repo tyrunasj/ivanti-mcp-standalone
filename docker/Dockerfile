@@ -22,7 +22,7 @@ ARG PNPM_VERSION=10.20.0
 # ──────────────────────────────────────────────────────────────────────────────
 # Build: the toolchain never reaches the final image.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS build
+FROM node:22-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS build
 WORKDIR /app
 ARG PNPM_VERSION
 RUN npm install --global "pnpm@${PNPM_VERSION}"
@@ -42,7 +42,7 @@ RUN pnpm build
 # which does not survive a COPY into another image: the links point at paths
 # that are not there. `--node-linker=hoisted` writes real directories instead.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS deps
+FROM node:22-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS deps
 WORKDIR /app
 ARG PNPM_VERSION
 RUN npm install --global "pnpm@${PNPM_VERSION}"
@@ -69,7 +69,7 @@ RUN find node_modules \( -name '*.d.ts' -o -name '*.md' -o -name '*.map' \) \
 # digest still carried the OpenSSL and glibc that Debian had long since fixed
 # (docs/notes.md). The digest is the multi-arch index.
 # ──────────────────────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:ec2313763dd43931543bd03830466e0c409ce73a487e8d46f10db72d3b816c1c AS runtime
+FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:10747a1323be68f206aed893599d43e6697ad67257e7c42703553f99fbce3d33 AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
