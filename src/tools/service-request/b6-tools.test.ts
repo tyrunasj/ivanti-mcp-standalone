@@ -242,6 +242,64 @@ describe('submit_service_request', () => {
     expect(text(result)).toContain('Paul H Chang');
   });
 
+  describe('answer keys', () => {
+    const PACKAGE = {
+      'ServiceRequest/PackageData/sub-1/Default': {
+        lstParamCategories: [
+          {
+            lstParameters: [
+              { strName: 'Department_1', strRecId: 'P1', strType: 'combo', nSequenceNum: 1 },
+              { strName: 'Model', strRecId: 'P2', strExistingRecId: 'X2', strType: 'text', nSequenceNum: 2 },
+            ],
+          },
+        ],
+      },
+    };
+
+    it('settles names to RecIds and says which', async () => {
+      const { deps: d } = deps({ ...SUBMITTED, ...PACKAGE, ServiceReqContainsServiceReqParam: { value: [] } });
+      const request = vi.spyOn(d.connection.transport, 'requestRequired');
+
+      const result = body(
+        await createSubmitServiceRequestTool(d).handler(
+          { subscriptionId: 'sub-1', answers: { Department_1: { value: 'IT', recId: 'o1' }, P2: 'iPad' } },
+          pinned(),
+        ),
+      );
+
+      expect(result['keysSettled']).toEqual({ Department_1: 'P1' });
+      const posted = JSON.stringify(request.mock.calls);
+      expect(posted).toContain('P1');
+      expect(posted).not.toContain('Department_1');
+    });
+
+    it('refuses a key that matches nothing, by name, before anything is sent', async () => {
+      const { deps: d, urls } = deps({ ...SUBMITTED, ...PACKAGE });
+
+      const result = await createSubmitServiceRequestTool(d).handler(
+        { subscriptionId: 'sub-1', answers: { Colour: 'Black' } },
+        pinned(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain("'Colour'");
+      expect(text(result)).toContain('Department_1, Model');
+      expect(text(result)).toContain('Nothing was submitted');
+      expect(urls.some((url) => url.includes('ServiceRequest/new'))).toBe(false);
+    });
+
+    it('sends the answers as given when the form cannot be read', async () => {
+      const { deps: d } = deps({ ...SUBMITTED, ServiceReqContainsServiceReqParam: { value: [] } });
+
+      const result = await createSubmitServiceRequestTool(d).handler(
+        { subscriptionId: 'sub-1', answers: { Anything: 'x' } },
+        pinned(),
+      );
+
+      expect(result.isError).not.toBe(true);
+    });
+  });
+
   it('looks up the tenant offset only when a date is being sent', async () => {
     const { deps: d, urls } = deps({
       ...SUBMITTED,
