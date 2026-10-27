@@ -1516,6 +1516,14 @@ The change is already made when the note is written, so a failed note is `auditW
 success, never an error — an error over an updated record invites a retry, and a retry mails people.
 A record deleted with no parent has nowhere for a note (its own journal went with it).
 
+### A service request form has two ids per parameter
+
+`PackageData` carries `strRecId` (the template parameter's RecId, which a submit keys its answers
+by — `par-<RecId>`) and `strExistingRecId` (the stored answer's id on an existing request). They
+differ. Reading the second as the first made every RecId-keyed answer "unknown" to the evaluator
+and, once `submit_service_request` started checking keys against the form, would have refused every
+valid submit. Found by driving it live; the HAR-derived fixture only had the second.
+
 ## Observability
 
 **`/health` must answer without a token, so everything it returns is public.**

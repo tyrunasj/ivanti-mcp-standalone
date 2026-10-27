@@ -4,6 +4,20 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
+## 0.3.8 — 2026-10-27
+
+- **`submit_service_request` accepts a parameter Name as an answer key.** The form evaluator takes
+  names and a submit takes RecIds, so a model that carried names across was refused with "Required
+  parameter Department is not defined". A name is now settled to its RecId (reported as
+  `keysSettled`), and a key that is neither is refused by name, before anything is sent, with the
+  offering's parameter names.
+- **`get_service_request_parameter_options` refuses an id that matches no parameter.** A model
+  retyping a 32-character id dropped two characters, got an empty list with a note that the
+  tenant's list "holds no rows", and told the person the form was broken. An id that is not 32 hex
+  characters, or that no parameter has, is now refused by name instead of answered as empty.
+- **The form's parameter RecId was read from the wrong field**, so answers keyed by RecId to
+  `get_service_request_parameters` were reported as unknown answers. It now reads `strRecId`.
+
 ## 0.3.7 — 2026-10-25
 
 **Upgrading.** `WRITE_AUDIT_NOTE` defaults to `required`, which adds a **required** `justification`
