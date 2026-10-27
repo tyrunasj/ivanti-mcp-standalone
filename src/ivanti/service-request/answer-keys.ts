@@ -16,12 +16,34 @@ import type { FormParameter } from './form-rules/form-package.js';
  * a key, and the answers go to Ivanti as given — which is what happened before this existed.
  */
 
+/** Characters apart, counting an insertion, deletion or change as one. */
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(
+        (previous[j] ?? 0) + 1,
+        (row[j - 1] ?? 0) + 1,
+        (previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous = row;
+  }
+  return previous[b.length] ?? 0;
+}
+
+/** A model retyping a 32-character id drops or swaps a character; two is the most it has been. */
+const NEAR = 2;
+
 export interface SettledAnswers<T> {
   answers: Record<string, T>;
   /** Name → RecId, for the keys that were names. */
   renamed: Record<string, string>;
   /** Keys that are neither a parameter's RecId nor its Name. */
   unknown: string[];
+  /** For an unknown key one or two characters from a parameter's RecId: which one it likely meant. */
+  nearMisses: Record<string, { recId: string; name: string }>;
 }
 
 export function settleAnswerKeys<T>(
@@ -44,16 +66,24 @@ export function settleAnswerKeys<T>(
   const answers: Record<string, T> = {};
   const renamed: Record<string, string> = {};
   const unknown: string[] = [];
+  const nearMisses: Record<string, { recId: string; name: string }> = {};
   for (const [key, answer] of Object.entries(given)) {
     const recId = byRecId.get(key.toLowerCase());
     const named = ambiguous.has(key) ? undefined : byName.get(key);
     const settled = recId ?? named;
     if (settled === undefined) {
       unknown.push(key);
+      const close = withIds
+        .map((parameter) => ({ parameter, distance: editDistance(key.toLowerCase(), (parameter.recId ?? '').toLowerCase()) }))
+        .filter((candidate) => candidate.distance <= NEAR)
+        .sort((a, b) => a.distance - b.distance)[0];
+      if (close !== undefined && key.length >= 16) {
+        nearMisses[key] = { recId: close.parameter.recId ?? '', name: close.parameter.name };
+      }
       continue;
     }
     if (recId === undefined) renamed[key] = settled;
     answers[settled] = answer;
   }
-  return { answers, renamed, unknown };
+  return { answers, renamed, unknown, nearMisses };
 }

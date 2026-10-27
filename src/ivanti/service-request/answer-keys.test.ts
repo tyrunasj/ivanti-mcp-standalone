@@ -35,4 +35,15 @@ describe('settleAnswerKeys', () => {
     expect(settleAnswerKeys([parameter('Model')], { Model: 'x' })).toBeUndefined();
     expect(settleAnswerKeys([], { Model: 'x' })).toBeUndefined();
   });
+
+  it('points at the parameter a mistyped RecId was one or two characters from', () => {
+    const form = [parameter('Card', '41BCEB32175E443F92938A740EBD874D'), parameter('Other', '0123456789ABCDEF0123456789ABCDEF')];
+
+    const settled = settleAnswerKeys(form, { '41BCEB32175E443F92938A740EBD874': true, Short: 'x' });
+
+    expect(settled?.nearMisses).toEqual({
+      '41BCEB32175E443F92938A740EBD874': { recId: '41BCEB32175E443F92938A740EBD874D', name: 'Card' },
+    });
+    expect(settled?.unknown).toEqual(['41BCEB32175E443F92938A740EBD874', 'Short']);
+  });
 });

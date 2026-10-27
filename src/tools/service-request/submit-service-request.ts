@@ -208,7 +208,11 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
         if (settled !== undefined && settled.unknown.length > 0) {
           return errorResult(
             `Nothing was submitted: ${settled.unknown.map((key) => `'${key}'`).join(', ')} ` +
-              'match no parameter of this offering, by RecId or by Name. Answers are keyed by ' +
+              'match no parameter of this offering, by RecId or by Name. ' +
+              Object.entries(settled.nearMisses)
+                .map(([key, near]) => `'${key}' is one or two characters from ${near.recId} (${near.name}) — a mistyped id? `)
+                .join('') +
+              'Answers are keyed by ' +
               "parameter RecId (from get_service_request_parameters with the offering's " +
               '`templateId`). Parameters here: ' +
               form.map((parameter) => parameter.name).join(', ') +
@@ -410,6 +414,13 @@ export function createSubmitServiceRequestTool(deps: IvantiToolDeps): ToolDefini
             ? { createdBy: filed['CreatedBy'], createdByNote: 'who Ivanti recorded as filing it' }
             : {}),
           ...subjectReport,
+          // Read just now, and Ivanti's workflows and escalations run after this answer: one
+          // request on this tenant was cancelled by the escalation engine an hour after it was
+          // filed, and a model that checked at once called the re-filed one safe.
+          statusNote:
+            'The request has just been filed. Workflows and escalations can still change its ' +
+            'status afterwards, so give any status with the time it was read and do not call the ' +
+            'request settled.',
           answersSent: submitted.parametersSent,
           answersOnRequest: submitted.parametersOnRequest,
           ...attachmentReport(staged, onRequest),
