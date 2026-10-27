@@ -60,6 +60,21 @@ const OFFERINGS = {
 };
 
 describe('list_request_offerings', () => {
+  it('flags offerings that share a description so the person chooses', async () => {
+    const { deps: d } = deps({
+      'Template/': [
+        { strSubscriptionId: 's1', strRecId: 't1', strName: 'New Employee On-boarding', strDescription: 'New hire provisioning' },
+        { strSubscriptionId: 's2', strRecId: 't2', strName: 'New Employee Setup', strDescription: 'New hire provisioning' },
+        { strSubscriptionId: 's3', strRecId: 't3', strName: 'Address Change', strDescription: 'Change address' },
+      ],
+    });
+
+    const result = body(await createListRequestOfferingsTool(d).handler({}, pinned()));
+
+    expect(result['lookAlikes']).toEqual([['New Employee On-boarding', 'New Employee Setup']]);
+    expect(String(result['lookAlikesNote'])).toContain('ask');
+  });
+
   it('keeps both ids and drops the rendering hints', async () => {
     const { deps: d } = deps(OFFERINGS);
 
@@ -283,9 +298,20 @@ describe('submit_service_request', () => {
 
       expect(result.isError).toBe(true);
       expect(text(result)).toContain("'Colour'");
+      expect(text(result)).not.toContain('mistyped');
       expect(text(result)).toContain('Department_1, Model');
       expect(text(result)).toContain('Nothing was submitted');
       expect(urls.some((url) => url.includes('ServiceRequest/new'))).toBe(false);
+    });
+
+    it('tells the model a status read now is not final', async () => {
+      const { deps: d } = deps({ ...SUBMITTED, ServiceReqContainsServiceReqParam: { value: [] } });
+
+      const result = body(
+        await createSubmitServiceRequestTool(d).handler({ subscriptionId: 'sub-1', answers: { P1: 'x' } }, pinned()),
+      );
+
+      expect(String(result['statusNote'])).toContain('time it was read');
     });
 
     it('sends the answers as given when the form cannot be read', async () => {

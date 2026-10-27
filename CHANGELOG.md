@@ -4,6 +4,18 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/tyrunasj/ivanti-mcp-standalone/releases).
 
+## 0.3.9 — 2026-10-27
+
+Found by reading a model file two onboarding requests.
+
+- **A mistyped parameter id is traced back.** When a submit's key is one or two characters from a
+  parameter's RecId, the refusal says which parameter it was probably meant for.
+- **A filed request says its status is not final.** `submit_service_request` returns a
+  `statusNote`: workflows and escalations run after the answer, and one request on the tenant was
+  cancelled by the escalation engine an hour after it was filed.
+- **Look-alike offerings are flagged.** `list_request_offerings` returns `lookAlikes` when
+  offerings share a description, so a model asks which one instead of choosing.
+
 ## 0.3.8 — 2026-10-27
 
 - **`submit_service_request` accepts a parameter Name as an answer key.** The form evaluator takes
