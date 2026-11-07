@@ -4,7 +4,15 @@ What changed for someone running the server, newest first. **Upgrading** says wh
 before moving to a release; a release with nothing under it upgrades by swapping the version. The
 full list of merged changes is on each [GitHub release](https://github.com/syn-con/ivanti-mcp/releases).
 
-## 0.4.0 — unreleased
+## 0.4.1 — 2026-11-07
+
+Nothing to change when upgrading; swap the version.
+
+- **The licence gate has a test of its own** (`licence-gate.test.ts`), beside the file.
+- **`CLAUDE.md` names the licence check** among the axes and invariants.
+- **A trap is written down:** `check-chart` reads `dist/`, so run `pnpm build` before it.
+
+## 0.4.0 — 2026-11-06
 
 The server is licensed through the Synergy Hub, as product `ivanti-mcp`.
 

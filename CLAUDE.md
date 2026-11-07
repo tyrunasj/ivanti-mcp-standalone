@@ -18,6 +18,7 @@ What a deployment exposes is decided by independent axes, all fixed at startup:
 | Transport | `STDIO_TRANSPORT_ON` · `HTTP_TRANSPORT_ON` | independent toggles; both may be on |
 | Auth | `none` · `bearer` · `oauth` | who may connect over HTTP; setting it with HTTP off is refused |
 | Impersonation | the ConfigDB pair, set or not | whether `act_as` opens Ivanti's own session as the person |
+| Licence | `LICENSE_KEY`, always on | whether tools run: the Synergy Hub confirms it every 4 minutes, 30 days' grace without it; unlicensed, the server starts but refuses every tool but `get_version` |
 
 ## Where things are written down
 
@@ -56,6 +57,8 @@ One line each; the reasoning is in [`docs/architecture.md`](docs/architecture.md
 - **Never write to stdout** — under stdio it is the JSON-RPC stream. Log to stderr via `createLogger`.
 - **Never report success from a 200.** Ivanti refuses inside 200s, drops `$filter` functions,
   answers a bad `$orderby` with 204, and accepts writes it then ignores — so every write is read back.
+- **The licence check lives in `registerTools`**, ahead of the identity gate, and is never repeated
+  per tool. The Hub's address is built in: no setting can read as "licensing off".
 - **The identity gate lives in `registerTools`** and covers every tool but `act_as`. Never gate
   tool by tool: a tool that forgot would not fail, it would answer.
 - **Tool arguments are closed** by `strictInput` in `defineTool`; `get_version` is the one open

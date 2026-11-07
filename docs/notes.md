@@ -130,6 +130,11 @@ TS 7 (the native port) is released, but `typescript-eslint` declares `typescript
 — its canary too. Installing TS 7 gives an unmet-peer warning and silently breaks type-aware
 linting. Revisit when typescript-eslint supports 7.
 
+**`scripts/check-chart.mjs` reads `dist/`, so a stale build fails it on keys that exist.**
+After pulling a commit that adds config keys, `check-chart` reported `LICENSE_STATE_DIR` and
+`LICENSE_MACHINE_ID` as "no longer in env-schema.ts" while `src/config/env-schema.ts` had both.
+→ Run `pnpm build` first; the check compares the chart with the built `loadConfig`, not the source.
+
 **`pnpm.onlyBuiltDependencies` in `package.json` is ignored by pnpm 10.**
 It moved to `pnpm-workspace.yaml`. Without it, esbuild's build script never runs and vitest
 cannot start. pnpm warns, but the warning is easy to scroll past.
